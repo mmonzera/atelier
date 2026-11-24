@@ -19,6 +19,7 @@ import type {
   GhRepoItem,
   LinkRepoInput,
   McpOAuthStatus,
+  ModelCatalog,
   McpProbeResult,
   McpServerConfig,
   ModelEntry,
@@ -346,6 +347,9 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(body),
     }),
+
+  getModelCatalog: (provider: string, refresh = false) =>
+    request<ModelCatalog>(`/api/providers/${provider}/models${refresh ? '?refresh=1' : ''}`),
 
   getProvidersStatus: () =>
     request<{ providers: ProviderAuthStatus[]; discoveredModels?: ModelEntry[] }>(

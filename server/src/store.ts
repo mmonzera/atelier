@@ -402,6 +402,7 @@ export class AtelierStore {
       model,
       reasoningEffort: parsed.reasoningEffort ?? 'High',
       customModels: parsed.customModels ?? [],
+      visibleModels: this.normalizeVisibleModels(parsed.visibleModels),
       cliPaths: parsed.cliPaths ?? {},
       mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [],
       onboardingCompleted:
@@ -414,6 +415,17 @@ export class AtelierStore {
     };
   }
 
+  private normalizeVisibleModels(raw: unknown): Settings['visibleModels'] {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const providers = ['claude', 'openai', 'antigravity', 'deepseek', 'opencode', 'openrouter'] as const;
+    const out: NonNullable<Settings['visibleModels']> = {};
+    for (const p of providers) {
+      const list = (raw as Record<string, unknown>)[p];
+      if (Array.isArray(list)) out[p] = [...new Set(list.map(String))];
+    }
+    return out;
+  }
+
   public updateSettings(input: SettingsInput): Settings {
     let updated!: Settings;
     this.runTx(() => {
@@ -423,6 +435,9 @@ export class AtelierStore {
         model: input.model ?? current.model,
         reasoningEffort: input.reasoningEffort ?? current.reasoningEffort,
         customModels: input.customModels ?? current.customModels,
+        visibleModels: input.visibleModels
+          ? this.normalizeVisibleModels(input.visibleModels)
+          : current.visibleModels,
         cliPaths: input.cliPaths ? { ...current.cliPaths, ...input.cliPaths } : current.cliPaths,
         mcpServers: current.mcpServers,
         onboardingCompleted:

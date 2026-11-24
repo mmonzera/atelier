@@ -15,6 +15,7 @@ import {
 } from '@atelier/contracts';
 import { Check, FileText, Plus, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { shownModels } from '../../state/models';
 import { api } from '../../api';
 import { BotMascot } from '../mascot/BotMascot';
 import { MASCOT_COLORS, MASCOT_SHAPES, resolveMascotColor, resolveMascotShape } from '../mascot/mascotConfig';
@@ -465,7 +466,10 @@ export function AgentModal({
                 }}
                 options={[
                   { value: '', label: `Workspace default (${settings.model})` },
-                  ...allModels
+                  ...shownModels(allModels, settings, {
+                    provider: providerOverride,
+                    model: modelOverride,
+                  })
                     .filter((m) => !providerOverride || m.provider === providerOverride)
                     .map((m) => ({ value: m.id, label: m.label, hint: m.provider })),
                 ]}
@@ -548,7 +552,7 @@ export function AgentModal({
                     { provider: prov as ModelProvider, model: modId },
                   ]);
                 }}
-                options={allModels
+                options={shownModels(allModels, settings)
                   .filter(
                     (m) => !fallbackChain.some((c) => c.provider === m.provider && c.model === m.id),
                   )

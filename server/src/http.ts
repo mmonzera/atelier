@@ -16,6 +16,7 @@ import {
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { discoverLocalCodexModels } from './agents/cli-runners.js';
+import { getModelCatalog } from './agents/model-catalog.js';
 import { ProviderAuthManager } from './agents/provider-auth.js';
 import type { AgentRuntime } from './agents/runtime.js';
 import { buildUsageDashboard } from './agents/usage.js';
@@ -763,6 +764,9 @@ export function createHttpRouter(deps: {
         model: z.string().trim().min(1).regex(/^[a-zA-Z0-9._:/-]+$/).optional(),
         reasoningEffort: z.enum(['Low', 'Medium', 'High']).optional(),
         customModels: z.array(modelEntrySchema).optional(),
+        visibleModels: z
+          .record(z.string(), z.array(z.string().trim().min(1).max(200).regex(/^[a-zA-Z0-9._:/-]+$/)).max(3000))
+          .optional(),
         cliPaths: z
           .object({
             claude: z.string().optional(),
@@ -1099,6 +1103,16 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
       Promise.resolve(discoverLocalCodexModels()),
     ]);
     return c.json({ providers, discoveredModels });
+  });
+
+  // Every model a provider offers (live where the provider has a list), for the model picker settings
+  api.get('/providers/:provider/models', async (c) => {
+    const parsed = providerSchema.safeParse(c.req.param('provider'));
+    if (!parsed.success) {
+      return c.json(apiError('invalid_provider', 'Unsupported provider.'), 400);
+    }
+    const refresh = c.req.query('refresh') === '1';
+    return c.json(await getModelCatalog(parsed.data, config, store.getSettings(), refresh));
   });
 
   api.post('/providers/:provider/login', async (c) => {

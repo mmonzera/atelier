@@ -18,9 +18,11 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../api';
+import { isModelShown } from '../../state/models';
 import { ProviderIcon, ProviderTile } from '../ProviderIcon';
 import { Select } from '../Select';
 import { toast } from '../Toast';
+import { ModelBrowser } from './ModelBrowser';
 import {
   ModalShell,
   inputStyle,
@@ -68,6 +70,7 @@ export function ModelsProvidersPanel({
   const [tab, setTab] = useState<ModalTab>('accounts');
   const [providerFilter, setProviderFilter] = useState<RealProvider | 'all'>('all');
   const [addFormOpen, setAddFormOpen] = useState(false);
+  const [modelsView, setModelsView] = useState<'chat' | 'browse'>('chat');
 
   const [providers, setProviders] = useState<ProviderAuthStatus[]>([]);
   const [localDiscovered, setLocalDiscovered] = useState<ModelEntry[]>(discoveredModels);
@@ -126,12 +129,18 @@ export function ModelsProvidersPanel({
     return merged;
   }, [localDiscovered, settings.customModels]);
 
+  // the models the chat pickers show (chosen under "Browse all")
+  const shownList = useMemo(
+    () => allModels.filter((m) => isModelShown(settings, m)),
+    [allModels, settings],
+  );
+
   const filteredModels = useMemo(
     () =>
       providerFilter === 'all'
-        ? allModels
-        : allModels.filter((m) => m.provider === providerFilter),
-    [allModels, providerFilter],
+        ? shownList
+        : shownList.filter((m) => m.provider === providerFilter),
+    [shownList, providerFilter],
   );
 
   const connectedCount = providers.filter((p) => p.authenticated).length;
@@ -286,7 +295,7 @@ export function ModelsProvidersPanel({
                 {
                   id: 'models' as ModalTab,
                   label: 'Models',
-                  badge: String(allModels.length),
+                  badge: String(shownList.length),
                 },
               ]
             ).map((item) => {
@@ -702,6 +711,55 @@ export function ModelsProvidersPanel({
           )
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div
+              role="tablist"
+              style={{
+                alignSelf: 'flex-start',
+                display: 'inline-flex',
+                padding: 3,
+                gap: 2,
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--surface-1)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              {(
+                [
+                  { id: 'chat', label: `In chat (${shownList.length})` },
+                  { id: 'browse', label: 'Browse all models' },
+                ] as const
+              ).map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={modelsView === v.id}
+                  onClick={() => setModelsView(v.id)}
+                  className="transition-atelier"
+                  style={{
+                    height: 26,
+                    padding: '0 12px',
+                    borderRadius: 'var(--radius-full)',
+                    fontSize: 12,
+                    fontWeight: modelsView === v.id ? 500 : 400,
+                    color: modelsView === v.id ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                    background: modelsView === v.id ? 'var(--surface-3)' : 'transparent',
+                  }}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+
+            {modelsView === 'browse' ? (
+              <ModelBrowser
+                settings={settings}
+                detected={localDiscovered}
+                initialProvider={providerFilter === 'all' ? settings.provider : providerFilter}
+                providers={PROVIDER_ORDER.map((id) => ({ id, label: PROVIDER_SHORT[id] }))}
+              />
+            ) : (
+              <>
             {addFormOpen && (
               <form
                 onSubmit={handleAddModel}
@@ -792,10 +850,10 @@ export function ModelsProvidersPanel({
                   border: `1px solid ${providerFilter === 'all' ? 'var(--border-default)' : 'var(--border-subtle)'}`,
                 }}
               >
-                All ({allModels.length})
+                All ({shownList.length})
               </button>
               {PROVIDER_ORDER.map((id) => {
-                const count = allModels.filter((m) => m.provider === id).length;
+                const count = shownList.filter((m) => m.provider === id).length;
                 if (count === 0) return null;
                 const active = providerFilter === id;
                 return (
@@ -929,6 +987,13 @@ export function ModelsProvidersPanel({
                 );
               })}
             </div>
+            {filteredModels.length === 0 && (
+              <div style={{ padding: '14px 4px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+                No model is shown here. Use “Browse all models” to pick some.
+              </div>
+            )}
+              </>
+            )}
           </div>
         )}
     </div>

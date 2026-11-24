@@ -30,6 +30,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { shownModels } from '../state/models';
 import { api } from '../api';
 import { useMcpOAuth } from '../state/useMcpOAuth';
 import { type PendingUpload, PendingAttachments } from './AttachmentViews';
@@ -349,6 +350,16 @@ export function FloatingComposer({
     }
     return merged;
   }, [discoveredModels, settings.customModels]);
+
+  // What the picker lists: only the models chosen in Models & Providers (the active one stays).
+  const pickerModels = useMemo(
+    () =>
+      shownModels(allModels, settings, {
+        provider: agent?.providerOverride,
+        model: agent?.modelOverride,
+      }),
+    [allModels, settings, agent?.providerOverride, agent?.modelOverride],
+  );
 
   useEffect(() => {
     if (replyTo) inputRef.current?.focus();
@@ -1150,7 +1161,7 @@ export function FloatingComposer({
                   }}
                 >
                   {PROVIDER_GROUPS.map((group) => {
-                    const count = allModels.filter((m) => m.provider === group.key).length;
+                    const count = pickerModels.filter((m) => m.provider === group.key).length;
                     if (count === 0) return null;
                     const on = providerTab === group.key;
                     return (
@@ -1192,7 +1203,7 @@ export function FloatingComposer({
                     overflowY: 'auto',
                   }}
                 >
-                  {allModels
+                  {pickerModels
                     .filter((m) => m.provider === providerTab)
                     .map((m) => {
                       const active =

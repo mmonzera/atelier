@@ -26,6 +26,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { shownModels } from '../state/models';
 import { api } from '../api';
 import {
   DotMatrixGrid,
@@ -957,7 +958,7 @@ export function ChatView({
                     value={pickedFallback}
                     placeholder="Or choose another model…"
                     onChange={setPickedFallback}
-                    options={allModels
+                    options={(settings ? shownModels(allModels, settings) : allModels)
                       .filter(
                         (m) =>
                           !(

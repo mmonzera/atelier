@@ -20,6 +20,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { shownModels } from '../state/models';
 import { api } from '../api';
 import {
   ModalShell,
@@ -589,7 +590,7 @@ export function SettingsView({
                     { provider: prov as ModelRef['provider'], model: modId },
                   ]);
                 }}
-                options={allModels
+                options={shownModels(allModels, settings)
                   .filter(
                     (m) => !fallbackChain.some((c) => c.provider === m.provider && c.model === m.id),
                   )

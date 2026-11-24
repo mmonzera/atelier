@@ -94,6 +94,15 @@ export interface ModelEntry {
   builtIn?: boolean;
 }
 
+/** Every model a provider offers (fetched live when possible), used to choose what the chat shows. */
+export interface ModelCatalog {
+  provider: RealProvider;
+  models: ModelEntry[];
+  /** 'live' = asked the provider just now; 'builtin' = fixed list shipped with the app */
+  source: 'live' | 'builtin';
+  note?: string;
+}
+
 export interface ProviderAuthStatus {
   provider: RealProvider;
   label: string;
@@ -880,6 +889,11 @@ export interface Settings {
   model: string;
   reasoningEffort: ReasoningEffort;
   customModels: ModelEntry[];
+  /**
+   * Models shown in the chat pickers, per provider (ids). A provider without an entry shows its
+   * built-in, detected and custom models. The model in use is always shown.
+   */
+  visibleModels?: Partial<Record<RealProvider, string[]>>;
   cliPaths: Partial<Record<RealProvider, string>>;
   mcpServers: McpServerConfig[];
   onboardingCompleted: boolean;
@@ -1006,6 +1020,7 @@ export interface SettingsInput {
   model?: string;
   reasoningEffort?: ReasoningEffort;
   customModels?: ModelEntry[];
+  visibleModels?: Partial<Record<RealProvider, string[]>>;
   cliPaths?: Partial<Record<RealProvider, string>>;
   onboardingCompleted?: boolean;
   autoCompact?: Partial<AutoCompactSettings>;
