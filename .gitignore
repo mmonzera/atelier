@@ -1,0 +1,11 @@
+node_modules/
+dist/
+packages/*/dist/
+server/dist/
+web/dist/
+data/
+workspaces/
+.env
+*.log
+desktop/app/
+desktop/release/

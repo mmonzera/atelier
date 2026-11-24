@@ -1,0 +1,28 @@
+{
+  "name": "@atelier/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "lock:reset": "tsx src/cli/reset-lock.ts"
+  },
+  "dependencies": {
+    "@atelier/contracts": "*",
+    "@hono/node-server": "^1.14.0",
+    "hono": "^4.7.0",
+    "playwright-core": "^1.65.1",
+    "ws": "^8.18.0",
+    "zod": "^3.24.0"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.3"
+  }
+}

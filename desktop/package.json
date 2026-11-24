@@ -1,0 +1,22 @@
+{
+  "name": "@atelier/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Atelier Windows desktop shell (Electron)",
+  "type": "module",
+  "scripts": {
+    "icons": "node scripts/make-icons.mjs",
+    "stage": "node scripts/stage.mjs",
+    "start": "node scripts/stage.mjs && electron app",
+    "dist": "node scripts/stage.mjs && electron-builder --config electron-builder.config.cjs --win --publish never",
+    "dist:publish": "node scripts/stage.mjs && electron-builder --config electron-builder.config.cjs --win --publish always",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  }
+}

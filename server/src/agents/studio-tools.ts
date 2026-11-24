@@ -1,0 +1,510 @@
+import {
+  AGENT_AVATAR_SHAPES,
+  AGENT_COLORS,
+  BUILT_IN_SKILLS,
+  type Agent,
+  type AgentSkill,
+  type Project,
+  type QueueKind,
+  type Task,
+} from '@atelier/contracts';
+import { z } from 'zod';
+import { runBrowserQa } from '../qa/browser-qa.js';
+import { type AtelierStore, newId } from '../store.js';
+
+export type EnqueueTaskFn = (input: {
+  agentId: string;
+  projectId: string | null;
+  kind: QueueKind;
+  prompt: string;
+  refId: string | null;
+  replyToAgentId?: string | null;
+}) => void;
+
+export const CreateTaskToolSchema = z.object({
+  projectId: z.string().optional(),
+  title: z.string().min(1),
+  description: z.string().optional().default(''),
+  priority: z.enum(['urgent', 'high', 'medium', 'low', 'none']).optional().default('medium'),
+  assigneeAgentId: z.string().optional().nullable(),
+  dispatch: z.boolean().optional().default(false),
+});
+
+export const UpdateTaskToolSchema = z.object({
+  taskId: z.string().min(1),
+  status: z.enum(['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled']).optional(),
+  branch: z.string().optional().nullable(),
+  prUrl: z.string().optional().nullable(),
+  deliverableSummary: z.string().optional().nullable(),
+});
+
+export const MessageAgentToolSchema = z.object({
+  targetAgentId: z.string().min(1),
+  message: z.string().min(1),
+});
+
+export const RunBrowserQaToolSchema = z.object({
+  url: z.string().optional(),
+  watchLive: z.boolean().optional().default(false),
+  taskId: z.string().optional().nullable(),
+  steps: z
+    .array(
+      z.object({
+        action: z.enum([
+          'goto',
+          'wait',
+          'click',
+          'fill',
+          'press',
+          'assertText',
+          'assertVisible',
+          'screenshot',
+        ]),
+        selector: z.string().optional(),
+        value: z.string().optional(),
+        label: z.string().optional(),
+        timeoutMs: z.number().int().optional(),
+      }),
+    )
+    .max(30)
+    .optional(),
+});
+
+export const CreateAgentToolSchema = z.object({
+  name: z.string().trim().min(1),
+  role: z.string().trim().min(1),
+  color: z.enum(AGENT_COLORS).optional().default('blue'),
+  avatarShape: z.enum(AGENT_AVATAR_SHAPES).optional(),
+  systemInstructions: z.string().optional().default(''),
+  allowShell: z.boolean().optional().default(false),
+  skillIds: z.array(z.string()).optional(),
+  customSkills: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        description: z.string().optional().default(''),
+        content: z.string().min(1),
+      }),
+    )
+    .optional(),
+  mcpServerNames: z.array(z.string()).optional(),
+  providerOverride: z
+    .enum(['claude', 'openai', 'antigravity', 'deepseek', 'opencode'])
+    .nullable()
+    .optional(),
+  modelOverride: z.string().nullable().optional(),
+});
+
+export interface StudioTools {
+  project_info(): {
+    project: Project | null;
+    projects?: Project[];
+    agents: Agent[];
+    tasks: Task[];
+  };
+  create_agent(input: z.infer<typeof CreateAgentToolSchema>): { agent: Agent };
+  create_task(input: z.infer<typeof CreateTaskToolSchema>): { task: Task };
+  update_task(input: z.infer<typeof UpdateTaskToolSchema>): { task: Task };
+  message_agent(input: z.infer<typeof MessageAgentToolSchema>): { queued: boolean; targetAgentId: string | null };
+  run_browser_qa(input: z.infer<typeof RunBrowserQaToolSchema>): { queued: boolean; url: string };
+}
+
+export function createStudioTools(deps: {
+  store: AtelierStore;
+  projectId: string | null;
+  actingAgentId: string;
+  enqueue: EnqueueTaskFn;
+  dataDir?: string;
+}): StudioTools {
+  const { store, projectId, actingAgentId, enqueue, dataDir = './data' } = deps;
+
+  return {
+    project_info() {
+      if (!projectId) {
+        return {
+          project: null,
+          projects: store.listAgentProjects(actingAgentId),
+          agents: store.listAgents(),
+          tasks: store.listAgentTasks(actingAgentId),
+        };
+      }
+      const project = store.getProject(projectId);
+      if (!project) {
+        throw new Error(`Project not found: ${projectId}`);
+      }
+      return {
+        project,
+        agents: store.listProjectAgents(projectId),
+        tasks: store.listProjectTasks(projectId),
+      };
+    },
+
+    create_agent(rawInput) {
+      const input = CreateAgentToolSchema.parse(rawInput);
+
+      const resolvedSkills: AgentSkill[] = [];
+      const seenSkillNames = new Set<string>();
+      for (const sid of input.skillIds ?? []) {
+        const match = BUILT_IN_SKILLS.find(
+          (s) => s.id === sid || s.name.toLowerCase() === sid.trim().toLowerCase(),
+        );
+        if (match && !seenSkillNames.has(match.name.toLowerCase())) {
+          seenSkillNames.add(match.name.toLowerCase());
+          resolvedSkills.push({ ...match, enabled: true });
+        }
+      }
+      for (const cs of input.customSkills ?? []) {
+        const name = cs.name.trim();
+        if (name && !seenSkillNames.has(name.toLowerCase())) {
+          seenSkillNames.add(name.toLowerCase());
+          resolvedSkills.push({
+            id: newId('skill'),
+            name,
+            description: cs.description ?? '',
+            content: cs.content,
+            enabled: true,
+          });
+        }
+      }
+
+      const configuredMcp = store.getSettings().mcpServers;
+      const resolvedMcpIds: string[] = [];
+      for (const ref of input.mcpServerNames ?? []) {
+        const clean = ref.trim().toLowerCase();
+        const found = configuredMcp.find(
+          (m) => m.id === ref || m.name.toLowerCase() === clean,
+        );
+        if (found && !resolvedMcpIds.includes(found.id)) {
+          resolvedMcpIds.push(found.id);
+        }
+      }
+
+      const existing = store
+        .listAgents()
+        .find((a) => a.name.toLowerCase() === input.name.toLowerCase());
+
+      const agent = existing
+        ? store.updateAgentConfig(existing.id, {
+            role: input.role,
+            color: input.color,
+            ...(input.avatarShape !== undefined ? { avatarShape: input.avatarShape } : {}),
+            systemInstructions: input.systemInstructions,
+            allowShell: input.allowShell,
+            ...(input.skillIds !== undefined || input.customSkills !== undefined
+              ? { skills: resolvedSkills }
+              : {}),
+            ...(input.mcpServerNames !== undefined ? { mcpServerIds: resolvedMcpIds } : {}),
+            ...(input.providerOverride !== undefined
+              ? { providerOverride: input.providerOverride }
+              : {}),
+            ...(input.modelOverride !== undefined ? { modelOverride: input.modelOverride } : {}),
+          })
+        : store.createAgent(projectId, {
+            name: input.name,
+            role: input.role,
+            color: input.color,
+            ...(input.avatarShape !== undefined ? { avatarShape: input.avatarShape } : {}),
+            systemInstructions: input.systemInstructions,
+            allowShell: input.allowShell,
+            skills: resolvedSkills,
+            mcpServerIds: resolvedMcpIds,
+            providerOverride: input.providerOverride ?? null,
+            modelOverride: input.modelOverride ?? null,
+          });
+
+      if (!agent) {
+        throw new Error(`Project not found: ${projectId}`);
+      }
+
+      if (existing && projectId) {
+        store.assignAgentToProject(projectId, agent.id);
+      }
+
+      store.addActivity({
+        projectId,
+        agentId: actingAgentId,
+        kind: 'status',
+        label: `Installed agent ${agent.name}`,
+        detail: agent.role,
+      });
+
+      return { agent };
+    },
+
+    create_task(rawInput) {
+      const input = CreateTaskToolSchema.parse(rawInput);
+      const targetProjectId = input.projectId ?? projectId;
+      if (!targetProjectId) {
+        throw new Error('Specify a projectId to create a task outside a project.');
+      }
+
+      const candidates = store.listProjectAgents(targetProjectId);
+      const allAgents = store.listAgents();
+      let assigneeId: string | null = input.assigneeAgentId ?? null;
+      if (assigneeId && !allAgents.some((a) => a.id === assigneeId)) {
+        const byName =
+          candidates.find((a) => a.name.toLowerCase() === assigneeId!.toLowerCase()) ??
+          allAgents.find((a) => a.name.toLowerCase() === assigneeId!.toLowerCase());
+        assigneeId = byName?.id ?? null;
+      }
+
+      if (assigneeId) {
+        store.assignAgentToProject(targetProjectId, assigneeId);
+      }
+
+      const task = store.createTask(targetProjectId, {
+        title: input.title,
+        description: input.description,
+        priority: input.priority,
+        status: input.dispatch && assigneeId ? 'in_progress' : 'todo',
+        assigneeAgentId: assigneeId,
+      });
+      if (!task) {
+        throw new Error(`Project not found: ${targetProjectId}`);
+      }
+
+      store.addActivity({
+        projectId: targetProjectId,
+        agentId: actingAgentId,
+        kind: 'task',
+        label: `Created ${task.identifier}: ${task.title}`,
+      });
+
+      if (input.dispatch && assigneeId) {
+        const prompt = [
+          `Assigned Task [${task.identifier}] (${task.id}): ${task.title}`,
+          `Priority: ${task.priority}`,
+          task.description ? `Description:\n${task.description}` : '',
+          `When complete, update task ${task.id} with status "in_review" (or "done") and deliverableSummary.`,
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+
+        enqueue({
+          agentId: assigneeId,
+          projectId: targetProjectId,
+          kind: 'task',
+          prompt,
+          refId: task.id,
+        });
+      }
+
+      return { task };
+    },
+
+    update_task(rawInput) {
+      const input = UpdateTaskToolSchema.parse(rawInput);
+      // Support matching either task id or identifier (e.g. AT-1)
+      let target = store.getTask(input.taskId);
+      if (!target && projectId) {
+        target =
+          store
+            .listProjectTasks(projectId)
+            .find((t) => t.identifier.toLowerCase() === input.taskId.toLowerCase()) ?? null;
+      }
+      if (!target) {
+        target =
+          store
+            .listAgentTasks(actingAgentId)
+            .find((t) => t.identifier.toLowerCase() === input.taskId.toLowerCase()) ?? null;
+      }
+      if (!target) {
+        throw new Error(`Task not found: ${input.taskId}`);
+      }
+
+      const updated = store.updateTask(target.id, {
+        status: input.status,
+        branch: input.branch,
+        prUrl: input.prUrl,
+        deliverableSummary: input.deliverableSummary,
+      });
+      if (!updated) {
+        throw new Error(`Task not found: ${input.taskId}`);
+      }
+
+      store.addActivity({
+        projectId: target.projectId,
+        agentId: actingAgentId,
+        kind: input.prUrl ? 'pr' : 'task',
+        label: `${updated.identifier} -> ${updated.status}`,
+        detail: input.deliverableSummary ?? input.prUrl ?? undefined,
+      });
+
+      return { task: updated };
+    },
+
+    message_agent(rawInput) {
+      const input = MessageAgentToolSchema.parse(rawInput);
+      const projectAgents = projectId ? store.listProjectAgents(projectId) : [];
+      const allAgents = store.listAgents();
+      const target =
+        projectAgents.find((a) => a.id === input.targetAgentId) ??
+        projectAgents.find((a) => a.name.toLowerCase() === input.targetAgentId.toLowerCase()) ??
+        allAgents.find((a) => a.id === input.targetAgentId) ??
+        allAgents.find((a) => a.name.toLowerCase() === input.targetAgentId.toLowerCase()) ??
+        null;
+
+      if (!target) {
+        return { queued: false, targetAgentId: null };
+      }
+
+      const sender = store.getAgent(actingAgentId);
+      store.addActivity({
+        projectId,
+        agentId: actingAgentId,
+        kind: 'task',
+        label: `Messaged ${target.name}`,
+        detail: input.message.slice(0, 120),
+      });
+
+      enqueue({
+        agentId: target.id,
+        projectId,
+        kind: 'teammate',
+        prompt: `Message from ${sender?.name ?? 'teammate'}: ${input.message}`,
+        refId: null,
+        replyToAgentId: actingAgentId,
+      });
+
+      return { queued: true, targetAgentId: target.id };
+    },
+
+    run_browser_qa(rawInput) {
+      const input = RunBrowserQaToolSchema.parse(rawInput);
+      const proj = projectId ? store.getProject(projectId) : null;
+      const targetUrl = (input.url || proj?.previewUrl || '').trim();
+      if (!targetUrl) {
+        throw new Error('Provide url or set a Preview URL on the project before running Browser QA.');
+      }
+
+      const targetProjectId = projectId ?? proj?.id ?? 'direct';
+      store.addActivity({
+        projectId,
+        agentId: actingAgentId,
+        kind: 'tool',
+        label: `Started Browser QA (${input.watchLive ? 'Watch Live' : 'Headless'})`,
+        detail: targetUrl,
+      });
+
+      void runBrowserQa({
+        dataDir,
+        projectId: targetProjectId,
+        url: targetUrl,
+        watchLive: input.watchLive,
+        taskId: input.taskId ?? null,
+        agentId: actingAgentId,
+        steps: input.steps,
+      })
+        .then((run) => {
+          if (projectId) {
+            store.saveQaRun(run);
+          }
+          store.addActivity({
+            projectId,
+            agentId: actingAgentId,
+            kind: run.passed ? 'task' : 'error',
+            label: `Browser QA ${run.passed ? 'Passed' : 'Failed'}`,
+            detail: run.summary,
+          });
+          store.createMessage({
+            projectId,
+            agentId: actingAgentId,
+            author: 'system',
+            text: `Browser QA ${run.passed ? 'Passed' : 'Failed'} on ${run.url} — ${run.summary}`,
+            streaming: false,
+            durationMs: run.durationMs,
+            metadata: {
+              qaRun: run,
+              taskId: input.taskId ?? undefined,
+            },
+          });
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          store.addActivity({
+            projectId,
+            agentId: actingAgentId,
+            kind: 'error',
+            label: 'Browser QA Error',
+            detail: msg,
+          });
+          store.createMessage({
+            projectId,
+            agentId: actingAgentId,
+            author: 'system',
+            text: `Browser QA failed to start on ${targetUrl}: ${msg}`,
+            streaming: false,
+          });
+        });
+
+      return { queued: true, url: targetUrl };
+    },
+  };
+}
+
+export async function createAtelierSdkMcpServer(tools: StudioTools): Promise<unknown | null> {
+  try {
+    const modName = '@anthropic-ai/claude-agent-sdk';
+    const sdk = (await import(modName)) as {
+      createSdkMcpServer?: (opts: Record<string, unknown>) => unknown;
+      tool?: (
+        name: string,
+        description: string,
+        schema: Record<string, unknown>,
+        handler: (args: Record<string, unknown>) => Promise<unknown>,
+      ) => unknown;
+    };
+    if (typeof sdk.createSdkMcpServer !== 'function' || typeof sdk.tool !== 'function') {
+      return null;
+    }
+
+    const wrapResult = (data: unknown) => ({
+      content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+    });
+
+    return sdk.createSdkMcpServer({
+      name: 'atelier',
+      version: '0.2.0',
+      tools: [
+        sdk.tool(
+          'project_info',
+          'Get project details, team agents, and tasklist.',
+          {},
+          async () => wrapResult(tools.project_info()),
+        ),
+        sdk.tool(
+          'create_agent',
+          'Create or update a specialist bot in this project with instructions, skills, and MCP server links.',
+          CreateAgentToolSchema.shape,
+          async (args) => wrapResult(tools.create_agent(CreateAgentToolSchema.parse(args))),
+        ),
+        sdk.tool(
+          'create_task',
+          'Create a task in the project Linear tasklist and optionally dispatch it.',
+          CreateTaskToolSchema.shape,
+          async (args) => wrapResult(tools.create_task(CreateTaskToolSchema.parse(args))),
+        ),
+        sdk.tool(
+          'update_task',
+          'Update task status, branch, PR URL, or deliverable summary.',
+          UpdateTaskToolSchema.shape,
+          async (args) => wrapResult(tools.update_task(UpdateTaskToolSchema.parse(args))),
+        ),
+        sdk.tool(
+          'message_agent',
+          'Send a message or question to another agent on the team.',
+          MessageAgentToolSchema.shape,
+          async (args) => wrapResult(tools.message_agent(MessageAgentToolSchema.parse(args))),
+        ),
+        sdk.tool(
+          'run_browser_qa',
+          'Run a real Chromium/Edge browser E2E QA check against a local preview URL and attach console, network, and screenshot reports.',
+          RunBrowserQaToolSchema.shape,
+          async (args) => wrapResult(tools.run_browser_qa(RunBrowserQaToolSchema.parse(args))),
+        ),
+      ],
+    });
+  } catch {
+    return null;
+  }
+}

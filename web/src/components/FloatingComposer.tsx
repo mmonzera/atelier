@@ -1,0 +1,963 @@
+import {
+  BUILT_IN_MODELS,
+  type Agent,
+  type ModelEntry,
+  type Project,
+  type ProviderUsageSummary,
+  type ReasoningEffort,
+  type Settings,
+  type UsageDashboardResponse,
+} from '@atelier/contracts';
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  Folder,
+  GitBranch,
+  Mic,
+  Plus,
+  Square,
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api';
+import { TokenRing } from './Atoms';
+import { ProviderIcon } from './ProviderIcon';
+
+interface FloatingComposerProps {
+  project: Project | null;
+  agent: Agent | null;
+  settings: Settings;
+  discoveredModels?: ModelEntry[];
+  draftText: string;
+  replyTo?: string | null;
+  onClearReply?: () => void;
+  onChangeDraft: (val: string) => void;
+  onSend: (text: string) => Promise<void>;
+  onStop: () => Promise<void>;
+  onUpdateReasoning: (effort: ReasoningEffort) => Promise<void>;
+  onSelectModel: (entry: ModelEntry) => Promise<void>;
+  onNewTask: () => void;
+  onAddAgent: () => void;
+  onEditAgent: () => void;
+  onCompactContext?: () => void;
+  onOpenMcp: () => void;
+  onOpenLinkRepo: () => void;
+  onOpenModels: () => void;
+  onOpenUsage: () => void;
+  onOpenSettings: () => void;
+}
+
+const EFFORTS: ReasoningEffort[] = ['Low', 'Medium', 'High'];
+
+const PROVIDER_GROUPS = [
+  { key: 'claude', label: 'Claude' },
+  { key: 'openai', label: 'ChatGPT' },
+  { key: 'antigravity', label: 'Antigravity' },
+  { key: 'deepseek', label: 'DeepSeek' },
+  { key: 'opencode', label: 'OpenCode' },
+] as const;
+
+const PROVIDER_SHORT_LABELS: Record<string, string> = {
+  claude: 'Claude',
+  openai: 'ChatGPT',
+  antigravity: 'Antigravity',
+  deepseek: 'DeepSeek',
+  opencode: 'OpenCode',
+};
+
+function formatCompactTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${Math.round(n / 1_000)}K`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function formatResetCountdown(iso: string | null): string | null {
+  if (!iso) return null;
+  const diffMs = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(diffMs) || diffMs <= 0) return 'resets soon';
+  const days = Math.floor(diffMs / 86_400_000);
+  const hours = Math.floor((diffMs % 86_400_000) / 3_600_000);
+  const mins = Math.floor((diffMs % 3_600_000) / 60_000);
+  if (days > 0) return `resets ${days}d ${hours}h`;
+  return `resets ${hours}h ${mins}m`;
+}
+
+function meterColor(pct: number | null): string {
+  if (pct === null) return 'var(--agent-blue)';
+  if (pct >= 90) return 'var(--agent-red)';
+  if (pct >= 70) return 'var(--agent-amber)';
+  return 'var(--agent-green)';
+}
+
+function MiniUsageBar({
+  label,
+  usedTokens,
+  tokenLimit,
+  percentUsed,
+  resetsAt,
+  isOfficial,
+}: {
+  label: string;
+  usedTokens: number;
+  tokenLimit: number | null;
+  percentUsed: number | null;
+  resetsAt: string | null;
+  isOfficial?: boolean;
+}) {
+  const pct = percentUsed !== null ? Math.min(100, Math.max(0, percentUsed)) : 0;
+  const resetText = formatResetCountdown(resetsAt);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <div
+        className="mono-num"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 6,
+          fontSize: 10.5,
+          color: 'var(--text-secondary)',
+        }}
+      >
+        <span>
+          {label}
+          {resetText ? (
+            <span style={{ color: 'var(--text-muted)', marginLeft: 5 }}>· {resetText}</span>
+          ) : null}
+        </span>
+        <span>
+          {percentUsed !== null ? `${percentUsed}%` : formatCompactTokens(usedTokens)}
+          {!isOfficial && tokenLimit ? (
+            <span style={{ color: 'var(--text-muted)' }}>
+              {' '}
+              ({formatCompactTokens(usedTokens)}/{formatCompactTokens(tokenLimit)})
+            </span>
+          ) : isOfficial && usedTokens > 0 ? (
+            <span style={{ color: 'var(--text-muted)' }}> · {formatCompactTokens(usedTokens)}</span>
+          ) : null}
+        </span>
+      </div>
+      <div
+        style={{
+          height: 4,
+          borderRadius: 'var(--radius-full)',
+          background: 'rgba(255, 255, 255, 0.08)',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            height: '100%',
+            width: `${pct}%`,
+            borderRadius: 'var(--radius-full)',
+            background: meterColor(percentUsed),
+            transition: 'width 200ms var(--ease-atelier)',
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function formatActiveModelLabel(
+  settings: Settings,
+  agent: Agent | null,
+  allModels: ModelEntry[],
+): string {
+  const provider = agent?.providerOverride ?? settings.provider;
+  const model = agent?.modelOverride ?? settings.model;
+  const found = allModels.find((m) => m.provider === provider && m.id === model);
+  if (found) return found.label;
+  return model;
+}
+
+export function FloatingComposer({
+  project,
+  agent,
+  settings,
+  discoveredModels = [],
+  draftText,
+  replyTo = null,
+  onClearReply,
+  onChangeDraft,
+  onSend,
+  onStop,
+  onUpdateReasoning,
+  onSelectModel,
+  onNewTask,
+  onAddAgent,
+  onEditAgent,
+  onCompactContext,
+  onOpenMcp,
+  onOpenLinkRepo,
+  onOpenModels,
+  onOpenUsage,
+  onOpenSettings,
+}: FloatingComposerProps) {
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [effortMenuOpen, setEffortMenuOpen] = useState(false);
+  const [usageData, setUsageData] = useState<UsageDashboardResponse | null>(null);
+  const [sending, setSending] = useState(false);
+  const [providerTab, setProviderTab] = useState<string>(agent?.providerOverride ?? settings.provider);
+  const plusRef = useRef<HTMLDivElement | null>(null);
+  const effortRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!effortMenuOpen) return;
+    api
+      .getUsage('7d')
+      .then(setUsageData)
+      .catch(() => null);
+  }, [effortMenuOpen]);
+
+  const allModels = useMemo(() => {
+    const merged: ModelEntry[] = [];
+    const seen = new Set<string>();
+    for (const m of [...BUILT_IN_MODELS, ...discoveredModels, ...(settings.customModels ?? [])]) {
+      const key = `${m.provider}:${m.id}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(m);
+      }
+    }
+    return merged;
+  }, [discoveredModels, settings.customModels]);
+
+  useEffect(() => {
+    if (replyTo) inputRef.current?.focus();
+  }, [replyTo]);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (plusRef.current && !plusRef.current.contains(e.target as Node)) {
+        setPlusMenuOpen(false);
+      }
+      if (effortRef.current && !effortRef.current.contains(e.target as Node)) {
+        setEffortMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, []);
+
+  const isWorking = agent?.status === 'working';
+  const canSubmit = Boolean(agent && draftText.trim() && !sending);
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!agent) return;
+    const text = draftText.trim();
+    if (!text) return;
+    setSending(true);
+    try {
+      onChangeDraft('');
+      await onSend(text);
+    } finally {
+      setSending(false);
+      inputRef.current?.focus();
+    }
+  };
+
+  const scopeKey = project?.id ?? 'direct';
+  const autoCompact = settings.autoCompact ?? {
+    enabled: true,
+    maxMessages: 20,
+    keepRecentMessages: 6,
+    maxContextTokens: 40000,
+  };
+  const contextTokens = agent
+    ? (agent.scopeTokens?.[scopeKey] ?? agent.tokenUsage.input)
+    : 0;
+  const contextPct = agent
+    ? Math.min(
+        100,
+        Math.max(contextTokens > 0 ? 2 : 0, (contextTokens / autoCompact.maxContextTokens) * 100),
+      )
+    : 0;
+  const outputPct = agent
+    ? Math.min(100, Math.max(agent.tokenUsage.output > 0 ? 1 : 0, (agent.tokenUsage.output / 4000) * 100))
+    : 0;
+
+  const selectedProviderUsage: ProviderUsageSummary | null =
+    usageData?.providers.find((p) => p.provider === providerTab) ?? null;
+
+  return (
+    <div
+      style={{
+        width: '100%',
+        maxWidth: 650,
+        margin: '0 auto',
+        paddingTop: 10,
+        flexShrink: 0,
+        zIndex: 15,
+        position: 'relative',
+      }}
+    >
+      {replyTo && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            padding: '4px 14px 6px',
+            fontSize: 11.5,
+            color: 'var(--text-tertiary)',
+          }}
+        >
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Replying to: {replyTo}
+          </span>
+          {onClearReply && (
+            <button type="button" onClick={onClearReply} style={{ color: 'var(--text-muted)' }}>
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          height: 52,
+          borderRadius: 'var(--radius-full)',
+          background: 'var(--surface-1)',
+          border: '1px solid var(--border-subtle)',
+          padding: '4px 4px 4px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          position: 'relative',
+        }}
+      >
+        <div ref={plusRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <button
+            type="button"
+            disabled={!agent && !project}
+            onClick={() => setPlusMenuOpen((v) => !v)}
+            title="Quick actions"
+            className="transition-atelier"
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 'var(--radius-full)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: agent || project ? 'var(--text-secondary)' : 'var(--text-muted)',
+            }}
+            onMouseEnter={(e) => {
+              if (agent || project) {
+                e.currentTarget.style.background = 'var(--surface-3)';
+                e.currentTarget.style.color = 'var(--text-primary)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.color = agent || project ? 'var(--text-secondary)' : 'var(--text-muted)';
+            }}
+          >
+            <Plus size={18} strokeWidth={1.5} />
+          </button>
+
+          {plusMenuOpen && (agent || project) && (
+            <div
+              className="popover-shadow"
+              style={{
+                position: 'absolute',
+                bottom: 44,
+                left: 0,
+                width: 210,
+                background: 'var(--surface-1)',
+                border: '1px solid var(--border-default)',
+                borderRadius: 'var(--radius-md)',
+                padding: 6,
+                zIndex: 50,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              {[
+                ...(project ? [{ label: 'New task', action: onNewTask }] : []),
+                { label: 'Add custom agent', action: onAddAgent },
+                ...(agent ? [{ label: 'Edit agent & skills', action: onEditAgent }] : []),
+                ...(agent && onCompactContext && !isWorking
+                  ? [{ label: 'Compact context now', action: onCompactContext }]
+                  : []),
+                { label: 'Connect MCP server', action: onOpenMcp },
+                ...(project ? [{ label: 'Link repository', action: onOpenLinkRepo }] : []),
+              ].map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => {
+                    setPlusMenuOpen(false);
+                    item.action();
+                  }}
+                  className="transition-atelier"
+                  style={{
+                    textAlign: 'left',
+                    padding: '7px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: 12.5,
+                    color: 'var(--text-primary)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--surface-3)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div
+          style={{
+            width: 1,
+            height: 18,
+            background: 'var(--border-subtle)',
+            flexShrink: 0,
+          }}
+        />
+
+        <input
+          ref={inputRef}
+          type="text"
+          value={draftText}
+          disabled={!agent}
+          onChange={(e) => onChangeDraft(e.target.value)}
+          placeholder={
+            agent
+              ? project
+                ? `Message ${agent.name}...`
+                : `Message ${agent.name} directly...`
+              : 'Create or select an agent to start...'
+          }
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            fontSize: 13.5,
+            lineHeight: '20px',
+            color: 'var(--text-primary)',
+          }}
+        />
+
+        {agent && agent.queueLength > 0 && (
+          <span
+            className="mono-num"
+            style={{
+              fontSize: 11,
+              color: 'var(--agent-amber)',
+              padding: '2px 7px',
+              borderRadius: 'var(--radius-full)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border-subtle)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {agent.queueLength} queued
+          </span>
+        )}
+
+        <button
+          type="button"
+          onClick={() => inputRef.current?.focus()}
+          title="Focus input"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 'var(--radius-full)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--text-secondary)',
+            flexShrink: 0,
+          }}
+        >
+          <Mic size={16} strokeWidth={1.5} />
+        </button>
+
+        {isWorking && !draftText.trim() ? (
+          <button
+            type="button"
+            onClick={() => void onStop()}
+            title="Stop active agent"
+            className="transition-atelier"
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 'var(--radius-full)',
+              background: 'var(--action-primary)',
+              color: 'var(--action-primary-fg)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Square size={14} strokeWidth={1.5} fill="var(--action-primary-fg)" />
+          </button>
+        ) : (
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            title={isWorking ? 'Queue message (FIFO)' : 'Send message'}
+            className="transition-atelier"
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 'var(--radius-full)',
+              background: canSubmit ? 'var(--action-primary)' : 'var(--surface-3)',
+              color: canSubmit ? 'var(--action-primary-fg)' : 'var(--text-muted)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              cursor: canSubmit ? 'pointer' : 'default',
+            }}
+          >
+            <ArrowUp size={17} strokeWidth={1.75} />
+          </button>
+        )}
+      </form>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '8px 14px 2px',
+          fontSize: 12,
+          lineHeight: '16px',
+          color: 'var(--text-faint)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+          {project ? (
+            <>
+              <button
+                type="button"
+                onClick={onOpenLinkRepo}
+                className="transition-atelier"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  color: 'var(--text-tertiary)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <Folder size={13} strokeWidth={1.5} />
+                <span>{project.repo?.fullName ?? 'No repo checkout'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenLinkRepo}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  color: 'var(--text-tertiary)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <GitBranch size={13} strokeWidth={1.5} />
+                <span>{project.repo?.defaultBranch ?? 'main'}</span>
+                <ChevronDown size={12} strokeWidth={1.5} />
+              </button>
+            </>
+          ) : (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                color: 'var(--text-tertiary)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <Folder size={13} strokeWidth={1.5} />
+              <span>Direct · Scratch workspace</span>
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div ref={effortRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setProviderTab(agent?.providerOverride ?? settings.provider);
+                setEffortMenuOpen((v) => !v);
+              }}
+              className="transition-atelier"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '3px 8px',
+                borderRadius: 'var(--radius-full)',
+                color: 'var(--text-secondary)',
+                background: effortMenuOpen ? 'var(--surface-2)' : 'transparent',
+                whiteSpace: 'nowrap',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'var(--surface-2)';
+              }}
+              onMouseLeave={(e) => {
+                if (!effortMenuOpen) e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              <ProviderIcon provider={agent?.providerOverride ?? settings.provider} size={13} />
+              <span>{formatActiveModelLabel(settings, agent, allModels)}</span>
+              <span style={{ color: 'var(--text-faint)' }}>{settings.reasoningEffort}</span>
+              <ChevronDown size={12} strokeWidth={1.5} style={{ color: 'var(--text-muted)' }} />
+            </button>
+
+            {effortMenuOpen && (
+              <div
+                className="glass glass-agent msg-enter popover-shadow"
+                style={{
+                  position: 'absolute',
+                  bottom: 32,
+                  right: 0,
+                  width: 348,
+                  borderRadius: 20,
+                  padding: 10,
+                  zIndex: 50,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  background: 'rgba(22, 22, 29, 0.96)',
+                  transformOrigin: 'bottom right',
+                }}
+              >
+                {/* Provider tabs: 3 top, 2 bottom with trailing empty slot */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: 3,
+                    padding: 3,
+                    borderRadius: 14,
+                    background: 'rgba(0, 0, 0, 0.28)',
+                  }}
+                >
+                  {PROVIDER_GROUPS.map((group) => {
+                    const count = allModels.filter((m) => m.provider === group.key).length;
+                    if (count === 0) return null;
+                    const on = providerTab === group.key;
+                    return (
+                      <button
+                        key={group.key}
+                        type="button"
+                        onClick={() => setProviderTab(group.key)}
+                        className="transition-atelier"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 5,
+                          height: 26,
+                          padding: '0 8px',
+                          borderRadius: 'var(--radius-full)',
+                          fontSize: 11.5,
+                          fontWeight: on ? 500 : 400,
+                          whiteSpace: 'nowrap',
+                          color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                          background: on ? 'rgba(255, 255, 255, 0.12)' : 'transparent',
+                          boxShadow: on ? 'inset 0 1px 0 rgba(255,255,255,0.14)' : 'none',
+                        }}
+                      >
+                        <ProviderIcon provider={group.key} size={13} active={on} />
+                        <span>{group.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Models of the selected provider */}
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
+                    maxHeight: 196,
+                    overflowY: 'auto',
+                  }}
+                >
+                  {allModels
+                    .filter((m) => m.provider === providerTab)
+                    .map((m) => {
+                      const active =
+                        (agent?.providerOverride ?? settings.provider) === m.provider &&
+                        (agent?.modelOverride ?? settings.model) === m.id;
+                      return (
+                        <button
+                          key={`${m.provider}:${m.id}`}
+                          type="button"
+                          onClick={() => {
+                            setEffortMenuOpen(false);
+                            void onSelectModel(m);
+                          }}
+                          className="transition-atelier"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                            textAlign: 'left',
+                            padding: '8px 10px',
+                            borderRadius: 12,
+                            fontSize: 13,
+                            color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            background: active ? 'rgba(255, 255, 255, 0.09)' : 'transparent',
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!active) e.currentTarget.style.background = 'transparent';
+                          }}
+                        >
+                          <span style={{ flex: 1, minWidth: 0 }}>{m.label}</span>
+                          {active && (
+                            <Check size={15} strokeWidth={2} style={{ color: 'var(--agent-green)' }} />
+                          )}
+                        </button>
+                      );
+                    })}
+                </div>
+
+                {/* Rolling 5h & Weekly limit usage or provider balance */}
+                {selectedProviderUsage && (
+                  <div
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 12,
+                      background: 'rgba(0, 0, 0, 0.28)',
+                      border: '1px solid rgba(255, 255, 255, 0.06)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 7,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 500,
+                          letterSpacing: '0.06em',
+                          textTransform: 'uppercase',
+                          color: 'var(--text-muted)',
+                        }}
+                      >
+                        {PROVIDER_SHORT_LABELS[providerTab] ?? providerTab} Usage
+                        {selectedProviderUsage.sourceLabel ? (
+                          <span
+                            style={{
+                              marginLeft: 5,
+                              textTransform: 'none',
+                              letterSpacing: 0,
+                              fontWeight: 400,
+                              color: 'var(--text-tertiary)',
+                            }}
+                          >
+                            · {selectedProviderUsage.sourceLabel}
+                          </span>
+                        ) : null}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEffortMenuOpen(false);
+                          onOpenUsage();
+                        }}
+                        style={{ fontSize: 10.5, color: 'var(--text-secondary)' }}
+                      >
+                        Full report ↗
+                      </button>
+                    </div>
+
+                    {selectedProviderUsage.supportsRollingWindows ? (
+                      <>
+                        <MiniUsageBar
+                          label={selectedProviderUsage.fiveHour.isOfficial ? '5h limit' : 'Est. 5h'}
+                          usedTokens={selectedProviderUsage.fiveHour.usedTokens}
+                          tokenLimit={selectedProviderUsage.fiveHour.tokenLimit}
+                          percentUsed={selectedProviderUsage.fiveHour.percentUsed}
+                          resetsAt={selectedProviderUsage.fiveHour.resetsAt}
+                          isOfficial={selectedProviderUsage.fiveHour.isOfficial}
+                        />
+                        <MiniUsageBar
+                          label={selectedProviderUsage.weekly.isOfficial ? 'Weekly limit' : 'Est. Weekly'}
+                          usedTokens={selectedProviderUsage.weekly.usedTokens}
+                          tokenLimit={selectedProviderUsage.weekly.tokenLimit}
+                          percentUsed={selectedProviderUsage.weekly.percentUsed}
+                          resetsAt={selectedProviderUsage.weekly.resetsAt}
+                          isOfficial={selectedProviderUsage.weekly.isOfficial}
+                        />
+                      </>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        <div
+                          className="mono-num"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            fontSize: 11,
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          <span>
+                            7d: {formatCompactTokens(selectedProviderUsage.totalTokens)} tokens ($
+                            {selectedProviderUsage.estimatedCostUsd.toFixed(2)})
+                          </span>
+                          {selectedProviderUsage.liveBalance && (
+                            <span
+                              style={{
+                                color: selectedProviderUsage.liveBalance.available
+                                  ? 'var(--agent-green)'
+                                  : 'var(--agent-red)',
+                              }}
+                            >
+                              {selectedProviderUsage.liveBalance.label}
+                            </span>
+                          )}
+                        </div>
+                        {selectedProviderUsage.limit && (
+                          <MiniUsageBar
+                            label={`${selectedProviderUsage.limit.period} cap`}
+                            usedTokens={selectedProviderUsage.limitWindowTokens}
+                            tokenLimit={selectedProviderUsage.limit.tokenLimit}
+                            percentUsed={selectedProviderUsage.percentUsed}
+                            resetsAt={null}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Effort: segmented control with sliding thumb */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 2px' }}>
+                  <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', flexShrink: 0 }}>
+                    Effort
+                  </span>
+                  <div
+                    style={{
+                      position: 'relative',
+                      flex: 1,
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, 1fr)',
+                      padding: 3,
+                      borderRadius: 'var(--radius-full)',
+                      background: 'rgba(0, 0, 0, 0.28)',
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        position: 'absolute',
+                        top: 3,
+                        bottom: 3,
+                        left: 3,
+                        width: 'calc((100% - 6px) / 3)',
+                        borderRadius: 'var(--radius-full)',
+                        background: 'rgba(255, 255, 255, 0.14)',
+                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16)',
+                        transform: `translateX(${Math.max(0, EFFORTS.indexOf(settings.reasoningEffort)) * 100}%)`,
+                        transition: 'transform 260ms cubic-bezier(0.34, 1.4, 0.64, 1)',
+                      }}
+                    />
+                    {EFFORTS.map((eff) => (
+                      <button
+                        key={eff}
+                        type="button"
+                        onClick={() => {
+                          void onUpdateReasoning(eff);
+                        }}
+                        style={{
+                          position: 'relative',
+                          height: 24,
+                          fontSize: 11.5,
+                          color:
+                            settings.reasoningEffort === eff
+                              ? 'var(--text-primary)'
+                              : 'var(--text-tertiary)',
+                        }}
+                      >
+                        {eff}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ height: 1, background: 'rgba(255,255,255,0.08)' }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 4px' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEffortMenuOpen(false);
+                      onOpenModels();
+                    }}
+                    style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)' }}
+                  >
+                    Models & Providers
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEffortMenuOpen(false);
+                      onOpenSettings();
+                    }}
+                    style={{ fontSize: 12, color: 'var(--text-tertiary)' }}
+                  >
+                    Harness Settings
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            disabled={!agent || isWorking || !onCompactContext}
+            onClick={() => onCompactContext?.()}
+            style={{ display: 'inline-flex', alignItems: 'center', cursor: agent && !isWorking ? 'pointer' : 'default' }}
+          >
+            <TokenRing
+              percent={contextPct}
+              label={`Context: ${contextTokens.toLocaleString()} / ${autoCompact.maxContextTokens.toLocaleString()} tokens · Auto-compact ${autoCompact.enabled ? 'ON' : 'OFF'}${agent && !isWorking ? ' (click to compact)' : ''}`}
+            />
+          </button>
+          <TokenRing percent={outputPct} label={`Output tokens: ${agent?.tokenUsage.output ?? 0}`} />
+        </div>
+      </div>
+    </div>
+  );
+}
