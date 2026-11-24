@@ -1,3 +1,4 @@
+import { t as translate, useT } from '../i18n';
 import {
   ATTACHMENT_LIMITS,
   BUILT_IN_MODELS,
@@ -92,12 +93,12 @@ function formatCompactTokens(n: number): string {
 function formatResetCountdown(iso: string | null): string | null {
   if (!iso) return null;
   const diffMs = new Date(iso).getTime() - Date.now();
-  if (!Number.isFinite(diffMs) || diffMs <= 0) return 'resets soon';
+  if (!Number.isFinite(diffMs) || diffMs <= 0) return translate('resets soon');
   const days = Math.floor(diffMs / 86_400_000);
   const hours = Math.floor((diffMs % 86_400_000) / 3_600_000);
   const mins = Math.floor((diffMs % 3_600_000) / 60_000);
-  if (days > 0) return `resets ${days}d ${hours}h`;
-  return `resets ${hours}h ${mins}m`;
+  if (days > 0) return translate('resets {days}d {hours}h', { days, hours });
+  return translate('resets {hours}h {mins}m', { hours, mins });
 }
 
 function meterColor(pct: number | null): string {
@@ -210,6 +211,7 @@ export function FloatingComposer({
   onOpenSettings,
   onOpenPlugins,
 }: FloatingComposerProps) {
+  const t = useT();
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [pluginsMenuOpen, setPluginsMenuOpen] = useState(false);
   const oauth = useMcpOAuth();
@@ -279,20 +281,20 @@ export function FloatingComposer({
     if (!agent || incoming.length === 0) return;
     const room = ATTACHMENT_LIMITS.maxFiles - pending.length;
     if (room <= 0) {
-      toast.error(`Maksimal ${ATTACHMENT_LIMITS.maxFiles} lampiran per pesan.`);
+      toast.error(t('At most {maxFiles} attachments per message.', { maxFiles: ATTACHMENT_LIMITS.maxFiles }));
       return;
     }
     const accepted: File[] = [];
     for (const f of incoming.slice(0, room)) {
       if (f.size > ATTACHMENT_LIMITS.maxFileBytes) {
-        toast.error(`"${f.name}" lebih dari ${ATTACHMENT_LIMITS.maxFileBytes / 1048576} MB.`);
+        toast.error(t('"{name}" is larger than {v1} MB.', { name: f.name, v1: ATTACHMENT_LIMITS.maxFileBytes / 1048576 }));
       } else if (f.size === 0) {
-        toast.error(`"${f.name}" kosong.`);
+        toast.error(t('"{name}" is empty.', { name: f.name }));
       } else {
         accepted.push(f);
       }
     }
-    if (incoming.length > room) toast.error(`Hanya ${room} file lagi yang muat; sisanya dilewati.`);
+    if (incoming.length > room) toast.error(t('Only {room} more files fit; the rest were skipped.', { room }));
     if (accepted.length === 0) return;
 
     const entries: PendingUpload[] = accepted.map((f, i) => ({
@@ -313,7 +315,7 @@ export function FloatingComposer({
         }),
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload gagal';
+      const message = err instanceof Error ? err.message : t('Upload failed');
       toast.error(message);
       setPending((prev) => prev.map((p) => (entries.some((e) => e.key === p.key) ? { ...p, status: 'error', error: message } : p)));
     }
@@ -381,10 +383,10 @@ export function FloatingComposer({
 
   const attentionCount = settings.mcpServers.filter((s) => needsAttention(s, oauth.status)).length;
   const hintParts = [
-    agent && agent.skills.length > 0 ? '/ for skills' : null,
-    settings.mcpServers.length > 0 ? '@ for plugins' : null,
+    agent && agent.skills.length > 0 ? t('/ for skills') : null,
+    settings.mcpServers.length > 0 ? t('@ for plugins') : null,
   ].filter(Boolean);
-  const placeholderHint = hintParts.length > 0 ? ` (type ${hintParts.join(', ')})` : '';
+  const placeholderHint = hintParts.length > 0 ? ` (${t('type {hints}', { hints: hintParts.join(', ') })})` : '';
   const isWorking = agent?.status === 'working';
   const doneAttachments = pending.filter((p) => p.status === 'done' && p.attachment);
   const uploading = pending.some((p) => p.status === 'uploading');
@@ -417,7 +419,7 @@ export function FloatingComposer({
         try {
           await setPluginAttached(agent, plugin, true);
         } catch (err) {
-          toast.error(err instanceof Error ? err.message : `Could not attach ${plugin.name}`);
+          toast.error(err instanceof Error ? err.message : t('Could not attach {name}', { name: plugin.name }));
         }
       }
       const finalText = plugins.length
@@ -502,7 +504,7 @@ export function FloatingComposer({
               {skill.name}
               <button
                 type="button"
-                aria-label={`Remove skill ${skill.name}`}
+                aria-label={t('Remove skill {name}', { name: skill.name })}
                 onClick={() => setPickedSkills((prev) => prev.filter((p) => p.id !== skill.id))}
                 style={{ display: 'inline-flex', color: 'var(--text-tertiary)' }}
               >
@@ -534,7 +536,7 @@ export function FloatingComposer({
               {plugin.name}
               <button
                 type="button"
-                aria-label={`Remove plugin ${plugin.name}`}
+                aria-label={t('Remove plugin {name}', { name: plugin.name })}
                 onClick={() => setPickedPlugins((prev) => prev.filter((p) => p.id !== plugin.id))}
                 style={{ display: 'inline-flex', color: 'var(--text-tertiary)' }}
               >
@@ -572,12 +574,10 @@ export function FloatingComposer({
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
             }}
-          >
-            Replying to: {replyTo}
+          >{t('Replying to:')} {replyTo}
           </span>
           {onClearReply && (
-            <button type="button" onClick={onClearReply} style={{ color: 'var(--text-muted)' }}>
-              Clear
+            <button type="button" onClick={onClearReply} style={{ color: 'var(--text-muted)' }}>{t('Clear')}
             </button>
           )}
         </div>
@@ -599,7 +599,7 @@ export function FloatingComposer({
         {slashOpen && (
           <div
             role="listbox"
-            aria-label="Skills"
+            aria-label={t('Skills')}
             className="popover-shadow"
             style={{
               position: 'absolute',
@@ -620,9 +620,7 @@ export function FloatingComposer({
           >
             {slashOptions.length === 0 ? (
               <div style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-                {agent && agent.skills.length === 0
-                  ? 'No skills installed. Add some in Edit agent.'
-                  : 'No matching skill.'}
+                {agent && agent.skills.length === 0 ? t('No skills installed. Add some in Edit agent.') : t('No matching skill.')}
               </div>
             ) : (
               slashOptions.map((skill, index) => (
@@ -649,7 +647,7 @@ export function FloatingComposer({
                   <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                     <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>
                       {skill.name}
-                      {!skill.enabled && <span style={{ color: 'var(--text-muted)' }}> · off</span>}
+                      {!skill.enabled && <span style={{ color: 'var(--text-muted)' }}>{t('· off')}</span>}
                     </span>
                     {skill.description && (
                       <span
@@ -674,7 +672,7 @@ export function FloatingComposer({
         {mentionOpen && (
           <div
             role="listbox"
-            aria-label="Plugins"
+            aria-label={t('Plugins')}
             className="popover-shadow"
             style={{
               position: 'absolute',
@@ -695,9 +693,7 @@ export function FloatingComposer({
           >
             {mentionOptions.length === 0 ? (
               <div style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-                {settings.mcpServers.length === 0
-                  ? 'No plugins yet. Add some from the + menu → Plugins.'
-                  : 'No matching plugin ready to use.'}
+                {settings.mcpServers.length === 0 ? t('No plugins yet. Add some from the + menu → Plugins.') : t('No matching plugin ready to use.')}
               </div>
             ) : (
               mentionOptions.map((server, index) => (
@@ -751,7 +747,7 @@ export function FloatingComposer({
               setPlusMenuOpen((v) => !v);
               setPluginsMenuOpen(false);
             }}
-            title="Quick actions"
+            title={t('Quick actions')}
             className="transition-atelier"
             style={{
               width: 28,
@@ -797,11 +793,11 @@ export function FloatingComposer({
               {/* Chat-only actions; agent, MCP and repo settings live in the header menu. */}
               {[
                 ...(agent
-                  ? [{ label: 'Attach file or image', icon: Paperclip, action: () => fileInputRef.current?.click() }]
+                  ? [{ label: t('Attach file or image'), icon: Paperclip, action: () => fileInputRef.current?.click() }]
                   : []),
-                ...(project ? [{ label: 'New task', icon: ListPlus, action: onNewTask }] : []),
+                ...(project ? [{ label: t('New task'), icon: ListPlus, action: onNewTask }] : []),
                 ...(agent && onCompactContext && !isWorking
-                  ? [{ label: 'Compact context now', icon: Minimize2, action: onCompactContext }]
+                  ? [{ label: t('Compact context now'), icon: Minimize2, action: onCompactContext }]
                   : []),
               ].map((item) => (
                 <button
@@ -857,10 +853,10 @@ export function FloatingComposer({
                 }}
               >
                 <Plug size={15} strokeWidth={1.5} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
-                <span style={{ flex: 1 }}>Plugins</span>
+                <span style={{ flex: 1 }}>{t('Plugins')}</span>
                 {attentionCount > 0 && (
                   <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                    {attentionCount} needs attention
+                    {attentionCount}{t('needs attention')}
                   </span>
                 )}
                 <ChevronRight size={14} strokeWidth={1.5} style={{ color: 'var(--text-tertiary)' }} />
@@ -940,11 +936,7 @@ export function FloatingComposer({
             }
           }}
           placeholder={
-            agent
-              ? project
-                ? `Message ${agent.name}...${placeholderHint}`
-                : `Message ${agent.name} directly...${placeholderHint}`
-              : 'Create or select an agent to start...'
+            agent ? project ? t('Message {name}...{placeholderHint}', { name: agent.name, placeholderHint }) : t('Message {name} directly...{placeholderHint}', { name: agent.name, placeholderHint }) : t('Create or select an agent to start...')
           }
           style={{
             flex: 1,
@@ -971,14 +963,14 @@ export function FloatingComposer({
               whiteSpace: 'nowrap',
             }}
           >
-            {agent.queueLength} queued
+            {agent.queueLength}{t('queued')}
           </span>
         )}
 
         <button
           type="button"
           onClick={() => inputRef.current?.focus()}
-          title="Focus input"
+          title={t('Focus input')}
           style={{
             width: 28,
             height: 28,
@@ -997,7 +989,7 @@ export function FloatingComposer({
           <button
             type="button"
             onClick={() => void onStop()}
-            title="Stop active agent"
+            title={t('Stop active agent')}
             className="transition-atelier"
             style={{
               width: 44,
@@ -1017,7 +1009,7 @@ export function FloatingComposer({
           <button
             type="submit"
             disabled={!canSubmit}
-            title={isWorking ? 'Queue message (FIFO)' : 'Send message'}
+            title={isWorking ? t('Queue message (FIFO)') : t('Send message')}
             className="transition-atelier"
             style={{
               width: 44,
@@ -1064,7 +1056,7 @@ export function FloatingComposer({
                 }}
               >
                 <Folder size={13} strokeWidth={1.5} />
-                <span>{project.repo?.fullName ?? 'No repo checkout'}</span>
+                <span>{project.repo?.fullName ?? t('No repo checkout')}</span>
               </button>
 
               <button
@@ -1079,7 +1071,7 @@ export function FloatingComposer({
                 }}
               >
                 <GitBranch size={13} strokeWidth={1.5} />
-                <span>{project.repo?.defaultBranch ?? 'main'}</span>
+                <span>{project.repo?.defaultBranch ?? t('main')}</span>
                 <ChevronDown size={12} strokeWidth={1.5} />
               </button>
             </>
@@ -1094,7 +1086,7 @@ export function FloatingComposer({
               }}
             >
               <Folder size={13} strokeWidth={1.5} />
-              <span>Direct · Scratch workspace</span>
+              <span>{t('Direct · Scratch workspace')}</span>
             </span>
           )}
         </div>
@@ -1275,7 +1267,7 @@ export function FloatingComposer({
                           color: 'var(--text-muted)',
                         }}
                       >
-                        {PROVIDER_SHORT_LABELS[providerTab] ?? providerTab} Usage
+                        {PROVIDER_SHORT_LABELS[providerTab] ?? providerTab}{t('Usage')}
                         {selectedProviderUsage.sourceLabel ? (
                           <span
                             style={{
@@ -1297,15 +1289,14 @@ export function FloatingComposer({
                           onOpenUsage();
                         }}
                         style={{ fontSize: 10.5, color: 'var(--text-secondary)' }}
-                      >
-                        Full report ↗
+                      >{t('Full report ↗')}
                       </button>
                     </div>
 
                     {selectedProviderUsage.supportsRollingWindows ? (
                       <>
                         <MiniUsageBar
-                          label={selectedProviderUsage.fiveHour.isOfficial ? '5h limit' : 'Est. 5h'}
+                          label={selectedProviderUsage.fiveHour.isOfficial ? t('5h limit') : t('Est. 5h')}
                           usedTokens={selectedProviderUsage.fiveHour.usedTokens}
                           tokenLimit={selectedProviderUsage.fiveHour.tokenLimit}
                           percentUsed={selectedProviderUsage.fiveHour.percentUsed}
@@ -1313,7 +1304,7 @@ export function FloatingComposer({
                           isOfficial={selectedProviderUsage.fiveHour.isOfficial}
                         />
                         <MiniUsageBar
-                          label={selectedProviderUsage.weekly.isOfficial ? 'Weekly limit' : 'Est. Weekly'}
+                          label={selectedProviderUsage.weekly.isOfficial ? t('Weekly limit') : t('Est. Weekly')}
                           usedTokens={selectedProviderUsage.weekly.usedTokens}
                           tokenLimit={selectedProviderUsage.weekly.tokenLimit}
                           percentUsed={selectedProviderUsage.weekly.percentUsed}
@@ -1334,7 +1325,7 @@ export function FloatingComposer({
                           }}
                         >
                           <span>
-                            7d: {formatCompactTokens(selectedProviderUsage.totalTokens)} tokens ($
+                            7d: {formatCompactTokens(selectedProviderUsage.totalTokens)}{t('tokens ($')}
                             {selectedProviderUsage.estimatedCostUsd.toFixed(2)})
                           </span>
                           {selectedProviderUsage.liveBalance && (
@@ -1351,7 +1342,7 @@ export function FloatingComposer({
                         </div>
                         {selectedProviderUsage.limit && (
                           <MiniUsageBar
-                            label={`${selectedProviderUsage.limit.period} cap`}
+                            label={t('{period} cap', { period: selectedProviderUsage.limit.period })}
                             usedTokens={selectedProviderUsage.limitWindowTokens}
                             tokenLimit={selectedProviderUsage.limit.tokenLimit}
                             percentUsed={selectedProviderUsage.percentUsed}
@@ -1365,8 +1356,7 @@ export function FloatingComposer({
 
                 {/* Effort: segmented control with sliding thumb */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 2px' }}>
-                  <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', flexShrink: 0 }}>
-                    Effort
+                  <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', flexShrink: 0 }}>{t('Effort')}
                   </span>
                   <div
                     style={{
@@ -1426,8 +1416,7 @@ export function FloatingComposer({
                       onOpenModels();
                     }}
                     style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)' }}
-                  >
-                    Models & Providers
+                  >{t('Models & Providers')}
                   </button>
                   <button
                     type="button"
@@ -1436,8 +1425,7 @@ export function FloatingComposer({
                       onOpenSettings();
                     }}
                     style={{ fontSize: 12, color: 'var(--text-tertiary)' }}
-                  >
-                    Harness Settings
+                  >{t('Harness Settings')}
                   </button>
                 </div>
               </div>
@@ -1452,10 +1440,10 @@ export function FloatingComposer({
           >
             <TokenRing
               percent={contextPct}
-              label={`Context: ${contextTokens.toLocaleString()} / ${autoCompact.maxContextTokens.toLocaleString()} tokens · Auto-compact ${autoCompact.enabled ? 'ON' : 'OFF'}${agent && !isWorking ? ' (click to compact)' : ''}`}
+              label={t('Context: {v0} / {v1} tokens · Auto-compact {v2}{v3}', { v0: contextTokens.toLocaleString(), v1: autoCompact.maxContextTokens.toLocaleString(), v2: autoCompact.enabled ? 'ON' : 'OFF', v3: agent && !isWorking ? t(' (click to compact)') : '' })}
             />
           </button>
-          <TokenRing percent={outputPct} label={`Output tokens: ${agent?.tokenUsage.output ?? 0}`} />
+          <TokenRing percent={outputPct} label={t('Output tokens: {v0}', { v0: agent?.tokenUsage.output ?? 0 })} />
         </div>
       </div>
     </div>

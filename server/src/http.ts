@@ -764,6 +764,7 @@ export function createHttpRouter(deps: {
         model: z.string().trim().min(1).regex(/^[a-zA-Z0-9._:/-]+$/).optional(),
         reasoningEffort: z.enum(['Low', 'Medium', 'High']).optional(),
         customModels: z.array(modelEntrySchema).optional(),
+        language: z.enum(['en', 'id']).optional(),
         visibleModels: z
           .record(z.string(), z.array(z.string().trim().min(1).max(200).regex(/^[a-zA-Z0-9._:/-]+$/)).max(3000))
           .optional(),

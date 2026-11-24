@@ -1,3 +1,4 @@
+import { useT } from '../../i18n';
 import {
   BUILT_IN_MODELS,
   type ModelEntry,
@@ -67,6 +68,7 @@ export function ModelsProvidersPanel({
   settings: Settings;
   discoveredModels?: ModelEntry[];
 }) {
+  const t = useT();
   const [tab, setTab] = useState<ModalTab>('accounts');
   const [providerFilter, setProviderFilter] = useState<RealProvider | 'all'>('all');
   const [addFormOpen, setAddFormOpen] = useState(false);
@@ -152,7 +154,7 @@ export function ModelsProvidersPanel({
       const res = await api.loginProvider(provider);
       setProviders((prev) => prev.map((p) => (p.provider === provider ? res.status : p)));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start login');
+      setError(err instanceof Error ? err.message : t('Failed to start login'));
     } finally {
       setBusyProvider(null);
     }
@@ -165,7 +167,7 @@ export function ModelsProvidersPanel({
       const res = await api.logoutProvider(provider);
       setProviders((prev) => prev.map((p) => (p.provider === provider ? res.status : p)));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to sign out');
+      setError(err instanceof Error ? err.message : t('Failed to sign out'));
     } finally {
       setBusyProvider(null);
     }
@@ -177,7 +179,7 @@ export function ModelsProvidersPanel({
       cliPaths: { ...settings.cliPaths, [provider]: pathVal || undefined },
     });
     setExpandedCliPath((prev) => ({ ...prev, [provider]: false }));
-    toast.success(`${PROVIDER_SHORT[provider]} CLI path saved`);
+    toast.success(t('{v0} CLI path saved', { v0: PROVIDER_SHORT[provider] }));
     await loadStatuses();
   };
 
@@ -191,9 +193,9 @@ export function ModelsProvidersPanel({
       setProviders((prev) => prev.map((p) => (p.provider === provider ? res.status : p)));
       setApiKeyDrafts((prev) => ({ ...prev, [provider]: '' }));
       setExpandedApiKey((prev) => ({ ...prev, [provider]: false }));
-      toast.success(`${PROVIDER_SHORT[provider]} API key saved`);
+      toast.success(t('{v0} API key saved', { v0: PROVIDER_SHORT[provider] }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save API key');
+      setError(err instanceof Error ? err.message : t('Failed to save API key'));
     } finally {
       setBusyProvider(null);
     }
@@ -205,9 +207,9 @@ export function ModelsProvidersPanel({
     try {
       const res = await api.clearProviderApiKey(provider);
       setProviders((prev) => prev.map((p) => (p.provider === provider ? res.status : p)));
-      toast.info(`${PROVIDER_SHORT[provider]} API key cleared`);
+      toast.info(t('{v0} API key cleared', { v0: PROVIDER_SHORT[provider] }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to clear API key');
+      setError(err instanceof Error ? err.message : t('Failed to clear API key'));
     } finally {
       setBusyProvider(null);
     }
@@ -218,7 +220,7 @@ export function ModelsProvidersPanel({
     const id = newModelId.trim();
     if (!id) return;
     if (!/^[a-zA-Z0-9._:/-]+$/.test(id)) {
-      setError('Model ID may only contain letters, numbers, ".", "_", "-", ":", or "/".');
+      setError(t('Model ID may only contain letters, numbers, ".", "_", "-", ":", or "/".'));
       return;
     }
     const label = newModelLabel.trim() || id;
@@ -238,9 +240,9 @@ export function ModelsProvidersPanel({
       setNewModelId('');
       setNewModelLabel('');
       setAddFormOpen(false);
-      toast.success(`Model “${label}” added`);
+      toast.success(t('Model “{label}” added', { label }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add model');
+      setError(err instanceof Error ? err.message : t('Failed to add model'));
     } finally {
       setSavingModel(false);
     }
@@ -251,7 +253,7 @@ export function ModelsProvidersPanel({
       (m) => !(m.provider === entry.provider && m.id === entry.id),
     );
     await api.updateSettings({ customModels: nextCustom });
-    toast.deleted(`Model “${entry.label}” removed`);
+    toast.deleted(t('Model “{label}” removed', { label: entry.label }));
   };
 
   const handleUseModel = async (entry: ModelEntry) => {
@@ -259,7 +261,7 @@ export function ModelsProvidersPanel({
       provider: entry.provider,
       model: entry.id,
     });
-    toast.success(`Now using ${entry.label}`);
+    toast.success(t('Now using {label}', { label: entry.label }));
   };
 
   const placeholder = MODEL_PLACEHOLDER[newProvider];
@@ -289,12 +291,12 @@ export function ModelsProvidersPanel({
               [
                 {
                   id: 'accounts' as ModalTab,
-                  label: 'Accounts',
+                  label: t('Accounts'),
                   badge: providers.length > 0 ? `${connectedCount}/${providers.length}` : undefined,
                 },
                 {
                   id: 'models' as ModalTab,
-                  label: 'Models',
+                  label: t('Models'),
                   badge: String(shownList.length),
                 },
               ]
@@ -354,8 +356,7 @@ export function ModelsProvidersPanel({
                 border: '1px solid var(--border-subtle)',
               }}
             >
-              <RefreshCw size={12} strokeWidth={1.5} />
-              Refresh
+              <RefreshCw size={12} strokeWidth={1.5} />{t('Refresh')}
             </button>
           ) : (
             <button
@@ -376,8 +377,7 @@ export function ModelsProvidersPanel({
                 border: `1px solid ${addFormOpen ? 'var(--border-default)' : 'var(--border-subtle)'}`,
               }}
             >
-              <Plus size={13} strokeWidth={1.6} />
-              Custom model
+              <Plus size={13} strokeWidth={1.6} />{t('Custom model')}
             </button>
           )}
         </div>
@@ -399,8 +399,7 @@ export function ModelsProvidersPanel({
 
         {tab === 'accounts' ? (
           loadingAuth && providers.length === 0 ? (
-            <div style={{ padding: '24px 0', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-              Checking installed CLIs & credentials…
+            <div style={{ padding: '24px 0', fontSize: 12.5, color: 'var(--text-tertiary)' }}>{t('Checking installed CLIs & credentials…')}
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -515,14 +514,14 @@ export function ModelsProvidersPanel({
                               }}
                             >
                               <Key size={12} strokeWidth={1.5} />
-                              {p.authenticated ? 'Update key' : 'Set API key'}
+                              {p.authenticated ? t('Update key') : t('Set API key')}
                             </button>
                             {p.authenticated && (
                               <button
                                 type="button"
                                 disabled={isBusy}
                                 onClick={() => void handleClearApiKey(p.provider)}
-                                title="Clear saved API key"
+                                title={t('Clear saved API key')}
                                 className="transition-atelier"
                                 style={{
                                   width: 30,
@@ -550,7 +549,7 @@ export function ModelsProvidersPanel({
                                   [p.provider]: !prev[p.provider],
                                 }))
                               }
-                              title="Set custom CLI path"
+                              title={t('Set custom CLI path')}
                               className="transition-atelier"
                               style={{
                                 width: 30,
@@ -586,8 +585,7 @@ export function ModelsProvidersPanel({
                                   gap: 5,
                                 }}
                               >
-                                <LogOut size={12} strokeWidth={1.5} />
-                                Sign out
+                                <LogOut size={12} strokeWidth={1.5} />{t('Sign out')}
                               </button>
                             ) : (
                               <button
@@ -613,7 +611,7 @@ export function ModelsProvidersPanel({
                                 }}
                               >
                                 <LogIn size={12} strokeWidth={1.5} />
-                                {p.loginInProgress ? 'Waiting…' : 'Sign in'}
+                                {p.loginInProgress ? t('Waiting…') : t('Sign in')}
                               </button>
                             )}
                           </>
@@ -635,8 +633,7 @@ export function ModelsProvidersPanel({
                           color: 'var(--agent-blue)',
                         }}
                       >
-                        <ExternalLink size={12} strokeWidth={1.5} />
-                        Open browser login link
+                        <ExternalLink size={12} strokeWidth={1.5} />{t('Open browser login link')}
                       </a>
                     )}
 
@@ -658,7 +655,7 @@ export function ModelsProvidersPanel({
                               [p.provider]: e.target.value,
                             }))
                           }
-                          placeholder="Paste sk-… API key (stored server-side)"
+                          placeholder={t('Paste sk-… API key (stored server-side)')}
                           className="mono-num"
                           style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}
                         />
@@ -667,8 +664,7 @@ export function ModelsProvidersPanel({
                           disabled={isBusy || !(apiKeyDrafts[p.provider]?.trim())}
                           onClick={() => void handleSaveApiKey(p.provider)}
                           style={{ ...primaryBtnStyle, height: 32, padding: '0 14px', fontSize: 12 }}
-                        >
-                          Save key
+                        >{t('Save key')}
                         </button>
                       </div>
                     )}
@@ -691,7 +687,7 @@ export function ModelsProvidersPanel({
                               [p.provider]: e.target.value,
                             }))
                           }
-                          placeholder="Full path to CLI executable or .cmd"
+                          placeholder={t('Full path to CLI executable or .cmd')}
                           className="mono-num"
                           style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}
                         />
@@ -699,8 +695,7 @@ export function ModelsProvidersPanel({
                           type="button"
                           onClick={() => void handleSaveCliPath(p.provider)}
                           style={{ ...secondaryBtnStyle, height: 32, padding: '0 12px', fontSize: 12 }}
-                        >
-                          Save path
+                        >{t('Save path')}
                         </button>
                       </div>
                     )}
@@ -725,8 +720,8 @@ export function ModelsProvidersPanel({
             >
               {(
                 [
-                  { id: 'chat', label: `In chat (${shownList.length})` },
-                  { id: 'browse', label: 'Browse all models' },
+                  { id: 'chat', label: t('In chat ({length})', { length: shownList.length }) },
+                  { id: 'browse', label: t('Browse all models') },
                 ] as const
               ).map((v) => (
                 <button
@@ -781,9 +776,9 @@ export function ModelsProvidersPanel({
                   }}
                 >
                   <div>
-                    <label style={labelStyle}>Provider</label>
+                    <label style={labelStyle}>{t('Provider')}</label>
                     <Select
-                      ariaLabel="Provider"
+                      ariaLabel={t('Provider')}
                       value={newProvider}
                       onChange={(v) => setNewProvider(v as RealProvider)}
                       options={PROVIDER_ORDER.map((id) => ({
@@ -793,7 +788,7 @@ export function ModelsProvidersPanel({
                     />
                   </div>
                   <div>
-                    <label style={labelStyle}>Model ID</label>
+                    <label style={labelStyle}>{t('Model ID')}</label>
                     <input
                       type="text"
                       value={newModelId}
@@ -804,7 +799,7 @@ export function ModelsProvidersPanel({
                     />
                   </div>
                   <div>
-                    <label style={labelStyle}>Display Name</label>
+                    <label style={labelStyle}>{t('Display Name')}</label>
                     <input
                       type="text"
                       value={newModelLabel}
@@ -819,15 +814,13 @@ export function ModelsProvidersPanel({
                     type="button"
                     onClick={() => setAddFormOpen(false)}
                     style={{ ...secondaryBtnStyle, height: 30, fontSize: 12 }}
-                  >
-                    Cancel
+                  >{t('Cancel')}
                   </button>
                   <button
                     type="submit"
                     disabled={!newModelId.trim() || savingModel}
                     style={{ ...primaryBtnStyle, height: 30, fontSize: 12 }}
-                  >
-                    Add & activate
+                  >{t('Add & activate')}
                   </button>
                 </div>
               </form>
@@ -849,8 +842,7 @@ export function ModelsProvidersPanel({
                   background: providerFilter === 'all' ? 'var(--surface-3)' : 'var(--surface-2)',
                   border: `1px solid ${providerFilter === 'all' ? 'var(--border-default)' : 'var(--border-subtle)'}`,
                 }}
-              >
-                All ({shownList.length})
+              >{t('All (')}{shownList.length})
               </button>
               {PROVIDER_ORDER.map((id) => {
                 const count = shownList.filter((m) => m.provider === id).length;
@@ -939,7 +931,7 @@ export function ModelsProvidersPanel({
                         <button
                           type="button"
                           onClick={() => void handleDeleteCustomModel(m)}
-                          title="Remove custom model"
+                          title={t('Remove custom model')}
                           style={{ color: 'var(--text-muted)', padding: 4 }}
                         >
                           <Trash2 size={13} strokeWidth={1.5} />
@@ -961,8 +953,7 @@ export function ModelsProvidersPanel({
                             gap: 4,
                           }}
                         >
-                          <Check size={12} strokeWidth={1.75} />
-                          Active
+                          <Check size={12} strokeWidth={1.75} />{t('Active')}
                         </span>
                       ) : (
                         <button
@@ -978,8 +969,7 @@ export function ModelsProvidersPanel({
                             border: '1px solid var(--border-subtle)',
                             fontSize: 11.5,
                           }}
-                        >
-                          Use
+                        >{t('Use')}
                         </button>
                       )}
                     </div>
@@ -988,8 +978,7 @@ export function ModelsProvidersPanel({
               })}
             </div>
             {filteredModels.length === 0 && (
-              <div style={{ padding: '14px 4px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-                No model is shown here. Use “Browse all models” to pick some.
+              <div style={{ padding: '14px 4px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>{t('No model is shown here. Use “Browse all models” to pick some.')}
               </div>
             )}
               </>
@@ -1009,10 +998,11 @@ export function ModelsModal({
   discoveredModels?: ModelEntry[];
   onClose: () => void;
 }) {
+  const t = useT();
   return (
     <ModalShell
-      title="Models & Provider Login"
-      subtitle="Connect providers via OAuth, CLI, or API key, and choose default workspace models."
+      title={t('Models & Provider Login')}
+      subtitle={t('Connect providers via OAuth, CLI, or API key, and choose default workspace models.')}
       width={620}
       onClose={onClose}
     >

@@ -1,3 +1,4 @@
+import { LANGUAGES, type Lang, setLang, useLang, useT } from '../i18n';
 import {
   BUILT_IN_MODELS,
   DEFAULT_AUTO_COMPACT_SETTINGS,
@@ -51,6 +52,8 @@ export function SettingsView({
   onOpenMcp: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
+  const lang = useLang();
   const initialCompact = settings.autoCompact ?? DEFAULT_AUTO_COMPACT_SETTINGS;
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
@@ -141,10 +144,10 @@ export function SettingsView({
       if (activeProject && allowFullPermissions !== activeProject.allowFullPermissions) {
         await api.updateProject(activeProject.id, { allowFullPermissions });
       }
-      toast.success('Settings saved');
+      toast.success(t('Settings saved'));
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save settings');
+      setError(err instanceof Error ? err.message : t('Failed to save settings'));
     } finally {
       setSaving(false);
     }
@@ -152,14 +155,14 @@ export function SettingsView({
 
   const checks = [
     {
-      label: 'GitHub CLI (gh)',
+      label: t('GitHub CLI (gh)'),
       ok: Boolean(status?.github.authenticated),
       detail: status?.github.authenticated
-        ? `Logged in as ${status.github.username || 'user'}`
-        : status?.github.message || 'Optional · needed only for gh repo cloning',
+        ? t('Logged in as {name}', { name: status.github.username || 'user' })
+        : status?.github.message || t('Optional · needed only for gh repo cloning'),
     },
     {
-      label: 'Active default AI provider',
+      label: t('Active default AI provider'),
       ok: true,
       detail: `${settings.provider} · ${settings.model}`,
     },
@@ -167,8 +170,8 @@ export function SettingsView({
 
   return (
     <ModalShell
-      title="Harness settings"
-      subtitle="Configure AI providers, models, reasoning effort, context compaction, and permissions."
+      title={t('Harness settings')}
+      subtitle={t('Configure AI providers, models, reasoning effort, context compaction, and permissions.')}
       width={640}
       onClose={onClose}
     >
@@ -187,9 +190,9 @@ export function SettingsView({
         >
           {(
             [
-              { id: 'general' as SettingsTab, label: 'General' },
-              { id: 'providers' as SettingsTab, label: 'Models & Providers' },
-              { id: 'security' as SettingsTab, label: 'Security & Backup' },
+              { id: 'general' as SettingsTab, label: t('General') },
+              { id: 'providers' as SettingsTab, label: t('Models & Providers') },
+              { id: 'security' as SettingsTab, label: t('Security & Backup') },
             ]
           ).map((item) => {
             const on = activeTab === item.id;
@@ -247,8 +250,7 @@ export function SettingsView({
                     textTransform: 'uppercase',
                     color: 'var(--text-muted)',
                   }}
-                >
-                  Environment Readiness
+                >{t('Environment Readiness')}
                 </div>
                 <button
                   type="button"
@@ -262,8 +264,7 @@ export function SettingsView({
                     background: 'var(--surface-3)',
                     border: '1px solid var(--border-default)',
                   }}
-                >
-                  MCP connections ({settings.mcpServers.length})…
+                >{t('MCP connections (')}{settings.mcpServers.length})…
                 </button>
               </div>
           {checks.map((c) => (
@@ -291,9 +292,24 @@ export function SettingsView({
         </div>
 
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <label style={labelStyle}>{t('Interface language')}</label>
+            <Select
+              ariaLabel={t('Interface language')}
+              value={lang}
+              onChange={(v) => {
+                setLang(v as Lang);
+                void api.updateSettings({ language: v as Lang }).catch(() => undefined);
+              }}
+              options={LANGUAGES}
+            />
+            <div style={{ fontSize: 11.5, lineHeight: '16px', color: 'var(--text-tertiary)', marginTop: 6 }}>
+              {t('Choose the language used for menus, buttons and messages. Agent replies follow the language you write in.')}
+            </div>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
             <div>
-              <label style={labelStyle}>Default model</label>
+              <label style={labelStyle}>{t('Default model')}</label>
               <input
                 type="text"
                 value={model}
@@ -303,15 +319,15 @@ export function SettingsView({
               />
             </div>
             <div>
-              <label style={labelStyle}>Effort</label>
+              <label style={labelStyle}>{t('Effort')}</label>
               <Select
-                ariaLabel="Effort"
+                ariaLabel={t('Effort')}
                 value={reasoningEffort}
                 onChange={(v) => setReasoningEffort(v as ReasoningEffort)}
                 options={[
-                  { value: 'Low', label: 'Low' },
-                  { value: 'Medium', label: 'Medium' },
-                  { value: 'High', label: 'High' },
+                  { value: 'Low', label: t('Low') },
+                  { value: 'Medium', label: t('Medium') },
+                  { value: 'High', label: t('High') },
                 ]}
               />
             </div>
@@ -344,17 +360,15 @@ export function SettingsView({
                 checked={autoCompactEnabled}
                 onChange={(e) => setAutoCompactEnabled(e.target.checked)}
               />
-              <Minimize2 size={14} strokeWidth={1.5} style={{ color: 'var(--agent-amber)' }} />
-              Auto-compact long conversations
+              <Minimize2 size={14} strokeWidth={1.5} style={{ color: 'var(--agent-amber)' }} />{t('Auto-compact long conversations')}
             </label>
-            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>
-              Summarizes older turns and keeps native sessions while they fit the context budget. The full conversation stays searchable.
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>{t('Summarizes older turns and keeps native sessions while they fit the context budget. The full conversation stays searchable.')}
             </div>
 
             {autoCompactEnabled && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, paddingLeft: 22 }}>
                 <div>
-                  <label style={labelStyle}>Trigger msgs</label>
+                  <label style={labelStyle}>{t('Trigger msgs')}</label>
                   <input
                     type="number"
                     min={4}
@@ -366,7 +380,7 @@ export function SettingsView({
                   />
                 </div>
                 <div>
-                  <label style={labelStyle}>Keep recent</label>
+                  <label style={labelStyle}>{t('Keep recent')}</label>
                   <input
                     type="number"
                     min={1}
@@ -378,7 +392,7 @@ export function SettingsView({
                   />
                 </div>
                 <div>
-                  <label style={labelStyle}>Context limit</label>
+                  <label style={labelStyle}>{t('Context limit')}</label>
                   <input
                     type="number"
                     min={4000}
@@ -391,7 +405,7 @@ export function SettingsView({
                   />
                 </div>
                 <div>
-                  <label htmlFor="memory-tail-tokens" style={labelStyle}>History tail tokens</label>
+                  <label htmlFor="memory-tail-tokens" style={labelStyle}>{t('History tail tokens')}</label>
                   <input
                     id="memory-tail-tokens"
                     type="number"
@@ -404,11 +418,11 @@ export function SettingsView({
                   />
                 </div>
                 <div style={{ gridColumn: 'span 2' }}>
-                  <label htmlFor="memory-model" style={labelStyle}>Summarizer model</label>
+                  <label htmlFor="memory-model" style={labelStyle}>{t('Summarizer model')}</label>
                   <input
                     id="memory-model"
                     value={summarizerModel}
-                    placeholder="Automatic for provider"
+                    placeholder={t('Automatic for provider')}
                     maxLength={120}
                     onChange={(e) => setSummarizerModel(e.target.value)}
                     style={inputStyle}
@@ -440,8 +454,7 @@ export function SettingsView({
                   color: 'var(--text-primary)',
                 }}
               >
-                <RefreshCw size={14} strokeWidth={1.5} style={{ color: 'var(--agent-blue)' }} />
-                Model fallback chain (when limit hits)
+                <RefreshCw size={14} strokeWidth={1.5} style={{ color: 'var(--agent-blue)' }} />{t('Model fallback chain (when limit hits)')}
               </span>
               <div
                 style={{
@@ -455,8 +468,8 @@ export function SettingsView({
               >
                 {(
                   [
-                    { id: 'ask' as FallbackMode, label: 'Ask me first' },
-                    { id: 'auto' as FallbackMode, label: 'Auto-switch' },
+                    { id: 'ask' as FallbackMode, label: t('Ask me first') },
+                    { id: 'auto' as FallbackMode, label: t('Auto-switch') },
                   ]
                 ).map((m) => {
                   const active = fallbackMode === m.id;
@@ -483,9 +496,7 @@ export function SettingsView({
             </div>
 
             <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
-              {fallbackMode === 'ask'
-                ? 'When a provider hits rate limit or quota, pause and show a recovery card so you choose which backup model continues.'
-                : 'Automatically hand off to the next healthy backup model below when rate limit, quota, or outage errors occur.'}
+              {fallbackMode === 'ask' ? t('When a provider hits rate limit or quota, pause and show a recovery card so you choose which backup model continues.') : t('Automatically hand off to the next healthy backup model below when rate limit, quota, or outage errors occur.')}
             </div>
 
             {fallbackChain.length > 0 && (
@@ -530,7 +541,7 @@ export function SettingsView({
                               return next;
                             });
                           }}
-                          title="Move up"
+                          title={t('Move up')}
                           style={{ color: idx === 0 ? 'var(--text-muted)' : 'var(--text-secondary)', padding: 3 }}
                         >
                           <ArrowUp size={12} strokeWidth={1.5} />
@@ -546,7 +557,7 @@ export function SettingsView({
                               return next;
                             });
                           }}
-                          title="Move down"
+                          title={t('Move down')}
                           style={{
                             color:
                               idx === fallbackChain.length - 1
@@ -562,7 +573,7 @@ export function SettingsView({
                           onClick={() =>
                             setFallbackChain((prev) => prev.filter((_, i) => i !== idx))
                           }
-                          title="Remove backup"
+                          title={t('Remove backup')}
                           style={{ color: 'var(--text-muted)', padding: 3 }}
                         >
                           <Trash2 size={12} strokeWidth={1.5} />
@@ -576,9 +587,9 @@ export function SettingsView({
 
             {fallbackChain.length < 5 && (
               <Select
-                ariaLabel="Add backup model"
+                ariaLabel={t('Add backup model')}
                 value=""
-                placeholder="Add backup model…"
+                placeholder={t('Add backup model…')}
                 onChange={(val) => {
                   const [prov, ...rest] = val.split(':');
                   const modId = rest.join(':');
@@ -630,11 +641,9 @@ export function SettingsView({
                   checked={allowFullPermissions}
                   onChange={(e) => setAllowFullPermissions(e.target.checked)}
                 />
-                <ShieldAlert size={14} strokeWidth={1.5} style={{ color: 'var(--agent-red)' }} />
-                Allow shell-enabled agents full permissions (`bypassPermissions`) in {activeProject.name}
+                <ShieldAlert size={14} strokeWidth={1.5} style={{ color: 'var(--agent-red)' }} />{t('Allow shell-enabled agents full permissions (`bypassPermissions`) in')} {activeProject.name}
               </label>
-              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>
-                Per-project toggle: agents with shell execution enabled can run commands in the linked repo folder using your local user privileges.
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>{t('Per-project toggle: agents with shell execution enabled can run commands in the linked repo folder using your local user privileges.')}
               </div>
             </div>
           )}
@@ -642,11 +651,10 @@ export function SettingsView({
           {error && <div style={{ fontSize: 12, color: 'var(--agent-red)' }}>{error}</div>}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-            <button type="button" onClick={onClose} style={secondaryBtnStyle}>
-              Cancel
+            <button type="button" onClick={onClose} style={secondaryBtnStyle}>{t('Cancel')}
             </button>
             <button type="submit" disabled={saving} style={primaryBtnStyle}>
-              {saving ? 'Saving…' : 'Save settings'}
+              {saving ? t('Saving…') : t('Save settings')}
             </button>
           </div>
         </form>

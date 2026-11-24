@@ -18,6 +18,7 @@ import {
   TaskStatusIcon,
   getColorVar,
 } from '../components/Atoms';
+import { useT } from '../i18n';
 
 interface TasksViewProps {
   project: Project;
@@ -47,6 +48,7 @@ export function TasksView({
   onOpenTask,
   onJumpToAgent,
 }: TasksViewProps) {
+  const tr = useT();
   const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
   const [agentFilter, setAgentFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<'all' | 'active' | 'delivered'>('all');
@@ -108,12 +110,12 @@ export function TasksView({
         watchLive: false,
       });
       if (res.run.passed) {
-        toast.success(`Browser QA Passed for ${task.identifier}`);
+        toast.success(tr('Browser QA Passed for {identifier}', { identifier: task.identifier }));
       } else {
-        toast.info(`Browser QA failed for ${task.identifier} · check agent chat`);
+        toast.info(tr('Browser QA failed for {identifier} · check agent chat', { identifier: task.identifier }));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Browser QA failed');
+      toast.error(err instanceof Error ? err.message : tr('Browser QA failed'));
     } finally {
       setQaRunningTaskId(null);
     }
@@ -173,8 +175,7 @@ export function TasksView({
               color: agentFilter === 'all' ? 'var(--text-primary)' : 'var(--text-secondary)',
               border: '1px solid var(--border-subtle)',
             }}
-          >
-            All agents
+          >{tr('All agents')}
           </button>
 
           {projectAgents.map((a) => {
@@ -215,9 +216,9 @@ export function TasksView({
 
           {(
             [
-              { id: 'all', label: 'All' },
-              { id: 'active', label: 'Active' },
-              { id: 'delivered', label: 'Delivered' },
+              { id: 'all', label: tr('All') },
+              { id: 'active', label: tr('Active') },
+              { id: 'delivered', label: tr('Delivered') },
             ] as const
           ).map((f) => (
             <button
@@ -251,7 +252,7 @@ export function TasksView({
             <button
               type="button"
               onClick={() => setViewMode('list')}
-              title="List view"
+              title={tr('List view')}
               style={{
                 width: 26,
                 height: 24,
@@ -268,7 +269,7 @@ export function TasksView({
             <button
               type="button"
               onClick={() => setViewMode('board')}
-              title="Board view"
+              title={tr('Board view')}
               style={{
                 width: 26,
                 height: 24,
@@ -300,8 +301,7 @@ export function TasksView({
               gap: 5,
             }}
           >
-            <Plus size={13} strokeWidth={1.75} />
-            New task
+            <Plus size={13} strokeWidth={1.75} />{tr('New task')}
           </button>
         </div>
       </div>
@@ -332,11 +332,9 @@ export function TasksView({
               textAlign: 'center',
             }}
           >
-            <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>
-              No tasks in this view
+            <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>{tr('No tasks in this view')}
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', maxWidth: 420 }}>
-              Create tasks here, assign any custom agent (Designer, Builder, PM, QA), and click Run to dispatch work and track deliveries automatically.
+            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', maxWidth: 420 }}>{tr('Create tasks here, assign any custom agent (Designer, Builder, PM, QA), and click Run to dispatch work and track deliveries automatically.')}
             </div>
             <button
               type="button"
@@ -351,8 +349,7 @@ export function TasksView({
                 fontSize: 12.5,
                 fontWeight: 500,
               }}
-            >
-              Create first task
+            >{tr('Create first task')}
             </button>
           </div>
         ) : viewMode === 'list' ? (
@@ -395,7 +392,7 @@ export function TasksView({
                         <ChevronDown size={13} strokeWidth={1.5} style={{ color: 'var(--text-muted)' }} />
                       )}
                       <TaskStatusIcon status={status} size={14} />
-                      <span>{meta.label}</span>
+                      <span>{tr(meta.label)}</span>
                       <span className="mono-num" style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
                         {items.length}
                       </span>
@@ -404,7 +401,7 @@ export function TasksView({
                     <button
                       type="button"
                       onClick={() => onOpenNewTask({ status })}
-                      title={`Add task in ${meta.label}`}
+                      title={tr('Add task in {label}', { label: tr(meta.label) })}
                       style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}
                     >
                       <Plus size={14} strokeWidth={1.5} />
@@ -455,7 +452,7 @@ export function TasksView({
                             <button
                               type="button"
                               onClick={(e) => void handleQuickCycleStatus(e, task)}
-                              title="Cycle status"
+                              title={tr('Cycle status')}
                               style={{ display: 'inline-flex', alignItems: 'center' }}
                             >
                               <TaskStatusIcon status={task.status} size={14} />
@@ -509,8 +506,7 @@ export function TasksView({
                                   border: '1px solid var(--border-subtle)',
                                 }}
                               >
-                                <ExternalLink size={11} strokeWidth={1.5} />
-                                PR
+                                <ExternalLink size={11} strokeWidth={1.5} />{tr('PR')}
                               </a>
                             )}
 
@@ -521,7 +517,7 @@ export function TasksView({
                                   e.stopPropagation();
                                   onJumpToAgent(assignee.id);
                                 }}
-                                title={`Open ${assignee.name} chat`}
+                                title={tr('Open {name} chat', { name: assignee.name })}
                                 style={{
                                   display: 'inline-flex',
                                   alignItems: 'center',
@@ -545,8 +541,7 @@ export function TasksView({
                                 {assignee.name}
                               </button>
                             ) : (
-                              <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
-                                Unassigned
+                              <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{tr('Unassigned')}
                               </span>
                             )}
 
@@ -555,7 +550,7 @@ export function TasksView({
                                 type="button"
                                 disabled={qaRunningTaskId === task.id}
                                 onClick={(e) => void handleRunTaskQa(e, task)}
-                                title={`Run headless Browser QA on ${project.previewUrl}`}
+                                title={tr('Run headless Browser QA on {previewUrl}', { previewUrl: project.previewUrl })}
                                 style={{
                                   height: 24,
                                   padding: '0 8px',
@@ -570,7 +565,7 @@ export function TasksView({
                                 }}
                               >
                                 <FlaskConical size={10} strokeWidth={1.75} />
-                                {qaRunningTaskId === task.id ? 'QA…' : 'QA'}
+                                {qaRunningTaskId === task.id ? tr('QA…') : tr('QA')}
                               </button>
                             )}
 
@@ -580,9 +575,7 @@ export function TasksView({
                                 disabled={isDispatching}
                                 onClick={(e) => void handleDispatch(e, task)}
                                 title={
-                                  assignee
-                                    ? `Run with ${assignee.name}`
-                                    : 'Assign an agent to dispatch'
+                                  assignee ? tr('Run with {name}', { name: assignee.name }) : tr('Assign an agent to dispatch')
                                 }
                                 style={{
                                   height: 24,
@@ -598,7 +591,7 @@ export function TasksView({
                                 }}
                               >
                                 <Play size={10} strokeWidth={1.75} />
-                                {isDispatching ? 'Queuing' : 'Run'}
+                                {isDispatching ? tr('Queuing') : tr('Run')}
                               </button>
                             )}
                           </div>
@@ -648,7 +641,7 @@ export function TasksView({
                   >
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500 }}>
                       <TaskStatusIcon status={status} size={13} />
-                      <span>{meta.label}</span>
+                      <span>{tr(meta.label)}</span>
                       <span className="mono-num" style={{ color: 'var(--text-muted)', fontSize: 11 }}>
                         {items.length}
                       </span>
@@ -717,7 +710,7 @@ export function TasksView({
                                 {assignee.name}
                               </span>
                             ) : (
-                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Unassigned</span>
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tr('Unassigned')}</span>
                             )}
                             {assignee && task.status !== 'done' && (
                               <button
@@ -730,8 +723,7 @@ export function TasksView({
                                   borderRadius: 'var(--radius-full)',
                                   background: 'var(--surface-3)',
                                 }}
-                              >
-                                Run
+                              >{tr('Run')}
                               </button>
                             )}
                           </div>

@@ -1,5 +1,7 @@
-import { Check, Code, Copy, Eye } from 'lucide-react';
-import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
+import { extractSvgBlocks } from '@atelier/contracts';
+import { Check, Code, Copy, Download, Eye, FileImage } from 'lucide-react';
+import { Fragment, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useT } from '../i18n';
 
 /**
  * Small, dependency-free markdown renderer for chat messages. It builds React elements only
@@ -309,6 +311,7 @@ const toolbarButton: CSSProperties = {
 };
 
 function CopyButton({ text }: { text: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -323,7 +326,7 @@ function CopyButton({ text }: { text: string }) {
       }}
     >
       {copied ? <Check size={12} strokeWidth={1.75} /> : <Copy size={12} strokeWidth={1.75} />}
-      {copied ? 'Copied' : 'Copy'}
+      {copied ? t('Copied') : t('Copy')}
     </button>
   );
 }
@@ -334,7 +337,105 @@ const LANG_LABELS: Record<string, string> = {
   py: 'Python', python: 'Python', sh: 'Shell', bash: 'Shell', powershell: 'PowerShell', json: 'JSON',
 };
 
+function downloadSvg(name: string, svg: string) {
+  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+/** A finished SVG drawing: shown as the picture, with its file name, download and copy. */
+function SvgBlock({ name, svg }: { name: string; svg: string }) {
+  const t = useT();
+  const [showCode, setShowCode] = useState(false);
+  const src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  return (
+    <div
+      style={{
+        borderRadius: 12,
+        border: '1px solid var(--border-subtle)',
+        background: 'var(--surface-1)',
+        overflow: 'hidden',
+        margin: '4px 0',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          padding: '6px 10px',
+          background: 'var(--surface-2)',
+          borderBottom: '1px solid var(--border-subtle)',
+        }}
+      >
+        <span
+          title={name}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            minWidth: 0,
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <FileImage size={13} strokeWidth={1.6} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+          <button
+            type="button"
+            className="transition-atelier"
+            aria-label={t('Download {name}', { name })}
+            title={t('Download {name}', { name })}
+            onClick={() => downloadSvg(name, svg)}
+            style={{ ...toolbarButton, padding: '2px 6px', flexShrink: 0 }}
+          >
+            <Download size={13} strokeWidth={1.75} />
+          </button>
+        </span>
+        <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
+          <button type="button" className="transition-atelier" style={toolbarButton} onClick={() => setShowCode((v) => !v)}>
+            {showCode ? <Eye size={12} strokeWidth={1.75} /> : <Code size={12} strokeWidth={1.75} />}
+            {showCode ? t('Preview') : t('Code')}
+          </button>
+          <CopyButton text={svg} />
+        </span>
+      </div>
+      {showCode ? (
+        <pre
+          style={{
+            margin: 0,
+            padding: '10px 14px',
+            overflow: 'auto',
+            maxHeight: 360,
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12,
+            lineHeight: '18px',
+            color: 'var(--text-primary)',
+          }}
+        >
+          <code>{svg}</code>
+        </pre>
+      ) : (
+        <div style={{ padding: 14, display: 'flex', justifyContent: 'center', background: 'var(--surface-1)' }}>
+          <img
+            src={src}
+            alt={name}
+            style={{ display: 'block', maxWidth: '100%', maxHeight: 460, height: 'auto' }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  const t = useT();
   const isMarkdown = lang === 'md' || lang === 'markdown';
   const [preview, setPreview] = useState(isMarkdown);
   const label = LANG_LABELS[lang] ?? (lang ? lang.toUpperCase() : 'Code');
@@ -364,7 +465,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           {isMarkdown && (
             <button type="button" className="transition-atelier" style={toolbarButton} onClick={() => setPreview((v) => !v)}>
               {preview ? <Code size={12} strokeWidth={1.75} /> : <Eye size={12} strokeWidth={1.75} />}
-              {preview ? 'Source' : 'Preview'}
+              {preview ? t('Source') : t('Preview')}
             </button>
           )}
           <CopyButton text={code} />
@@ -459,6 +560,8 @@ const HEADING_SIZES = [20, 17, 15, 14, 13.5, 13];
 
 export function Markdown({ text }: { text: string }) {
   const blocks = parseMarkdown(text);
+  // complete SVG drawings are shown as pictures (matched to their code by content)
+  const svgs = useMemo(() => (text.includes('<svg') ? extractSvgBlocks(text) : []), [text]);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, wordBreak: 'break-word', minWidth: 0 }}>
       {blocks.map((block, index) => {
@@ -525,6 +628,10 @@ export function Markdown({ text }: { text: string }) {
           case 'hr':
             return <hr key={index} style={{ border: 0, borderTop: '1px solid var(--border-subtle)', margin: '4px 0', width: '100%' }} />;
           case 'code':
+            {
+              const svg = svgs.find((b) => b.svg === block.code.trim());
+              if (svg) return <SvgBlock key={index} name={svg.name} svg={svg.svg} />;
+            }
             return <CodeBlock key={index} lang={block.lang} code={block.code} />;
           case 'table':
             return <Table key={index} block={block} />;

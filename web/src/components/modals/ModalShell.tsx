@@ -1,3 +1,4 @@
+import { useT } from '../../i18n';
 import { X } from 'lucide-react';
 import { useEffect } from 'react';
 
@@ -16,6 +17,7 @@ export function ModalShell({
   onClose,
   children,
 }: ModalShellProps) {
+  const t = useT();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -76,7 +78,7 @@ export function ModalShell({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close modal"
+            aria-label={t('Close modal')}
             style={{
               width: 26,
               height: 26,

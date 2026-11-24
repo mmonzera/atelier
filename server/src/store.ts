@@ -403,6 +403,7 @@ export class AtelierStore {
       reasoningEffort: parsed.reasoningEffort ?? 'High',
       customModels: parsed.customModels ?? [],
       visibleModels: this.normalizeVisibleModels(parsed.visibleModels),
+      language: parsed.language === 'en' || parsed.language === 'id' ? parsed.language : undefined,
       cliPaths: parsed.cliPaths ?? {},
       mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [],
       onboardingCompleted:
@@ -438,6 +439,7 @@ export class AtelierStore {
         visibleModels: input.visibleModels
           ? this.normalizeVisibleModels(input.visibleModels)
           : current.visibleModels,
+        language: input.language ?? current.language,
         cliPaths: input.cliPaths ? { ...current.cliPaths, ...input.cliPaths } : current.cliPaths,
         mcpServers: current.mcpServers,
         onboardingCompleted:
@@ -1398,6 +1400,16 @@ export class AtelierStore {
       .prepare(`SELECT data FROM messages WHERE project_id IS ? AND (? IS NULL OR agent_id = ?) AND data LIKE '%"attachments"%' ORDER BY created_at DESC, rowid DESC`)
       .all(projectId, agentId ?? null, agentId ?? null) as { data: string }[];
     return rows.map((row) => JSON.parse(row.data) as Message);
+  }
+
+  /** Agent replies in a scope that contain an <svg (used by the image library). */
+  public listMessagesWithSvg(projectId: string | null, agentId?: string): Message[] {
+    const rows = this.db.sqlite
+      .prepare(`SELECT data FROM messages WHERE project_id IS ? AND (? IS NULL OR agent_id = ?) AND data LIKE '%<svg%' ORDER BY created_at DESC, rowid DESC`)
+      .all(projectId, agentId ?? null, agentId ?? null) as { data: string }[];
+    return rows
+      .map((row) => JSON.parse(row.data) as Message)
+      .filter((m) => m.author === 'agent' && !m.streaming);
   }
 
   public listAgentMessages(agentId: string, projectId?: string | null): Message[] {

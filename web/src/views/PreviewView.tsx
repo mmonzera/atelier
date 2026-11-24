@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { QaReportCard } from '../components/QaReportCard';
 import { toast } from '../components/Toast';
+import { useT } from '../i18n';
 
 interface PreviewViewProps {
   project: Project;
@@ -28,6 +29,7 @@ export function PreviewView({
   onOpenTasks,
   onSendQaToAgent,
 }: PreviewViewProps) {
+  const t = useT();
   const [urlInput, setUrlInput] = useState(project.previewUrl ?? '');
   const [reloadNonce, setReloadNonce] = useState(0);
   const [iframeLoaded, setIframeLoaded] = useState(false);
@@ -55,7 +57,7 @@ export function PreviewView({
   const handleRunQa = async () => {
     const targetUrl = (urlInput.trim() || project.previewUrl || '').trim();
     if (!targetUrl) {
-      toast.info('Enter a local preview URL first.');
+      toast.info(t('Enter a local preview URL first.'));
       return;
     }
     setRunningQa(true);
@@ -68,12 +70,12 @@ export function PreviewView({
       setQaRuns((prev) => [res.run, ...prev.filter((r) => r.id !== res.run.id)].slice(0, 15));
       setReportOpen(true);
       if (res.run.passed) {
-        toast.success(`Browser QA Passed (${res.run.browserName})`);
+        toast.success(t('Browser QA Passed ({browserName})', { browserName: res.run.browserName }));
       } else {
-        toast.info(`Browser QA found issues · see report below`);
+        toast.info(t('Browser QA found issues · see report below'));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Browser QA failed');
+      toast.error(err instanceof Error ? err.message : t('Browser QA failed'));
     } finally {
       setRunningQa(false);
     }
@@ -112,7 +114,7 @@ export function PreviewView({
           type="text"
           value={urlInput}
           onChange={(e) => setUrlInput(e.target.value)}
-          placeholder="http://localhost:3000 or local dev server URL"
+          placeholder={t('http://localhost:3000 or local dev server URL')}
           className="mono-num"
           style={{
             flex: 1,
@@ -135,8 +137,7 @@ export function PreviewView({
             fontSize: 12,
             color: 'var(--text-primary)',
           }}
-        >
-          Apply
+        >{t('Apply')}
         </button>
 
         {(project.previewUrl || urlInput.trim()) && (
@@ -145,9 +146,7 @@ export function PreviewView({
               type="button"
               onClick={() => setWatchLive((v) => !v)}
               title={
-                watchLive
-                  ? 'Watch live: opens visible browser window during QA'
-                  : 'Headless: runs silently in background'
+                watchLive ? t('Watch live: opens visible browser window during QA') : t('Headless: runs silently in background')
               }
               className="transition-atelier"
               style={{
@@ -164,14 +163,14 @@ export function PreviewView({
               }}
             >
               {watchLive ? <Eye size={12} /> : <EyeOff size={12} />}
-              {watchLive ? 'Watch live' : 'Headless'}
+              {watchLive ? t('Watch live') : t('Headless')}
             </button>
 
             <button
               type="button"
               disabled={runningQa}
               onClick={() => void handleRunQa()}
-              title="Run automated Browser E2E QA & screenshot check"
+              title={t('Run automated Browser E2E QA & screenshot check')}
               style={{
                 height: 28,
                 padding: '0 11px',
@@ -187,7 +186,7 @@ export function PreviewView({
               }}
             >
               <FlaskConical size={12} strokeWidth={1.75} />
-              {runningQa ? 'Testing…' : 'Run Browser QA'}
+              {runningQa ? t('Testing…') : t('Run Browser QA')}
             </button>
           </>
         )}
@@ -200,7 +199,7 @@ export function PreviewView({
                 setIframeLoaded(false);
                 setReloadNonce((n) => n + 1);
               }}
-              title="Reload preview"
+              title={t('Reload preview')}
               style={{
                 width: 28,
                 height: 28,
@@ -219,7 +218,7 @@ export function PreviewView({
               href={project.previewUrl}
               target="_blank"
               rel="noreferrer"
-              title="Open preview in new tab"
+              title={t('Open preview in new tab')}
               style={{
                 width: 28,
                 height: 28,
@@ -262,10 +261,9 @@ export function PreviewView({
               color: 'var(--text-primary)',
             }}
           >
-            <span>
-              Latest Browser QA:{' '}
+            <span>{t('Latest Browser QA:')}{' '}
               <strong style={{ color: latestRun.passed ? 'var(--agent-green)' : 'var(--agent-red)' }}>
-                {latestRun.passed ? 'Passed' : 'Failed'}
+                {latestRun.passed ? t('Passed') : t('Failed')}
               </strong>{' '}
               <span style={{ color: 'var(--text-tertiary)' }}>· {latestRun.summary}</span>
             </span>
@@ -311,15 +309,14 @@ export function PreviewView({
                   color: 'var(--text-secondary)',
                   zIndex: 2,
                 }}
-              >
-                Loading preview…
+              >{t('Loading preview…')}
               </div>
             )}
             <iframe
               key={`${project.previewUrl}-${reloadNonce}`}
               src={project.previewUrl}
               onLoad={() => setIframeLoaded(true)}
-              title={`Build Preview — ${project.name}`}
+              title={t('Build Preview — {name}', { name: project.name })}
               style={{
                 width: '100%',
                 height: '100%',
@@ -356,11 +353,9 @@ export function PreviewView({
             >
               <AlertTriangle size={18} strokeWidth={1.5} />
             </div>
-            <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>
-              No preview URL yet
+            <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>{t('No preview URL yet')}
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-              Dispatch a task to an agent with shell permissions to spin up a local dev server, or enter a local preview URL above.
+            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>{t('Dispatch a task to an agent with shell permissions to spin up a local dev server, or enter a local preview URL above.')}
             </div>
             <button
               type="button"
@@ -374,8 +369,7 @@ export function PreviewView({
                 fontSize: 12.5,
                 fontWeight: 500,
               }}
-            >
-              Open Tasks
+            >{t('Open Tasks')}
             </button>
           </div>
         )}

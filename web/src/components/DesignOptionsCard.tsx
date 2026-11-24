@@ -4,6 +4,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { workspaceImageUrl } from '../api';
 import { ModalShell, primaryBtnStyle, secondaryBtnStyle } from './modals/ModalShell';
+import { useT, t } from '../i18n';
 
 /**
  * Previews run inside <iframe sandbox="allow-scripts">: no same-origin access to Atelier, and a CSP
@@ -57,7 +58,7 @@ const OptionPreview = memo(function OptionPreview({
         {src ? (
           <img src={src} alt={option.label} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
         ) : (
-          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Gambar tidak bisa ditampilkan</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('Image can’t be shown')}</span>
         )}
       </div>
     );
@@ -114,6 +115,7 @@ export function DesignOptionsCard({
   chosen?: string;
   streaming: boolean;
 }) {
+  const t = useT();
   const [zoom, setZoom] = useState<DesignOption | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -127,7 +129,7 @@ export function DesignOptionsCard({
       setZoom(null);
     } catch (err) {
       setZoom(null);
-      setError(err instanceof Error ? err.message : 'Gagal menyimpan pilihan.');
+      setError(err instanceof Error ? err.message : t('Could not save your choice.'));
     } finally {
       setSaving(false);
     }
@@ -165,7 +167,7 @@ export function DesignOptionsCard({
               <button
                 type="button"
                 onClick={() => setZoom(o)}
-                title="Perbesar"
+                title={t('Enlarge')}
                 style={{ display: 'block', padding: 0, border: 0, background: 'none', cursor: 'zoom-in', position: 'relative' }}
               >
                 <OptionPreview option={o} />
@@ -195,13 +197,13 @@ export function DesignOptionsCard({
                 {o.summary && <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: '17px' }}>{o.summary}</div>}
                 {o.pros && (
                   <div style={{ fontSize: 11.5, lineHeight: '16px', color: 'var(--text-secondary)' }}>
-                    <span style={{ ...labelStyle, color: 'var(--agent-green)' }}>Pros </span>
+                    <span style={{ ...labelStyle, color: 'var(--agent-green)' }}>{t('Pros')} </span>
                     {o.pros}
                   </div>
                 )}
                 {o.cons && (
                   <div style={{ fontSize: 11.5, lineHeight: '16px', color: 'var(--text-secondary)' }}>
-                    <span style={{ ...labelStyle, color: 'var(--agent-amber)' }}>Cons </span>
+                    <span style={{ ...labelStyle, color: 'var(--agent-amber)' }}>{t('Cons')} </span>
                     {o.cons}
                   </div>
                 )}
@@ -216,16 +218,14 @@ export function DesignOptionsCard({
                       <>
                         <Check size={13} strokeWidth={2} /> Terpilih
                       </>
-                    ) : (
-                      `Pilih opsi ${o.id}`
-                    )}
+                    ) : (t('Choose option {id}', { id: o.id }))}
                   </button>
                   <button
                     type="button"
                     onClick={() => setZoom(o)}
                     style={{ ...secondaryBtnStyle, height: 30, padding: '0 10px', fontSize: 12 }}
                   >
-                    <Maximize2 size={12} strokeWidth={1.6} /> Perbesar
+                    <Maximize2 size={12} strokeWidth={1.6} />{t('Enlarge')}
                   </button>
                 </div>
               </div>
@@ -236,17 +236,15 @@ export function DesignOptionsCard({
 
       {zoom &&
         createPortal(
-        <ModalShell title={`Opsi ${zoom.id} · ${zoom.label}`} subtitle={zoom.summary} width={1120} onClose={() => setZoom(null)}>
+        <ModalShell title={t('Option {id} · {label}', { id: zoom.id, label: zoom.label })} subtitle={zoom.summary} width={1120} onClose={() => setZoom(null)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border-default)' }}>
               <OptionPreview option={zoom} maxScale={1.4} />
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button type="button" onClick={() => setZoom(null)} style={secondaryBtnStyle}>
-                Tutup
+              <button type="button" onClick={() => setZoom(null)} style={secondaryBtnStyle}>{t('Close')}
               </button>
-              <button type="button" onClick={() => void choose(zoom)} disabled={saving || streaming || chosen === zoom.id} style={primaryBtnStyle}>
-                Pilih opsi {zoom.id}
+              <button type="button" onClick={() => void choose(zoom)} disabled={saving || streaming || chosen === zoom.id} style={primaryBtnStyle}>{t('Choose option')} {zoom.id}
               </button>
             </div>
           </div>
@@ -258,6 +256,7 @@ export function DesignOptionsCard({
 }
 
 export function DesignPendingCard({ title }: { title?: string }) {
+  const t = useT();
   return (
     <div
       className="glass glass-agent"
@@ -272,8 +271,7 @@ export function DesignPendingCard({ title }: { title?: string }) {
         color: 'var(--text-secondary)',
       }}
     >
-      <Sparkles size={14} strokeWidth={1.6} style={{ color: 'var(--agent-purple)' }} />
-      Menyiapkan opsi desain{title ? ` — ${title}` : ''}…
+      <Sparkles size={14} strokeWidth={1.6} style={{ color: 'var(--agent-purple)' }} />{t('Preparing design options')}{title ? ` — ${title}` : ''}…
     </div>
   );
 }

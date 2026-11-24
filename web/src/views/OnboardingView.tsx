@@ -3,6 +3,7 @@ import { ArrowRight, Plus, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../api';
 import { BotMascot } from '../components/mascot/BotMascot';
+import { useT } from '../i18n';
 
 interface OnboardingViewProps {
   activeProject: Project | null;
@@ -15,6 +16,7 @@ export function OnboardingView({
   onStarted,
   onDismissed,
 }: OnboardingViewProps) {
+  const t = useT();
   const [busy, setBusy] = useState<'new' | 'existing' | 'dismiss' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,7 +27,7 @@ export function OnboardingView({
       const res = await api.startChiefOfStaff();
       onStarted(res.project, res.agent);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal memulai Chief of Staff');
+      setError(err instanceof Error ? err.message : t('Could not start Chief of Staff'));
     } finally {
       setBusy(null);
     }
@@ -39,7 +41,7 @@ export function OnboardingView({
       const res = await api.startChiefOfStaff(activeProject.id);
       onStarted(res.project, res.agent);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal menambahkan Chief of Staff');
+      setError(err instanceof Error ? err.message : t('Could not add Chief of Staff'));
     } finally {
       setBusy(null);
     }
@@ -52,7 +54,7 @@ export function OnboardingView({
       await api.dismissOnboarding();
       onDismissed();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal melewati onboarding');
+      setError(err instanceof Error ? err.message : t('Could not skip onboarding'));
     } finally {
       setBusy(null);
     }
@@ -107,8 +109,7 @@ export function OnboardingView({
                 color: 'var(--agent-amber)',
               }}
             >
-              <Sparkles size={11} strokeWidth={1.5} />
-              Chief of Staff
+              <Sparkles size={11} strokeWidth={1.5} />{t('Chief of Staff')}
             </span>
             <h1
               style={{
@@ -118,8 +119,7 @@ export function OnboardingView({
                 fontWeight: 500,
                 color: 'var(--text-primary)',
               }}
-            >
-              Halo! Kenalan dulu dengan Chief of Staff
+            >{t('Hi! Meet your Chief of Staff')}
             </h1>
           </div>
         </div>
@@ -131,10 +131,7 @@ export function OnboardingView({
             lineHeight: '21px',
             color: 'var(--text-secondary)',
           }}
-        >
-          Chief of Staff bakal tanya singkat soal workflow yang mau kamu bangun—entah itu
-          coding produk, riset, konten, atau operasional—lalu otomatis install tim bot beserta
-          skills, task awal, dan rekomendasi koneksi MCP-nya.
+        >{t('Chief of Staff will ask a few quick questions about the workflow you want to build — product coding, research, content or operations — then automatically installs a team of bots with skills, starter tasks and MCP connection suggestions.')}
         </p>
 
         <div
@@ -151,9 +148,9 @@ export function OnboardingView({
             gap: 6,
           }}
         >
-          <div>• Jawab 4–5 pertanyaan singkat sesuai kebutuhanmu</div>
-          <div>• Review usulan tim bot, model, MCP server, dan starter tasks</div>
-          <div>• Konfirmasi sekali — semua bot & tasklist langsung terbuat otomatis</div>
+          <div>{t('• Answer 4–5 short questions about your needs')}</div>
+          <div>{t('• Review the suggested bot team, models, MCP servers and starter tasks')}</div>
+          <div>{t('• Confirm once — all bots & the tasklist are created automatically')}</div>
         </div>
 
         {error && (
@@ -179,7 +176,7 @@ export function OnboardingView({
               gap: 7,
             }}
           >
-            <span>{busy === 'new' ? 'Menyiapkan…' : 'Mulai dengan Chief of Staff'}</span>
+            <span>{busy === 'new' ? t('Preparing…') : t('Start with Chief of Staff')}</span>
             <ArrowRight size={14} strokeWidth={1.75} />
           </button>
 
@@ -205,9 +202,7 @@ export function OnboardingView({
             >
               <Plus size={13} strokeWidth={1.5} />
               <span>
-                {busy === 'existing'
-                  ? 'Menambahkan…'
-                  : `Tambahkan ke project aktif`}
+                {busy === 'existing' ? t('Adding…') : t('Add to the active project')}
               </span>
             </button>
           )}
@@ -223,7 +218,7 @@ export function OnboardingView({
               color: 'var(--text-tertiary)',
             }}
           >
-            {busy === 'dismiss' ? 'Menyimpan…' : 'Lewati, setup manual'}
+            {busy === 'dismiss' ? t('Saving…') : t('Skip, set up manually')}
           </button>
         </div>
       </div>

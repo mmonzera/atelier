@@ -21,6 +21,7 @@ import {
 } from './Atoms';
 import { BotMascot } from './mascot/BotMascot';
 import { CanonPanel } from './CanonPanel';
+import { useT } from '../i18n';
 
 interface RightPanelProps {
   mode: 'project' | 'agent';
@@ -97,6 +98,7 @@ export function RightPanel({
   onOpenMcp,
   onOpenSettings,
 }: RightPanelProps) {
+  const tr = useT();
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [showAllPorts, setShowAllPorts] = useState(false);
   const [assignPickerOpen, setAssignPickerOpen] = useState(false);
@@ -205,7 +207,7 @@ export function RightPanel({
             >
               <Laptop size={13} strokeWidth={1.5} />
               <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {hostname || 'Local Workstation'} · Direct
+                {hostname || tr('Local Workstation')}{tr('· Direct')}
               </span>
             </div>
 
@@ -247,7 +249,7 @@ export function RightPanel({
                   <button
                     type="button"
                     onClick={onOpenModels}
-                    title="Switch model or sign in"
+                    title={tr('Switch model or sign in')}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -268,7 +270,7 @@ export function RightPanel({
               <button
                 type="button"
                 onClick={() => onEditAgent(activeAgent)}
-                title="Configure agent, skills & MCP"
+                title={tr('Configure agent, skills & MCP')}
                 className="transition-atelier"
                 style={{
                   width: 28,
@@ -310,14 +312,13 @@ export function RightPanel({
                   textTransform: 'uppercase',
                   color: 'var(--text-muted)',
                 }}
-              >
-                ASSIGNED PROJECTS ({assignedProjects.length})
+              >{tr('ASSIGNED PROJECTS (')}{assignedProjects.length})
               </span>
               {visibleProjects.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setProjectPickerOpen((v) => !v)}
-                  title="Assign to projects"
+                  title={tr('Assign to projects')}
                   style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}
                 >
                   <Plus size={13} strokeWidth={1.5} />
@@ -377,8 +378,7 @@ export function RightPanel({
             )}
 
             {assignedProjects.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-                Not assigned to any project yet.
+              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>{tr('Not assigned to any project yet.')}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
@@ -410,8 +410,7 @@ export function RightPanel({
                         {p.name}
                       </span>
                     </span>
-                    <span className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                      Open
+                    <span className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tr('Open')}
                     </span>
                   </button>
                 ))}
@@ -441,23 +440,20 @@ export function RightPanel({
                   textTransform: 'uppercase',
                   color: 'var(--text-muted)',
                 }}
-              >
-                PROJECT REPORTS
+              >{tr('PROJECT REPORTS')}
               </span>
               {agentReports.length > 0 && (
                 <button
                   type="button"
                   onClick={onOpenReports}
                   style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}
-                >
-                  All →
+                >{tr('All →')}
                 </button>
               )}
             </div>
 
             {agentReports.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-                No project tasks or reports yet.
+              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>{tr('No project tasks or reports yet.')}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -539,13 +535,12 @@ export function RightPanel({
                   textTransform: 'uppercase',
                   color: 'var(--text-muted)',
                 }}
-              >
-                ALL AGENTS ({allAgents.length})
+              >{tr('ALL AGENTS (')}{allAgents.length})
               </span>
               <button
                 type="button"
                 onClick={onAddGlobalAgent}
-                title="Add global agent"
+                title={tr('Add global agent')}
                 style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}
               >
                 <Plus size={13} strokeWidth={1.5} />
@@ -626,7 +621,7 @@ export function RightPanel({
             >
               <Laptop size={13} strokeWidth={1.5} />
               <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {hostname || 'Local Workstation'}
+                {hostname || tr('Local Workstation')}
               </span>
             </div>
 
@@ -653,7 +648,7 @@ export function RightPanel({
                   <button
                     type="button"
                     onClick={onOpenLinkRepo}
-                    title={project.repo ? project.repo.fullName : 'Link repository'}
+                    title={project.repo ? project.repo.fullName : tr('Link repository')}
                     style={{
                       width: 24,
                       height: 24,
@@ -680,7 +675,7 @@ export function RightPanel({
                 >
                   <GitBranch size={13} strokeWidth={1.5} style={{ color: 'var(--text-tertiary)' }} />
                   <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {project.repo ? `${project.repo.defaultBranch} · ${project.repo.fullName}` : 'No repo linked'}
+                    {project.repo ? `${project.repo.defaultBranch} · ${project.repo.fullName}` : tr('No repo linked')}
                   </span>
                 </div>
 
@@ -695,15 +690,14 @@ export function RightPanel({
                     textTransform: 'uppercase',
                     color: 'var(--text-muted)',
                   }}
-                >
-                  ACTIONS
+                >{tr('ACTIONS')}
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {[
-                    { label: 'New task', onClick: onNewTask },
-                    { label: 'Add custom agent', onClick: onAddAgent },
-                    { label: project.repo ? 'Switch / link repo' : 'Link repository', onClick: onOpenLinkRepo },
+                    { label: tr('New task'), onClick: onNewTask },
+                    { label: tr('Add custom agent'), onClick: onAddAgent },
+                    { label: project.repo ? tr('Switch / link repo') : tr('Link repository'), onClick: onOpenLinkRepo },
                   ].map((action) => (
                     <button
                       key={action.label}
@@ -733,8 +727,7 @@ export function RightPanel({
                 </div>
               </>
             ) : (
-              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-                Select a project or click an agent on the left rail for a Direct 1-on-1 chat.
+              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>{tr('Select a project or click an agent on the left rail for a Direct 1-on-1 chat.')}
               </div>
             )}
           </section>
@@ -790,7 +783,7 @@ export function RightPanel({
                     <button
                       type="button"
                       onClick={onOpenModels}
-                      title="Switch model or sign in"
+                      title={tr('Switch model or sign in')}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -812,7 +805,7 @@ export function RightPanel({
                   <button
                     type="button"
                     onClick={() => onEditAgent(activeAgent)}
-                    title="Configure agent, skills & instructions"
+                    title={tr('Configure agent, skills & instructions')}
                     className="transition-atelier"
                     style={{
                       width: 28,
@@ -832,7 +825,7 @@ export function RightPanel({
                     <button
                       type="button"
                       onClick={() => onSelectAgent(otherProjectAgent.id)}
-                      title={`Switch to ${otherProjectAgent.name}`}
+                      title={tr('Switch to {name}', { name: otherProjectAgent.name })}
                       className="transition-atelier"
                       style={{
                         width: 28,
@@ -855,7 +848,7 @@ export function RightPanel({
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Agent team</span>
+                <span style={{ color: 'var(--text-secondary)' }}>{tr('Agent team')}</span>
                 <span className="mono-num" style={{ color: 'var(--text-muted)' }}>
                   {agents.length}
                 </span>
@@ -866,7 +859,7 @@ export function RightPanel({
                   <button
                     type="button"
                     onClick={() => setAssignPickerOpen((v) => !v)}
-                    title="Assign existing agents or add new"
+                    title={tr('Assign existing agents or add new')}
                     style={{ display: 'flex', alignItems: 'center', color: 'inherit' }}
                   >
                     <Plus size={14} strokeWidth={1.5} />
@@ -875,7 +868,7 @@ export function RightPanel({
                 <button
                   type="button"
                   onClick={onOpenSettings}
-                  title="Agent runtime settings"
+                  title={tr('Agent runtime settings')}
                   style={{ display: 'flex', alignItems: 'center', color: 'inherit' }}
                 >
                   <MoreHorizontal size={14} strokeWidth={1.5} />
@@ -895,8 +888,7 @@ export function RightPanel({
                   gap: 6,
                 }}
               >
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 }}>
-                  Assign agents to {project.name}
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 }}>{tr('Assign agents to')} {project.name}
                 </div>
                 {allAgents.map((a) => {
                   const assigned = project.agentIds.includes(a.id);
@@ -960,15 +952,14 @@ export function RightPanel({
                   }}
                 >
                   <Plus size={12} strokeWidth={1.5} />
-                  <span>Create new agent…</span>
+                  <span>{tr('Create new agent…')}</span>
                 </button>
               </div>
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {agents.length === 0 && project ? (
-                <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                  No agents assigned yet. Click + to assign or create one.
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{tr('No agents assigned yet. Click + to assign or create one.')}
                 </div>
               ) : (
                 agents.map((agent) => {
@@ -979,9 +970,9 @@ export function RightPanel({
                     agent.status === 'working'
                       ? agent.currentTask || 'Working…'
                       : agent.status === 'error'
-                        ? agent.lastError || 'Turn error'
+                        ? agent.lastError || tr('Turn error')
                         : agent.queueLength > 0
-                          ? `${agent.queueLength} queued`
+                          ? `${agent.queueLength} ${tr('queued')}`
                           : enabledSkills > 0
                             ? `${agent.role} · ${enabledSkills}s`
                             : agent.role;
@@ -1004,7 +995,7 @@ export function RightPanel({
                         type="button"
                         onClick={() => onSelectAgent(agent.id)}
                         onDoubleClick={() => onEditAgent(agent)}
-                        title={`${agent.name} (${agent.role}) — double-click to edit`}
+                        title={tr('{name} ({role}) — double-click to edit', { name: agent.name, role: agent.role })}
                         className="transition-atelier"
                         style={{
                           display: 'flex',
@@ -1082,7 +1073,7 @@ export function RightPanel({
                       <button
                         type="button"
                         onClick={() => onSelectDirectAgent(agent.id)}
-                        title={`Direct 1-on-1 DM with ${agent.name}`}
+                        title={tr('Direct 1-on-1 DM with {name}', { name: agent.name })}
                         style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', flexShrink: 0 }}
                       >
                         <MessageSquare size={12} strokeWidth={1.5} />
@@ -1117,14 +1108,13 @@ export function RightPanel({
                   textTransform: 'uppercase',
                   color: 'var(--text-muted)',
                 }}
-              >
-                TASKS
+              >{tr('TASKS')}
               </span>
               {project && (
                 <button
                   type="button"
                   onClick={onNewTask}
-                  title="New task"
+                  title={tr('New task')}
                   style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}
                 >
                   <Plus size={13} strokeWidth={1.5} />
@@ -1133,7 +1123,7 @@ export function RightPanel({
             </div>
 
             {visibleTasks.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>No tasks yet.</div>
+              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>{tr('No tasks yet.')}</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {visibleTasks.map((t) => {
@@ -1196,7 +1186,7 @@ export function RightPanel({
                     onClick={() => setShowAllTasks((v) => !v)}
                     style={{ textAlign: 'left', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}
                   >
-                    {showAllTasks ? 'Show less' : `Show ${hiddenTaskCount} more`}
+                    {showAllTasks ? tr('Show less') : tr('Show {hiddenTaskCount} more', { hiddenTaskCount })}
                   </button>
                 )}
               </div>
@@ -1227,13 +1217,12 @@ export function RightPanel({
               textTransform: 'uppercase',
               color: 'var(--text-muted)',
             }}
-          >
-            MCP
+          >{tr('MCP')}
           </span>
           <button
             type="button"
             onClick={onOpenMcp}
-            title="Manage MCP connections"
+            title={tr('Manage MCP connections')}
             style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}
           >
             <Plus size={13} strokeWidth={1.5} />
@@ -1249,8 +1238,7 @@ export function RightPanel({
               fontSize: 12.5,
               color: 'var(--text-tertiary)',
             }}
-          >
-            Connect tools via MCP…
+          >{tr('Connect tools via MCP…')}
           </button>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
@@ -1327,12 +1315,11 @@ export function RightPanel({
               textTransform: 'uppercase',
               color: 'var(--text-muted)',
             }}
-          >
-            PORTS
+          >{tr('PORTS')}
           </div>
 
           {visiblePorts.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>No dev servers active</div>
+            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>{tr('No dev servers active')}</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {visiblePorts.map((p) => (
@@ -1365,7 +1352,7 @@ export function RightPanel({
                   onClick={() => setShowAllPorts((v) => !v)}
                   style={{ textAlign: 'left', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}
                 >
-                  {showAllPorts ? 'Show less' : `Show ${hiddenPortCount} more`}
+                  {showAllPorts ? tr('Show less') : tr('Show {hiddenPortCount} more', { hiddenPortCount })}
                 </button>
               )}
             </div>

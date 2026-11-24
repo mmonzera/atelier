@@ -3,8 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import { ApiError, authApi } from '../api';
 import { inputStyle, labelStyle, primaryBtnStyle } from './modals/ModalShell';
 import { RecoveryKeyNotice } from './RecoveryKeyNotice';
+import { useT } from '../i18n';
 
 export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
+  const t = useT();
   const [mode, setMode] = useState<'password' | 'recover'>('password');
   const [password, setPassword] = useState('');
   const [recoveryKey, setRecoveryKey] = useState('');
@@ -32,7 +34,7 @@ export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
         setFreshKey(res.recoveryKey);
       }
     } catch (err) {
-      setError(err instanceof ApiError || err instanceof Error ? err.message : 'Gagal membuka kunci.');
+      setError(err instanceof ApiError || err instanceof Error ? err.message : t('Could not unlock.'));
       setPassword('');
     } finally {
       setBusy(false);
@@ -80,28 +82,24 @@ export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
             {mode === 'password' ? <Lock size={17} strokeWidth={1.6} /> : <KeyRound size={17} strokeWidth={1.6} />}
           </div>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-primary)' }}>Atelier terkunci</div>
+            <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-primary)' }}>{t('Atelier is locked')}</div>
             <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-              {mode === 'password'
-                ? 'Agent tetap jalan di background. Masukkan password untuk membuka.'
-                : 'Pakai recovery key untuk membuat password baru.'}
+              {mode === 'password' ? t('Agents keep running in the background. Enter your password to unlock.') : t('Use your recovery key to set a new password.')}
             </div>
           </div>
         </div>
 
         {freshKey ? (
           <>
-            <RecoveryKeyNotice recoveryKey={freshKey} title="Password diganti — ini recovery key barumu" />
-            <button type="button" style={primaryBtnStyle} onClick={onUnlocked}>
-              Sudah saya simpan, buka Atelier
+            <RecoveryKeyNotice recoveryKey={freshKey} title={t('Password changed — here is your new recovery key')} />
+            <button type="button" style={primaryBtnStyle} onClick={onUnlocked}>{t('I’ve saved it, open Atelier')}
             </button>
           </>
         ) : (
           <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {mode === 'password' ? (
               <div>
-                <label style={labelStyle} htmlFor="lock-password">
-                  Password
+                <label style={labelStyle} htmlFor="lock-password">{t('Password')}
                 </label>
                 <input
                   id="lock-password"
@@ -116,23 +114,21 @@ export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
             ) : (
               <>
                 <div>
-                  <label style={labelStyle} htmlFor="lock-recovery">
-                    Recovery key
+                  <label style={labelStyle} htmlFor="lock-recovery">{t('Recovery key')}
                   </label>
                   <input
                     id="lock-recovery"
                     ref={inputRef}
                     value={recoveryKey}
                     onChange={(e) => setRecoveryKey(e.target.value)}
-                    placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+                    placeholder={t('XXXXX-XXXXX-XXXXX-XXXXX-XXXXX')}
                     autoComplete="off"
                     spellCheck={false}
                     style={{ ...inputStyle, fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}
                   />
                 </div>
                 <div>
-                  <label style={labelStyle} htmlFor="lock-new-password">
-                    Password baru (min. 8 karakter)
+                  <label style={labelStyle} htmlFor="lock-new-password">{t('New password (min. 8 characters)')}
                   </label>
                   <input
                     id="lock-new-password"
@@ -157,7 +153,7 @@ export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
               disabled={busy || (mode === 'password' ? !password : !recoveryKey || newPassword.length < 8)}
               style={{ ...primaryBtnStyle, opacity: busy ? 0.7 : 1 }}
             >
-              {busy ? 'Memeriksa…' : mode === 'password' ? 'Buka' : 'Reset password'}
+              {busy ? t('Checking…') : mode === 'password' ? t('Unlock') : t('Reset password')}
             </button>
 
             <button
@@ -168,13 +164,11 @@ export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
               }}
               style={{ fontSize: 12, color: 'var(--text-secondary)', alignSelf: 'center' }}
             >
-              {mode === 'password' ? 'Lupa password? Pakai recovery key' : 'Kembali ke password'}
+              {mode === 'password' ? t('Forgot your password? Use your recovery key') : t('Back to password')}
             </button>
 
             {mode === 'recover' && (
-              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                Recovery key juga hilang? Tutup Atelier, lalu jalankan <code>npm run lock:reset</code> (versi
-                source) atau <code>Atelier.exe --reset-lock</code> (versi installer) di laptop ini.
+              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>{t('Lost the recovery key too? Close Atelier, then run')} <code>npm run lock:reset</code>{t('(source version) or')} <code>Atelier.exe --reset-lock</code>{t('(installer version) on this laptop.')}
               </div>
             )}
           </form>

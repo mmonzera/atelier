@@ -3,6 +3,7 @@ import { BarChart3, PanelRight, Plug, Plus, Settings as SettingsIcon } from 'luc
 import { ProjectTile, getColorVar } from './Atoms';
 import { BotMascot } from './mascot/BotMascot';
 import { resolveMascotColor } from './mascot/mascotConfig';
+import { useT } from '../i18n';
 
 interface LeftRailProps {
   projects: Project[];
@@ -37,6 +38,7 @@ export function LeftRail({
   onOpenSettings,
   onOpenPlugins,
 }: LeftRailProps) {
+  const t = useT();
   const visibleProjects = projects.filter((p) => !p.archived);
 
   return (
@@ -68,7 +70,7 @@ export function LeftRail({
         <button
           type="button"
           onClick={onToggleRightPanel}
-          title={rightPanelOpen ? 'Hide context panel' : 'Show context panel'}
+          title={rightPanelOpen ? t('Hide context panel') : t('Show context panel')}
           className="transition-atelier"
           style={{
             width: 32,
@@ -107,7 +109,7 @@ export function LeftRail({
                   key={project.id}
                   type="button"
                   onClick={() => onSelectProject(project.id)}
-                  title={`Project · ${project.name}`}
+                  title={t('Project · {name}', { name: project.name })}
                   className="transition-atelier"
                   style={{
                     borderRadius: 'var(--radius-sm)',
@@ -125,7 +127,7 @@ export function LeftRail({
         <button
           type="button"
           onClick={onOpenNewProject}
-          title="New project"
+          title={t('New project')}
           className="transition-atelier"
           style={{
             width: 28,
@@ -173,7 +175,7 @@ export function LeftRail({
                   key={agent.id}
                   type="button"
                   onClick={() => onSelectDirectAgent(agent.id)}
-                  title={`${agent.name} · ${agent.role} (Direct DM & Reports)`}
+                  title={t('{name} · {role} (Direct DM & Reports)', { name: agent.name, role: agent.role })}
                   className="mascot-rail-btn transition-atelier"
                   style={{
                     position: 'relative',
@@ -221,7 +223,7 @@ export function LeftRail({
         <button
           type="button"
           onClick={onOpenNewGlobalAgent}
-          title="Add global agent"
+          title={t('Add global agent')}
           className="transition-atelier"
           style={{
             width: 28,
@@ -250,7 +252,7 @@ export function LeftRail({
         <button
           type="button"
           onClick={onOpenPlugins}
-          title="Plugins & MCP"
+          title={t('Plugins & MCP')}
           className="transition-atelier"
           style={{
             width: 32,
@@ -277,7 +279,7 @@ export function LeftRail({
         <button
           type="button"
           onClick={onOpenUsage}
-          title="AI Usage & Limits"
+          title={t('AI Usage & Limits')}
           className="transition-atelier"
           style={{
             width: 32,
@@ -304,7 +306,7 @@ export function LeftRail({
         <button
           type="button"
           onClick={onOpenSettings}
-          title="Settings & Integrations"
+          title={t('Settings & Integrations')}
           className="transition-atelier"
           style={{
             width: 32,
@@ -332,7 +334,7 @@ export function LeftRail({
       <button
         type="button"
         onClick={onOpenSettings}
-        title="Local Studio Workspace"
+        title={t('Local Studio Workspace')}
         style={{
           width: 32,
           height: 32,
@@ -346,8 +348,7 @@ export function LeftRail({
           fontWeight: 500,
           color: 'var(--text-primary)',
         }}
-      >
-        AT
+      >{t('AT')}
       </button>
     </aside>
   );

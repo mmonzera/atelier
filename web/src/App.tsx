@@ -1,3 +1,4 @@
+import { useT } from './i18n';
 import type {
   AgentViewTab,
   MessageAttachment,
@@ -25,6 +26,7 @@ import {
   NewProjectModal,
   ProjectManageModal,
 } from './components/modals/WorkspaceModals';
+import { setLang } from './i18n';
 import { useWorkspace } from './state/useWorkspace';
 import { AgentReportsView } from './views/AgentReportsView';
 import { ChatView } from './views/ChatView';
@@ -70,7 +72,13 @@ type ActiveModal =
   | null;
 
 export function App() {
+  const tr = useT();
   const { state, connected, loading } = useWorkspace();
+
+  // the saved interface language (when one was chosen) follows the user across devices
+  useEffect(() => {
+    if (state.settings.language) setLang(state.settings.language);
+  }, [state.settings.language]);
 
   const [viewMode, setViewMode] = useState<'project' | 'agent'>('project');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -235,13 +243,13 @@ export function App() {
       const res = await api.compactAgent(activeAgent.id, scopedProject?.id ?? null);
       if (res.compacted) {
         toast.success(
-          `Context compacted · ${res.compactedCount} message${res.compactedCount === 1 ? '' : 's'} summarized`,
+          tr('Context compacted · {compactedCount} message{v1} summarized', { compactedCount: res.compactedCount, v1: res.compactedCount === 1 ? '' : 's' }),
         );
       } else {
-        toast.info('Nothing to compact yet — keep chatting first.');
+        toast.info(tr('Nothing to compact yet — keep chatting first.'));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to compact context');
+      toast.error(err instanceof Error ? err.message : tr('Failed to compact context'));
     }
   };
 
@@ -272,12 +280,12 @@ export function App() {
 
   const handleAssignAgent = async (projectId: string, agentId: string) => {
     await api.assignAgentToProject(projectId, agentId);
-    toast.success('Agent assigned to project');
+    toast.success(tr('Agent assigned to project'));
   };
 
   const handleUnassignAgent = async (projectId: string, agentId: string) => {
     await api.unassignAgentFromProject(projectId, agentId);
-    toast.info('Agent unassigned from project');
+    toast.info(tr('Agent unassigned from project'));
   };
 
   const handleOpenChiefOfStaff = async () => {
@@ -319,9 +327,9 @@ export function App() {
         await api.assignAgentToProject(proj.id, firstAgentId);
       }
       await api.createTask(proj.id, {
-        title: 'Audit starter bots & plan first deliverable',
+        title: tr('Audit starter bots & plan first deliverable'),
         description:
-          'Review each agent’s enabled skills and instructions, then break down the first milestone into actionable tasks.',
+          tr('Review each agent’s enabled skills and instructions, then break down the first milestone into actionable tasks.'),
         status: 'todo',
         priority: 'high',
         assigneeAgentId: firstAgentId,
@@ -329,7 +337,7 @@ export function App() {
       setViewMode('project');
       setActiveProjectId(proj.id);
       if (firstAgentId) setActiveAgentId(firstAgentId);
-      toast.success('Sample workspace created');
+      toast.success(tr('Sample workspace created'));
     } finally {
       setCreatingSample(false);
     }
@@ -501,11 +509,9 @@ export function App() {
                     padding: '0 16px',
                   }}
                 >
-                  <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-primary)' }}>
-                    No agents created yet
+                  <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-primary)' }}>{tr('No agents created yet')}
                   </div>
-                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 440 }}>
-                    Create your first global agent to chat directly or assign it across multiple projects.
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 440 }}>{tr('Create your first global agent to chat directly or assign it across multiple projects.')}
                   </div>
                   <button
                     type="button"
@@ -523,8 +529,7 @@ export function App() {
                       gap: 6,
                     }}
                   >
-                    <Plus size={14} strokeWidth={1.75} />
-                    Add global agent
+                    <Plus size={14} strokeWidth={1.75} />{tr('Add global agent')}
                   </button>
                 </div>
               )
@@ -545,10 +550,9 @@ export function App() {
                 }}
               >
                 <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-primary)' }}>
-                  {loading ? 'Connecting to Atelier harness…' : 'Welcome to Atelier'}
+                  {loading ? tr('Connecting to Atelier harness…') : tr('Welcome to Atelier')}
                 </div>
-                <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', maxWidth: 480, lineHeight: '20px' }}>
-                  Create global agents you can chat with directly or assign across multiple projects, install markdown skills & MCP tools, and track every deliverable in a Linear-style tasklist.
+                <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', maxWidth: 480, lineHeight: '20px' }}>{tr('Create global agents you can chat with directly or assign across multiple projects, install markdown skills & MCP tools, and track every deliverable in a Linear-style tasklist.')}
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 4 }}>
                   <button
@@ -567,8 +571,7 @@ export function App() {
                       gap: 6,
                     }}
                   >
-                    <Plus size={14} strokeWidth={1.75} />
-                    Create project
+                    <Plus size={14} strokeWidth={1.75} />{tr('Create project')}
                   </button>
 
                   <button
@@ -587,8 +590,7 @@ export function App() {
                       gap: 6,
                     }}
                   >
-                    <Plus size={14} strokeWidth={1.5} />
-                    Add global agent
+                    <Plus size={14} strokeWidth={1.5} />{tr('Add global agent')}
                   </button>
 
                   <button
@@ -609,12 +611,11 @@ export function App() {
                     }}
                   >
                     <Sparkles size={14} strokeWidth={1.5} />
-                    {creatingSample ? 'Creating…' : 'Create sample workspace'}
+                    {creatingSample ? tr('Creating…') : tr('Create sample workspace')}
                   </button>
                 </div>
                 {!connected && !loading && (
-                  <div style={{ fontSize: 12, color: 'var(--agent-amber)' }}>
-                    Reconnecting to local WebSocket (/ws)…
+                  <div style={{ fontSize: 12, color: 'var(--agent-amber)' }}>{tr('Reconnecting to local WebSocket (/ws)…')}
                   </div>
                 )}
               </div>
@@ -643,7 +644,7 @@ export function App() {
                 onSendQaToAgent={(run) => {
                   const targetAgent = activeProjectAgent ?? projectAgents[0] ?? null;
                   if (!targetAgent) {
-                    toast.info('Assign an agent to this project first.');
+                    toast.info(tr('Assign an agent to this project first.'));
                     return;
                   }
                   const prompt = [
@@ -696,13 +697,10 @@ export function App() {
                   padding: '0 16px',
                 }}
               >
-                <div style={{ fontSize: 14.5, fontWeight: 500, color: 'var(--text-primary)' }}>
-                  No agents assigned to {activeProject.name} yet
+                <div style={{ fontSize: 14.5, fontWeight: 500, color: 'var(--text-primary)' }}>{tr('No agents assigned to')} {activeProject.name}{tr('yet')}
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 460 }}>
-                  {state.agents.length > 0
-                    ? 'Assign an existing global agent from the Agent team panel on the right, or create a brand new bot for this project.'
-                    : 'Install your first custom bot from a template or define your own role, model override, and markdown skills.'}
+                  {state.agents.length > 0 ? tr('Assign an existing global agent from the Agent team panel on the right, or create a brand new bot for this project.') : tr('Install your first custom bot from a template or define your own role, model override, and markdown skills.')}
                 </div>
                 <button
                   type="button"
@@ -720,8 +718,7 @@ export function App() {
                     gap: 6,
                   }}
                 >
-                  <Plus size={14} strokeWidth={1.75} />
-                  Add custom agent
+                  <Plus size={14} strokeWidth={1.75} />{tr('Add custom agent')}
                 </button>
               </div>
             )}

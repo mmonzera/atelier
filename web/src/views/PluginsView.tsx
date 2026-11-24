@@ -24,6 +24,7 @@ import { toast } from '../components/Toast';
 import { McpIcon } from '../components/modals/McpIcon';
 import { McpModal } from '../components/modals/McpModal';
 import { useMcpOAuth } from '../state/useMcpOAuth';
+import { useT } from '../i18n';
 
 type Filter = 'all' | 'connectors' | 'local';
 
@@ -188,13 +189,14 @@ function RowMenu({
   onTest: () => void;
   onRemove: () => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const ref = useOutsideClose(open, () => setOpen(false));
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button
         type="button"
-        aria-label="More actions"
+        aria-label={t('More actions')}
         onClick={() => setOpen((v) => !v)}
         className="transition-atelier"
         style={{
@@ -214,7 +216,7 @@ function RowMenu({
         <div className="popover-shadow" style={menuStyle}>
           <MenuItem
             icon={<FlaskConical size={14} strokeWidth={1.5} />}
-            label={testing ? 'Testing…' : 'Test connection'}
+            label={testing ? t('Testing…') : t('Test connection')}
             onClick={() => {
               setOpen(false);
               onTest();
@@ -223,7 +225,7 @@ function RowMenu({
           <MenuItem
             danger
             icon={<Trash2 size={14} strokeWidth={1.5} />}
-            label="Remove"
+            label={t('Remove')}
             onClick={() => {
               setOpen(false);
               onRemove();
@@ -236,6 +238,7 @@ function RowMenu({
 }
 
 export function PluginsView({ settings, onBack }: { settings: Settings; onBack: () => void }) {
+  const t = useT();
   const oauth = useMcpOAuth();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
@@ -293,7 +296,7 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
         [id]: {
           ok: false,
           tools: [],
-          error: err instanceof Error ? err.message : 'Test failed',
+          error: err instanceof Error ? err.message : t('Test failed'),
           durationMs: 0,
         },
       }));
@@ -306,16 +309,16 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
     try {
       await api.updateMcpServer(s.id, { enabled });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update plugin');
+      toast.error(err instanceof Error ? err.message : t('Failed to update plugin'));
     }
   };
 
   const handleRemove = async (s: McpServerConfig) => {
     try {
       await api.deleteMcpServer(s.id);
-      toast.deleted(`“${s.name}” removed`);
+      toast.deleted(t('“{name}” removed', { name: s.name }));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to remove plugin');
+      toast.error(err instanceof Error ? err.message : t('Failed to remove plugin'));
     }
   };
 
@@ -365,8 +368,8 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
                 textOverflow: 'ellipsis',
               }}
             >
-              {kindLabel(s.transport, isOauth)} · {s.transport} ·{' '}
-              <span className="mono-num">{endpointOf(s) || 'not configured'}</span>
+              {t(kindLabel(s.transport, isOauth))} · {s.transport} ·{' '}
+              <span className="mono-num">{endpointOf(s) || t('not configured')}</span>
             </div>
           </div>
 
@@ -379,21 +382,19 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
                   color: 'var(--agent-amber)',
                 }}
               >
-                {connecting ? 'Waiting for login…' : 'Sign-in needed'}
+                {connecting ? t('Waiting for login…') : t('Sign-in needed')}
               </span>
               <button
                 type="button"
                 disabled={connecting}
                 onClick={() => void oauth.connect(s.id)}
                 style={ghostBtn}
-              >
-                Reconnect
+              >{t('Reconnect')}
               </button>
             </>
           )}
           {isOauth && connected && (
-            <button type="button" onClick={() => void oauth.disconnect(s.id)} style={ghostBtn}>
-              Log out
+            <button type="button" onClick={() => void oauth.disconnect(s.id)} style={ghostBtn}>{t('Log out')}
             </button>
           )}
           {!needsLogin && (
@@ -418,15 +419,9 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
               color: probe.ok ? 'var(--agent-green)' : 'var(--agent-red)',
             }}
           >
-            {probe.ok
-              ? `Connected (${probe.durationMs}ms) · ${probe.tools.length} tool${
-                  probe.tools.length === 1 ? '' : 's'
-                }${
-                  probe.tools.length > 0
+            {probe.ok ? t('Connected ({durationMs}ms) · {length} tool{v2}{v3}', { durationMs: probe.durationMs, length: probe.tools.length, v2: probe.tools.length === 1 ? '' : 's', v3: probe.tools.length > 0
                     ? `: ${probe.tools.slice(0, 6).join(', ')}${probe.tools.length > 6 ? '…' : ''}`
-                    : ''
-                }`
-              : probe.error || 'Connection test failed'}
+                    : '' }) : probe.error || t('Connection test failed')}
           </div>
         )}
       </div>
@@ -473,11 +468,11 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
               marginTop: 1,
             }}
           >
-            {p.description}
+            {t(p.description)}
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>
-            {p.transport === 'stdio' ? 'Local MCP server' : 'Connector'} ·{' '}
-            {p.auth === 'oauth' ? 'Login' : p.transport}
+            {p.transport === 'stdio' ? t('Local MCP server') : t('Connector')} ·{' '}
+            {p.auth === 'oauth' ? t('Login') : p.transport}
           </div>
         </div>
         <span
@@ -506,10 +501,10 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
       ? MCP_PRESETS.find((p) => p.id === addDialog.presetId)
       : undefined;
     const title = preset
-      ? `Add ${preset.name}`
+      ? t('Add {name}', { name: preset.name })
       : addDialog.mode === 'json'
-        ? 'Paste MCP JSON'
-        : 'Custom connector';
+        ? t('Paste MCP JSON')
+        : t('Custom connector');
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 4px 40px' }}>
         <div style={{ maxWidth: 620, margin: '0 auto', padding: '8px 12px 0' }}>
@@ -526,8 +521,7 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
               marginBottom: 18,
             }}
           >
-            <ArrowLeft size={14} strokeWidth={1.5} />
-            Back to plugins
+            <ArrowLeft size={14} strokeWidth={1.5} />{t('Back to plugins')}
           </button>
           <h1 style={pageTitleStyle}>{title}</h1>
           <McpModal
@@ -559,11 +553,10 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
             marginBottom: 18,
           }}
         >
-          <ArrowLeft size={14} strokeWidth={1.5} />
-          Back to chat
+          <ArrowLeft size={14} strokeWidth={1.5} />{t('Back to chat')}
         </button>
 
-        <h1 style={pageTitleStyle}>Plugins</h1>
+        <h1 style={pageTitleStyle}>{t('Plugins')}</h1>
 
         {/* Toolbar */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 30 }}>
@@ -586,7 +579,7 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search"
+              placeholder={t('Search')}
               style={{
                 flex: 1,
                 background: 'transparent',
@@ -629,7 +622,7 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
                     background: on ? 'var(--surface-3)' : 'transparent',
                   }}
                 >
-                  {f.label}
+                  {t(f.label)}
                 </button>
               );
             })}
@@ -651,15 +644,14 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
                 alignItems: 'center',
                 gap: 6,
               }}
-            >
-              Add
+            >{t('Add')}
               <ChevronDown size={14} strokeWidth={1.75} />
             </button>
             {addMenuOpen && (
               <div className="popover-shadow" style={menuStyle}>
                 <MenuItem
                   icon={<Search size={14} strokeWidth={1.5} />}
-                  label="Browse directory"
+                  label={t('Browse directory')}
                   onClick={() => {
                     setAddMenuOpen(false);
                     setShowAllDirectory(true);
@@ -668,7 +660,7 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
                 />
                 <MenuItem
                   icon={<Link2 size={14} strokeWidth={1.5} />}
-                  label="Custom connector"
+                  label={t('Custom connector')}
                   onClick={() => {
                     setAddMenuOpen(false);
                     setAddDialog({ mode: 'custom' });
@@ -676,7 +668,7 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
                 />
                 <MenuItem
                   icon={<Plus size={14} strokeWidth={1.5} />}
-                  label="Paste MCP JSON"
+                  label={t('Paste MCP JSON')}
                   onClick={() => {
                     setAddMenuOpen(false);
                     setAddDialog({ mode: 'json' });
@@ -690,11 +682,11 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
         {/* Your plugins */}
         <section style={{ marginBottom: 38 }}>
           <SectionHeader
-            title="Your plugins"
+            title={t('Your plugins')}
             action={
               mine.length > PREVIEW_COUNT && !needle
                 ? {
-                    label: showAllMine ? 'Show less' : 'Show all',
+                    label: showAllMine ? t('Show less') : t('Show all'),
                     onClick: () => setShowAllMine((v) => !v),
                   }
                 : undefined
@@ -709,9 +701,7 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
                 borderTop: '1px solid var(--border-subtle)',
               }}
             >
-              {settings.mcpServers.length === 0
-                ? 'No plugins yet. Pick one from the directory below, or use Add.'
-                : 'No plugin matches your search.'}
+              {settings.mcpServers.length === 0 ? t('No plugins yet. Pick one from the directory below, or use Add.') : t('No plugin matches your search.')}
             </div>
           ) : (
             <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
@@ -726,19 +716,18 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
         {/* Directory */}
         <section ref={directoryRef}>
           <SectionHeader
-            title="Directory"
+            title={t('Directory')}
             action={
               directory.length > 8 && !needle
                 ? {
-                    label: showAllDirectory ? 'Show less' : 'Show all',
+                    label: showAllDirectory ? t('Show less') : t('Show all'),
                     onClick: () => setShowAllDirectory((v) => !v),
                   }
                 : undefined
             }
           />
           {visibleDirectory.length === 0 ? (
-            <div style={{ padding: '14px 4px', fontSize: 13, color: 'var(--text-tertiary)' }}>
-              Nothing in the directory matches.
+            <div style={{ padding: '14px 4px', fontSize: 13, color: 'var(--text-tertiary)' }}>{t('Nothing in the directory matches.')}
             </div>
           ) : (
             <div

@@ -3,6 +3,7 @@ import { FileText, Paperclip, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { attachmentUrl } from '../api';
+import { useT } from '../i18n';
 
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -16,6 +17,7 @@ export function isAttachmentOnlyText(text: string): boolean {
 }
 
 function Lightbox({ attachment, onClose }: { attachment: MessageAttachment; onClose: () => void }) {
+  const t = useT();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -42,7 +44,7 @@ function Lightbox({ attachment, onClose }: { attachment: MessageAttachment; onCl
       <button
         type="button"
         onClick={onClose}
-        aria-label="Close preview"
+        aria-label={t('Close preview')}
         style={{ position: 'absolute', top: 16, right: 16, color: 'var(--text-secondary)' }}
       >
         <X size={20} />
@@ -62,6 +64,7 @@ function Lightbox({ attachment, onClose }: { attachment: MessageAttachment; onCl
 
 /** Attachments inside a sent message: image thumbnails (click to enlarge) and file chips (download). */
 export function MessageAttachments({ attachments }: { attachments: MessageAttachment[] }) {
+  const t = useT();
   const [open, setOpen] = useState<MessageAttachment | null>(null);
   const images = attachments.filter((a) => a.kind === 'image');
   const others = attachments.filter((a) => a.kind !== 'image');
@@ -102,7 +105,7 @@ export function MessageAttachments({ attachments }: { attachments: MessageAttach
               key={a.id}
               href={attachmentUrl(a)}
               download={a.name}
-              title="Download"
+              title={t('Download')}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -148,6 +151,7 @@ export function PendingAttachments({
   items: PendingUpload[];
   onRemove: (key: string) => void;
 }) {
+  const t = useT();
   if (items.length === 0) return null;
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '0 6px 8px' }}>
@@ -179,7 +183,7 @@ export function PendingAttachments({
                   {it.name}
                 </div>
                 <div style={{ fontSize: 10.5, color: it.status === 'error' ? 'var(--agent-red)' : 'var(--text-muted)' }}>
-                  {it.status === 'error' ? (it.error ?? 'Gagal') : it.status === 'uploading' ? 'Mengunggah…' : formatBytes(it.size)}
+                  {it.status === 'error' ? (it.error ?? t('Failed')) : it.status === 'uploading' ? t('Uploading…') : formatBytes(it.size)}
                 </div>
               </div>
             </>
@@ -188,7 +192,7 @@ export function PendingAttachments({
           <button
             type="button"
             onClick={() => onRemove(it.key)}
-            aria-label={`Remove ${it.name}`}
+            aria-label={t('Remove {name}', { name: it.name })}
             style={{
               position: 'absolute',
               top: -6,

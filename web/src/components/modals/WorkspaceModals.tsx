@@ -1,3 +1,4 @@
+import { useT } from '../../i18n';
 import type { GhRepoItem, Project } from '@atelier/contracts';
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
@@ -18,6 +19,7 @@ export function NewProjectModal({
   onClose: () => void;
   onCreated: (project: Project) => void;
 }) {
+  const t = useT();
   const [name, setName] = useState('');
   const [folder, setFolder] = useState('');
   const [picking, setPicking] = useState(false);
@@ -35,10 +37,10 @@ export function NewProjectModal({
         localPath: folder.trim() || undefined,
       });
       onCreated(res.project);
-      toast.success(`Project “${res.project.name}” created`);
+      toast.success(t('Project “{name}” created', { name: res.project.name }));
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create project');
+      setError(err instanceof Error ? err.message : t('Failed to create project'));
     } finally {
       setSaving(false);
     }
@@ -54,7 +56,7 @@ export function NewProjectModal({
         if (!name.trim()) setName(res.path.split(/[\/]/).filter(Boolean).pop() ?? '');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not open folder picker');
+      setError(err instanceof Error ? err.message : t('Could not open folder picker'));
     } finally {
       setPicking(false);
     }
@@ -62,30 +64,30 @@ export function NewProjectModal({
 
   return (
     <ModalShell
-      title="New project"
-      subtitle="Creates an empty workspace. Attach a project folder now, and add agents whenever you need them."
+      title={t('New project')}
+      subtitle={t('Creates an empty workspace. Attach a project folder now, and add agents whenever you need them.')}
       onClose={onClose}
     >
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div>
-          <label style={labelStyle}>Project name</label>
+          <label style={labelStyle}>{t('Project name')}</label>
           <input
             type="text"
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Growth Bot Team"
+            placeholder={t('e.g. Growth Bot Team')}
             style={inputStyle}
           />
         </div>
         <div>
-          <label style={labelStyle}>Project folder (optional)</label>
+          <label style={labelStyle}>{t('Project folder (optional)')}</label>
           <div style={{ display: 'flex', gap: 8 }}>
             <input
               type="text"
               value={folder}
               onChange={(e) => setFolder(e.target.value)}
-              placeholder="e.g. D:\Projects\my-app"
+              placeholder={t('e.g. D:\\Projects\\my-app')}
               style={{ ...inputStyle, flex: 1, minWidth: 0 }}
             />
             <button
@@ -94,17 +96,16 @@ export function NewProjectModal({
               disabled={picking}
               style={{ ...secondaryBtnStyle, flexShrink: 0 }}
             >
-              {picking ? 'Opening…' : 'Browse…'}
+              {picking ? t('Opening…') : t('Browse…')}
             </button>
           </div>
         </div>
         {error && <div style={{ fontSize: 12, color: 'var(--agent-red)' }}>{error}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-          <button type="button" onClick={onClose} style={secondaryBtnStyle}>
-            Cancel
+          <button type="button" onClick={onClose} style={secondaryBtnStyle}>{t('Cancel')}
           </button>
           <button type="submit" disabled={!name.trim() || saving} style={primaryBtnStyle}>
-            {saving ? 'Creating…' : 'Create project'}
+            {saving ? t('Creating…') : t('Create project')}
           </button>
         </div>
       </form>
@@ -120,6 +121,7 @@ export function LinkRepoModal({
   project: Project;
   onClose: () => void;
 }) {
+  const t = useT();
   const [repos, setRepos] = useState<GhRepoItem[]>([]);
   const [ghError, setGhError] = useState<string | null>(null);
   const [loadingRepos, setLoadingRepos] = useState(true);
@@ -137,7 +139,7 @@ export function LinkRepoModal({
         if (res.error) setGhError(res.error);
       })
       .catch((err) => {
-        setGhError(err instanceof Error ? err.message : 'Unable to query GitHub CLI');
+        setGhError(err instanceof Error ? err.message : t('Unable to query GitHub CLI'));
       })
       .finally(() => setLoadingRepos(false));
   }, []);
@@ -159,10 +161,10 @@ export function LinkRepoModal({
           defaultBranch: picked?.defaultBranch,
         });
       }
-      toast.success('Repository linked');
+      toast.success(t('Repository linked'));
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to link repository');
+      setError(err instanceof Error ? err.message : t('Failed to link repository'));
     } finally {
       setLinking(false);
     }
@@ -170,8 +172,8 @@ export function LinkRepoModal({
 
   return (
     <ModalShell
-      title="Link repository"
-      subtitle="Attach a local folder or clone via `gh` for shell-enabled bots."
+      title={t('Link repository')}
+      subtitle={t('Attach a local folder or clone via `gh` for shell-enabled bots.')}
       width={520}
       onClose={onClose}
     >
@@ -184,8 +186,7 @@ export function LinkRepoModal({
             background: mode === 'local' ? 'var(--surface-3)' : 'var(--surface-2)',
             color: mode === 'local' ? 'var(--text-primary)' : 'var(--text-secondary)',
           }}
-        >
-          Local directory
+        >{t('Local directory')}
         </button>
         <button
           type="button"
@@ -195,8 +196,7 @@ export function LinkRepoModal({
             background: mode === 'github' ? 'var(--surface-3)' : 'var(--surface-2)',
             color: mode === 'github' ? 'var(--text-primary)' : 'var(--text-secondary)',
           }}
-        >
-          GitHub (gh CLI)
+        >{t('GitHub (gh CLI)')}
         </button>
       </div>
 
@@ -204,8 +204,7 @@ export function LinkRepoModal({
         {mode === 'github' ? (
           <>
             {loadingRepos ? (
-              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-                Loading repositories from GitHub CLI…
+              <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>{t('Loading repositories from GitHub CLI…')}
               </div>
             ) : repos.length > 0 ? (
               <div
@@ -245,17 +244,17 @@ export function LinkRepoModal({
               </div>
             ) : (
               <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                {ghError || 'No repositories returned. Enter owner/repo below or switch to Local directory.'}
+                {ghError || t('No repositories returned. Enter owner/repo below or switch to Local directory.')}
               </div>
             )}
 
             <div>
-              <label style={labelStyle}>GitHub repository (owner/name)</label>
+              <label style={labelStyle}>{t('GitHub repository (owner/name)')}</label>
               <input
                 type="text"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                placeholder="owner/repo"
+                placeholder={t('owner/repo')}
                 style={inputStyle}
               />
             </div>
@@ -263,23 +262,23 @@ export function LinkRepoModal({
         ) : (
           <>
             <div>
-              <label style={labelStyle}>Local repository or folder path</label>
+              <label style={labelStyle}>{t('Local repository or folder path')}</label>
               <input
                 type="text"
                 autoFocus
                 value={localPath}
                 onChange={(e) => setLocalPath(e.target.value)}
-                placeholder="D:\Projects\my-app"
+                placeholder={t('D:\\Projects\\my-app')}
                 style={inputStyle}
               />
             </div>
             <div>
-              <label style={labelStyle}>Display name (optional)</label>
+              <label style={labelStyle}>{t('Display name (optional)')}</label>
               <input
                 type="text"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                placeholder="org/my-app"
+                placeholder={t('org/my-app')}
                 style={inputStyle}
               />
             </div>
@@ -289,15 +288,14 @@ export function LinkRepoModal({
         {error && <div style={{ fontSize: 12, color: 'var(--agent-red)' }}>{error}</div>}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button type="button" onClick={onClose} style={secondaryBtnStyle}>
-            Cancel
+          <button type="button" onClick={onClose} style={secondaryBtnStyle}>{t('Cancel')}
           </button>
           <button
             type="submit"
             disabled={linking || (mode === 'github' ? !fullName.trim() : !localPath.trim())}
             style={primaryBtnStyle}
           >
-            {linking ? 'Linking…' : mode === 'github' ? 'Clone & Link' : 'Link Local Repo'}
+            {linking ? t('Linking…') : mode === 'github' ? t('Clone & Link') : t('Link Local Repo')}
           </button>
         </div>
       </form>
@@ -315,6 +313,7 @@ export function ProjectManageModal({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const t = useT();
   const [deleteRepo, setDeleteRepo] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -323,7 +322,7 @@ export function ProjectManageModal({
     setBusy(true);
     try {
       await api.updateProject(project.id, { archived: true });
-      toast.info(`Project “${project.name}” archived`);
+      toast.info(t('Project “{name}” archived', { name: project.name }));
       onDeleted();
       onClose();
     } finally {
@@ -335,7 +334,7 @@ export function ProjectManageModal({
     setBusy(true);
     try {
       await api.deleteProject(project.id, { deleteRepo });
-      toast.deleted(`Project “${project.name}” deleted`);
+      toast.deleted(t('Project “{name}” deleted', { name: project.name }));
       onDeleted();
       onClose();
     } finally {
@@ -345,25 +344,22 @@ export function ProjectManageModal({
 
   return (
     <ModalShell
-      title={`Manage ${project.name}`}
-      subtitle="Archive or permanently delete this project workspace."
+      title={t('Manage {name}', { name: project.name })}
+      subtitle={t('Archive or permanently delete this project workspace.')}
       onClose={onClose}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
-            Hide from sidebar while keeping SQLite history.
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{t('Hide from sidebar while keeping SQLite history.')}
           </div>
-          <button type="button" disabled={busy} onClick={handleArchive} style={secondaryBtnStyle}>
-            Archive
+          <button type="button" disabled={busy} onClick={handleArchive} style={secondaryBtnStyle}>{t('Archive')}
           </button>
         </div>
 
         <div style={{ height: 1, background: 'var(--border-subtle)' }} />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ fontSize: 12.5, color: 'var(--agent-red)' }}>
-            Delete project permanently
+          <div style={{ fontSize: 12.5, color: 'var(--agent-red)' }}>{t('Delete project permanently')}
           </div>
           {project.repo?.localPath && (
             <label
@@ -380,8 +376,7 @@ export function ProjectManageModal({
                 type="checkbox"
                 checked={deleteRepo}
                 onChange={(e) => setDeleteRepo(e.target.checked)}
-              />
-              Also delete local cloned repository folder ({project.repo.localPath})
+              />{t('Also delete local cloned repository folder (')}{project.repo.localPath})
             </label>
           )}
           <label
@@ -398,12 +393,10 @@ export function ProjectManageModal({
               type="checkbox"
               checked={confirmDelete}
               onChange={(e) => setConfirmDelete(e.target.checked)}
-            />
-            Confirm permanent deletion of messages, agents, and tasks
+            />{t('Confirm permanent deletion of messages, agents, and tasks')}
           </label>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button type="button" onClick={onClose} style={secondaryBtnStyle}>
-              Cancel
+            <button type="button" onClick={onClose} style={secondaryBtnStyle}>{t('Cancel')}
             </button>
             <button
               type="button"
@@ -414,8 +407,7 @@ export function ProjectManageModal({
                 borderColor: 'rgba(248, 113, 113, 0.45)',
                 color: confirmDelete ? 'var(--agent-red)' : 'var(--text-muted)',
               }}
-            >
-              Delete Project
+            >{t('Delete Project')}
             </button>
           </div>
         </div>

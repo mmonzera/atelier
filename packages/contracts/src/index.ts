@@ -894,6 +894,8 @@ export interface Settings {
    * built-in, detected and custom models. The model in use is always shown.
    */
   visibleModels?: Partial<Record<RealProvider, string[]>>;
+  /** interface language; unset = follow the browser language */
+  language?: 'en' | 'id';
   cliPaths: Partial<Record<RealProvider, string>>;
   mcpServers: McpServerConfig[];
   onboardingCompleted: boolean;
@@ -1021,6 +1023,7 @@ export interface SettingsInput {
   reasoningEffort?: ReasoningEffort;
   customModels?: ModelEntry[];
   visibleModels?: Partial<Record<RealProvider, string[]>>;
+  language?: 'en' | 'id';
   cliPaths?: Partial<Record<RealProvider, string>>;
   onboardingCompleted?: boolean;
   autoCompact?: Partial<AutoCompactSettings>;
@@ -1344,4 +1347,66 @@ export function summarizeDesignBlocks(
       return `[Design options shown to the user — ${list}. They can pick one.]`;
     })
     .join('\n\n');
+}
+
+export interface SvgBlock {
+  /** Position among the SVG blocks of one message (stable, used in library URLs). */
+  index: number;
+  /** File name taken from the message text (e.g. `atelier-hero.svg`), or a generated one. */
+  name: string;
+  svg: string;
+  /** false while the reply is still streaming and the code fence is not closed yet */
+  closed: boolean;
+}
+
+const SVG_START = /^\s*(<\?xml[\s\S]*?\?>\s*)?(<!--[\s\S]*?-->\s*)*<svg[\s>]/i;
+const SVG_NAME = /([A-Za-z0-9][\w.-]*\.svg)\b/gi;
+
+/**
+ * Finds complete SVG drawings an agent wrote as fenced code in a reply, plus the file name it
+ * mentioned for them. Used by the chat (to show the picture instead of code) and by the library.
+ */
+export function extractSvgBlocks(text: string): SvgBlock[] {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const fence = /^\s*```\s*([\w+#.-]*)\s*$/;
+  const found: Array<{ svg: string; closed: boolean; before: string; after: string }> = [];
+  let proseStart = 0;
+  let i = 0;
+  while (i < lines.length) {
+    const open = fence.exec(lines[i]!);
+    if (!open) {
+      i++;
+      continue;
+    }
+    const before = lines.slice(proseStart, i).join('\n').slice(-400);
+    const body: string[] = [];
+    i++;
+    while (i < lines.length && !/^\s*```\s*$/.test(lines[i]!)) body.push(lines[i++]!);
+    const closed = i < lines.length;
+    i++;
+    proseStart = i;
+    const lang = (open[1] ?? '').toLowerCase();
+    const code = body.join('\n');
+    if (['', 'svg', 'xml', 'html'].includes(lang) && SVG_START.test(code) && /<\/svg>/i.test(code)) {
+      // text right after the fence (up to the next one) can also name the drawing
+      const next = lines.slice(i).findIndex((l) => fence.test(l));
+      const after = lines
+        .slice(i, next === -1 ? undefined : i + next)
+        .join('\n')
+        .slice(0, 300);
+      found.push({ svg: code.trim(), closed, before, after });
+    }
+  }
+
+  const used = new Set<string>();
+  return found.map((f, index) => {
+    const pick = (s: string, last: boolean): string | null => {
+      const all = [...s.matchAll(SVG_NAME)].map((m) => m[1]!);
+      return all.length === 0 ? null : last ? all[all.length - 1]! : all[0]!;
+    };
+    let name = pick(f.before, true) ?? pick(f.after, false) ?? `illustration-${index + 1}.svg`;
+    if (used.has(name.toLowerCase())) name = name.replace(/\.svg$/i, `-${index + 1}.svg`);
+    used.add(name.toLowerCase());
+    return { index, name, svg: f.svg, closed: f.closed };
+  });
 }

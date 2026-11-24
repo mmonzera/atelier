@@ -2,6 +2,7 @@ import type { Activity, Agent, Project, Task } from '@atelier/contracts';
 import { ArrowUpRight, CheckCircle2, FileText } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ProjectTile, TaskStatusIcon } from '../components/Atoms';
+import { useT } from '../i18n';
 
 interface AgentReportsViewProps {
   agent: Agent;
@@ -30,6 +31,7 @@ export function AgentReportsView({
   onOpenProject,
   onOpenAgentChat,
 }: AgentReportsViewProps) {
+  const tr = useT();
   const [filter, setFilter] = useState<ReportFilter>('all');
 
   const projectById = useMemo(
@@ -101,10 +103,10 @@ export function AgentReportsView({
         }}
       >
         {[
-          { label: 'Assigned projects', value: assignedProjects.length, accent: 'var(--text-primary)' },
-          { label: 'Active tasks', value: openCount, accent: 'var(--agent-blue)' },
-          { label: 'Awaiting review', value: inReviewCount, accent: 'var(--agent-amber)' },
-          { label: 'Delivered / done', value: doneCount, accent: 'var(--agent-green)' },
+          { label: tr('Assigned projects'), value: assignedProjects.length, accent: 'var(--text-primary)' },
+          { label: tr('Active tasks'), value: openCount, accent: 'var(--agent-blue)' },
+          { label: tr('Awaiting review'), value: inReviewCount, accent: 'var(--agent-amber)' },
+          { label: tr('Delivered / done'), value: doneCount, accent: 'var(--agent-green)' },
         ].map((stat) => (
           <div
             key={stat.label}
@@ -140,9 +142,9 @@ export function AgentReportsView({
         >
           {(
             [
-              { id: 'all', label: `All reports (${agentTasks.length})` },
-              { id: 'delivered', label: `Delivered (${inReviewCount + doneCount})` },
-              { id: 'active', label: `In queue (${openCount})` },
+              { id: 'all', label: tr('All reports ({length})', { length: agentTasks.length }) },
+              { id: 'delivered', label: tr('Delivered ({v0})', { v0: inReviewCount + doneCount }) },
+              { id: 'active', label: tr('In queue ({openCount})', { openCount }) },
             ] as const
           ).map((tab) => {
             const active = filter === tab.id;
@@ -179,8 +181,7 @@ export function AgentReportsView({
             fontSize: 12,
             color: 'var(--text-primary)',
           }}
-        >
-          Discuss directly with {agent.name}
+        >{tr('Discuss directly with')} {agent.name}
         </button>
       </div>
 
@@ -206,12 +207,11 @@ export function AgentReportsView({
           }}
         >
           <CheckCircle2 size={14} strokeWidth={1.5} />
-          <span>Project Tasks & Deliverables</span>
+          <span>{tr('Project Tasks & Deliverables')}</span>
         </div>
 
         {filteredTasks.length === 0 ? (
-          <div style={{ padding: 24, fontSize: 13, color: 'var(--text-tertiary)' }}>
-            No project tasks found in this filter yet.
+          <div style={{ padding: 24, fontSize: 13, color: 'var(--text-tertiary)' }}>{tr('No project tasks found in this filter yet.')}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -274,7 +274,7 @@ export function AgentReportsView({
                         <button
                           type="button"
                           onClick={() => onOpenProject(proj.id)}
-                          title={`Open ${proj.name}`}
+                          title={tr('Open {name}', { name: proj.name })}
                           style={{
                             display: 'inline-flex',
                             alignItems: 'center',
@@ -344,7 +344,7 @@ export function AgentReportsView({
             }}
           >
             <FileText size={14} strokeWidth={1.5} />
-            <span>Recent Project Activity</span>
+            <span>{tr('Recent Project Activity')}</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {projectActivities.map((act, idx) => {

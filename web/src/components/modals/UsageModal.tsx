@@ -18,6 +18,7 @@ import {
   primaryBtnStyle,
   secondaryBtnStyle,
 } from './ModalShell';
+import { t as translate, useT } from '../../i18n';
 
 const PROVIDER_NAMES: Record<ModelProvider, string> = {
   claude: 'Claude (Anthropic)',
@@ -57,12 +58,12 @@ function barColor(percent: number | null): string {
 function formatResetShort(iso: string | null): string | null {
   if (!iso) return null;
   const diffMs = new Date(iso).getTime() - Date.now();
-  if (!Number.isFinite(diffMs) || diffMs <= 0) return 'resets soon';
+  if (!Number.isFinite(diffMs) || diffMs <= 0) return translate('resets soon');
   const days = Math.floor(diffMs / 86_400_000);
   const hours = Math.floor((diffMs % 86_400_000) / 3_600_000);
   const mins = Math.floor((diffMs % 3_600_000) / 60_000);
-  if (days > 0) return `resets ${days}d ${hours}h`;
-  return `resets ${hours}h ${mins}m`;
+  if (days > 0) return translate('resets {days}d {hours}h', { days, hours });
+  return translate('resets {hours}h {mins}m', { hours, mins });
 }
 
 const RESET_DAY_OPTIONS = [
@@ -77,6 +78,7 @@ const RESET_DAY_OPTIONS = [
 ];
 
 export function UsageModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const [range, setRange] = useState<UsageRange>('30d');
   const [tab, setTab] = useState<'providers' | 'agents'>('providers');
   const [data, setData] = useState<UsageDashboardResponse | null>(null);
@@ -97,7 +99,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
       const res = await api.getUsage(targetRange, refresh);
       setData(res);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to load usage stats');
+      toast.error(err instanceof Error ? err.message : t('Failed to load usage stats'));
     } finally {
       setLoading(false);
     }
@@ -155,7 +157,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
       (parsed5h !== null && (!Number.isFinite(parsed5h) || parsed5h <= 0)) ||
       (parsedWeekly !== null && (!Number.isFinite(parsedWeekly) || parsedWeekly <= 0))
     ) {
-      toast.error('Limits must be positive numbers.');
+      toast.error(t('Limits must be positive numbers.'));
       return;
     }
 
@@ -182,14 +184,12 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
             },
       );
       toast.success(
-        emptyAll
-          ? `Limit removed for ${PROVIDER_NAMES[provider]}`
-          : `Usage limit saved for ${PROVIDER_NAMES[provider]}`,
+        emptyAll ? t('Limit removed for {v0}', { v0: PROVIDER_NAMES[provider] }) : t('Usage limit saved for {v0}', { v0: PROVIDER_NAMES[provider] }),
       );
       setEditingProvider(null);
       await loadUsage(range);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update limit');
+      toast.error(err instanceof Error ? err.message : t('Failed to update limit'));
     } finally {
       setSavingLimit(false);
     }
@@ -199,7 +199,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
     setSavingLimit(true);
     try {
       await api.updateUsageLimit(provider, { clear: true });
-      toast.info(`Limit removed for ${PROVIDER_NAMES[provider]}`);
+      toast.info(t('Limit removed for {v0}', { v0: PROVIDER_NAMES[provider] }));
       setEditingProvider(null);
       await loadUsage(range);
     } finally {
@@ -214,7 +214,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
     }
     await api.clearUsageLogs();
     setConfirmClear(false);
-    toast.info('Usage history cleared');
+    toast.info(t('Usage history cleared'));
     await loadUsage(range);
   };
 
@@ -225,8 +225,8 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
 
   return (
     <ModalShell
-      title="AI Usage & Limits"
-      subtitle="Track token consumption, estimated spend, live API balance, and remaining quotas per provider."
+      title={t('AI Usage & Limits')}
+      subtitle={t('Track token consumption, estimated spend, live API balance, and remaining quotas per provider.')}
       width={680}
       onClose={onClose}
     >
@@ -269,7 +269,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                     background: active ? 'var(--surface-3)' : 'transparent',
                   }}
                 >
-                  {opt.label}
+                  {t(opt.label)}
                 </button>
               );
             })}
@@ -293,8 +293,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                 gap: 5,
               }}
             >
-              <RefreshCw size={12} strokeWidth={1.5} />
-              Refresh
+              <RefreshCw size={12} strokeWidth={1.5} />{t('Refresh')}
             </button>
             <button
               type="button"
@@ -314,7 +313,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
               }}
             >
               <Trash2 size={12} strokeWidth={1.5} />
-              {confirmClear ? 'Confirm clear' : 'Reset'}
+              {confirmClear ? t('Confirm clear') : t('Reset')}
             </button>
           </div>
         </div>
@@ -329,14 +328,12 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
               border: '1px solid var(--border-subtle)',
             }}
           >
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Total Tokens
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('Total Tokens')}
             </div>
             <div className="mono-num" style={{ fontSize: 20, fontWeight: 500, color: 'var(--text-primary)', marginTop: 4 }}>
               {loading && !data ? '—' : formatTokens(data?.totals.totalTokens ?? 0)}
             </div>
-            <div className="mono-num" style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              In {formatTokens(data?.totals.inputTokens ?? 0)} · Out {formatTokens(data?.totals.outputTokens ?? 0)}
+            <div className="mono-num" style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>{t('In')} {formatTokens(data?.totals.inputTokens ?? 0)}{t('· Out')} {formatTokens(data?.totals.outputTokens ?? 0)}
             </div>
           </div>
 
@@ -348,14 +345,12 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
               border: '1px solid var(--border-subtle)',
             }}
           >
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Est. Spend
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('Est. Spend')}
             </div>
             <div className="mono-num" style={{ fontSize: 20, fontWeight: 500, color: 'var(--text-primary)', marginTop: 4 }}>
               {loading && !data ? '—' : formatUsd(data?.totals.estimatedCostUsd ?? 0)}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              Reference rate estimate
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>{t('Reference rate estimate')}
             </div>
           </div>
 
@@ -367,14 +362,12 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
               border: '1px solid var(--border-subtle)',
             }}
           >
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Completed Turns
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('Completed Turns')}
             </div>
             <div className="mono-num" style={{ fontSize: 20, fontWeight: 500, color: 'var(--text-primary)', marginTop: 4 }}>
               {loading && !data ? '—' : (data?.totals.turns ?? 0).toLocaleString()}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              Across all projects & DMs
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>{t('Across all projects & DMs')}
             </div>
           </div>
         </div>
@@ -393,8 +386,8 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
         >
           {(
             [
-              { id: 'providers', label: 'Providers & Limits' },
-              { id: 'agents', label: `By Agent (${data?.agents.length ?? 0})` },
+              { id: 'providers', label: t('Providers & Limits') },
+              { id: 'agents', label: t('By Agent ({v0})', { v0: data?.agents.length ?? 0 }) },
             ] as const
           ).map((item) => {
             const active = tab === item.id;
@@ -483,14 +476,13 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                                   : 'rgba(248, 113, 113, 0.12)',
                                 border: `1px solid ${p.liveBalance.available ? 'rgba(52, 211, 153, 0.28)' : 'rgba(248, 113, 113, 0.28)'}`,
                               }}
-                            >
-                              Live: {p.liveBalance.label}
+                            >{t('Live:')} {p.liveBalance.label}
                             </span>
                           )}
                         </div>
                         <div className="mono-num" style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                          {formatTokens(p.totalTokens)} tokens · {formatUsd(p.estimatedCostUsd)} · {p.turns}{' '}
-                          {p.turns === 1 ? 'turn' : 'turns'}
+                          {formatTokens(p.totalTokens)}{t('tokens ·')} {formatUsd(p.estimatedCostUsd)} · {p.turns}{' '}
+                          {p.turns === 1 ? t('turn') : t('turns')}
                         </div>
                       </div>
                     </div>
@@ -515,7 +507,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                       }}
                     >
                       <SlidersHorizontal size={12} strokeWidth={1.5} />
-                      {p.limit ? 'Edit limit' : 'Set limit'}
+                      {p.limit ? t('Edit limit') : t('Set limit')}
                     </button>
                   </div>
 
@@ -530,11 +522,11 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                     >
                       {[
                         {
-                          label: p.fiveHour.isOfficial ? '5-hour limit' : 'Est. 5h',
+                          label: p.fiveHour.isOfficial ? t('5-hour limit') : t('Est. 5h'),
                           win: p.fiveHour,
                         },
                         {
-                          label: p.weekly.isOfficial ? 'Weekly limit' : 'Est. Weekly',
+                          label: p.weekly.isOfficial ? t('Weekly limit') : t('Est. Weekly'),
                           win: p.weekly,
                         },
                       ].map(({ label, win }) => {
@@ -562,11 +554,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                               </span>
                               <span>
                                 {win.percentUsed ?? 0}%
-                                {!win.isOfficial && win.remainingTokens !== null
-                                  ? ` · ${formatTokens(win.remainingTokens)} left`
-                                  : win.isOfficial && win.usedTokens > 0
-                                    ? ` · ${formatTokens(win.usedTokens)} used`
-                                    : ''}
+                                {!win.isOfficial && win.remainingTokens !== null ? t(' · {v0} left', { v0: formatTokens(win.remainingTokens) }) : win.isOfficial && win.usedTokens > 0 ? t(' · {v0} used', { v0: formatTokens(win.usedTokens) }) : ''}
                               </span>
                             </div>
                             <div
@@ -626,7 +614,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                         }}
                       >
                         <span style={{ color: p.percentUsed && p.percentUsed >= 90 ? 'var(--agent-red)' : 'var(--text-secondary)' }}>
-                          {p.percentUsed ?? 0}% used ({p.limit.period} window)
+                          {p.percentUsed ?? 0}{t('% used (')}{p.limit.period}{t('window)')}
                         </span>
                         <span>
                           {[
@@ -656,20 +644,20 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                     >
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1.2fr', gap: 8 }}>
                         <div>
-                          <label style={labelStyle}>Period</label>
+                          <label style={labelStyle}>{t('Period')}</label>
                           <Select
-                            ariaLabel="Limit period"
+                            ariaLabel={t('Limit period')}
                             value={limitPeriod}
                             onChange={(v) => setLimitPeriod(v as UsagePeriod)}
                             options={[
-                              { value: 'daily', label: 'Daily' },
-                              { value: 'weekly', label: 'Weekly' },
-                              { value: 'monthly', label: 'Monthly' },
+                              { value: 'daily', label: t('Daily') },
+                              { value: 'weekly', label: t('Weekly') },
+                              { value: 'monthly', label: t('Monthly') },
                             ]}
                           />
                         </div>
                         <div>
-                          <label style={labelStyle}>Token limit</label>
+                          <label style={labelStyle}>{t('Token limit')}</label>
                           <input
                             type="number"
                             min={1000}
@@ -682,7 +670,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                           />
                         </div>
                         <div>
-                          <label style={labelStyle}>Budget (USD)</label>
+                          <label style={labelStyle}>{t('Budget (USD)')}</label>
                           <input
                             type="number"
                             min={0.5}
@@ -698,7 +686,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                       {p.supportsRollingWindows && (
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
                           <div>
-                            <label style={labelStyle}>5-hour cap</label>
+                            <label style={labelStyle}>{t('5-hour cap')}</label>
                             <input
                               type="number"
                               min={1000}
@@ -711,7 +699,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                             />
                           </div>
                           <div>
-                            <label style={labelStyle}>Weekly cap</label>
+                            <label style={labelStyle}>{t('Weekly cap')}</label>
                             <input
                               type="number"
                               min={1000}
@@ -724,12 +712,12 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                             />
                           </div>
                           <div>
-                            <label style={labelStyle}>Weekly reset</label>
+                            <label style={labelStyle}>{t('Weekly reset')}</label>
                             <Select
-                              ariaLabel="Weekly reset day"
+                              ariaLabel={t('Weekly reset day')}
                               value={weeklyResetDayInput}
                               onChange={setWeeklyResetDayInput}
-                              options={RESET_DAY_OPTIONS}
+                              options={RESET_DAY_OPTIONS.map((o) => ({ ...o, label: t(o.label) }))}
                             />
                           </div>
                         </div>
@@ -741,12 +729,10 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                             disabled={savingLimit}
                             onClick={() => void handleClearLimit(p.provider)}
                             style={{ fontSize: 12, color: 'var(--agent-red)' }}
-                          >
-                            Remove limit
+                          >{t('Remove limit')}
                           </button>
                         ) : (
-                          <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
-                            Leave blank for unlimited
+                          <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{t('Leave blank for unlimited')}
                           </span>
                         )}
                         <div style={{ display: 'flex', gap: 8 }}>
@@ -754,8 +740,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                             type="button"
                             onClick={() => setEditingProvider(null)}
                             style={{ ...secondaryBtnStyle, height: 30, fontSize: 12 }}
-                          >
-                            Cancel
+                          >{t('Cancel')}
                           </button>
                           <button
                             type="button"
@@ -763,7 +748,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                             onClick={() => void handleSaveLimit(p.provider)}
                             style={{ ...primaryBtnStyle, height: 30, fontSize: 12 }}
                           >
-                            {savingLimit ? 'Saving…' : 'Save limit'}
+                            {savingLimit ? t('Saving…') : t('Save limit')}
                           </button>
                         </div>
                       </div>
@@ -791,7 +776,7 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                 }}
               >
                 <BarChart3 size={18} strokeWidth={1.5} />
-                <span>No agent usage recorded in this window yet.</span>
+                <span>{t('No agent usage recorded in this window yet.')}</span>
               </div>
             ) : (
               data.agents.map((a) => {
@@ -821,8 +806,8 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
                         {a.agentName}
                       </span>
                       <span className="mono-num" style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
-                        {formatTokens(a.totalTokens)} tokens · {formatUsd(a.estimatedCostUsd)} · {a.turns}{' '}
-                        {a.turns === 1 ? 'turn' : 'turns'}
+                        {formatTokens(a.totalTokens)}{t('tokens ·')} {formatUsd(a.estimatedCostUsd)} · {a.turns}{' '}
+                        {a.turns === 1 ? t('turn') : t('turns')}
                       </span>
                     </div>
                     <div

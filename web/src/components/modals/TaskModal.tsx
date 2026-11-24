@@ -1,3 +1,4 @@
+import { useT } from '../../i18n';
 import type { Agent, Project, Task, TaskPriority, TaskStatus } from '@atelier/contracts';
 import { ExternalLink, MessageSquare, Play, Trash2 } from 'lucide-react';
 import { useState } from 'react';
@@ -32,6 +33,7 @@ export function TaskModal({
   onClose: () => void;
   onJumpToAgent: (agentId: string) => void;
 }) {
+  const t = useT();
   const isEdit = Boolean(existingTask);
   const projectAgents = agents.filter((a) => a.projectId === project.id);
 
@@ -68,17 +70,17 @@ export function TaskModal({
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
-      setError('Task title is required.');
+      setError(t('Task title is required.'));
       return;
     }
     setBusy(true);
     setError(null);
     try {
       const saved = await saveTask();
-      toast.success(isEdit ? `Task ${saved.identifier} updated` : `Task ${saved.identifier} created`);
+      toast.success(isEdit ? t('Task {identifier} updated', { identifier: saved.identifier }) : t('Task {identifier} created', { identifier: saved.identifier }));
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save task');
+      setError(err instanceof Error ? err.message : t('Failed to save task'));
     } finally {
       setBusy(false);
     }
@@ -86,11 +88,11 @@ export function TaskModal({
 
   const handleDispatch = async () => {
     if (!title.trim()) {
-      setError('Task title is required.');
+      setError(t('Task title is required.'));
       return;
     }
     if (!assigneeAgentId) {
-      setError('Select an agent assignee before dispatching.');
+      setError(t('Select an agent assignee before dispatching.'));
       return;
     }
     setBusy(true);
@@ -98,10 +100,10 @@ export function TaskModal({
     try {
       const saved = await saveTask();
       await api.dispatchTask(saved.id);
-      toast.success(`Task ${saved.identifier} dispatched`);
+      toast.success(t('Task {identifier} dispatched', { identifier: saved.identifier }));
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to dispatch task');
+      setError(err instanceof Error ? err.message : t('Failed to dispatch task'));
     } finally {
       setBusy(false);
     }
@@ -112,7 +114,7 @@ export function TaskModal({
     setBusy(true);
     try {
       await api.deleteTask(existingTask.id);
-      toast.deleted(`Task ${existingTask.identifier} deleted`);
+      toast.deleted(t('Task {identifier} deleted', { identifier: existingTask.identifier }));
       onClose();
     } finally {
       setBusy(false);
@@ -121,75 +123,73 @@ export function TaskModal({
 
   return (
     <ModalShell
-      title={isEdit && existingTask ? `${existingTask.identifier} · ${existingTask.title}` : 'New task'}
+      title={isEdit && existingTask ? `${existingTask.identifier} · ${existingTask.title}` : t('New task')}
       subtitle={
-        isEdit
-          ? `Status: ${TASK_STATUS_META[existingTask!.status].label}`
-          : 'Add a task to track agent progress and deliverables.'
+        isEdit ? t('Status: {label}', { label: t(TASK_STATUS_META[existingTask!.status].label) }) : t('Add a task to track agent progress and deliverables.')
       }
       width={560}
       onClose={onClose}
     >
       <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div>
-          <label style={labelStyle}>Title</label>
+          <label style={labelStyle}>{t('Title')}</label>
           <input
             type="text"
             autoFocus
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g. Build Stripe webhook handler + tests"
+            placeholder={t('e.g. Build Stripe webhook handler + tests')}
             style={inputStyle}
           />
         </div>
 
         <div>
-          <label style={labelStyle}>Description / Acceptance criteria</label>
+          <label style={labelStyle}>{t('Description / Acceptance criteria')}</label>
           <textarea
             rows={4}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Context, files, acceptance criteria..."
+            placeholder={t('Context, files, acceptance criteria...')}
             style={{ ...inputStyle, resize: 'vertical' }}
           />
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
           <div>
-            <label style={labelStyle}>Status</label>
+            <label style={labelStyle}>{t('Status')}</label>
             <Select
-              ariaLabel="Status"
+              ariaLabel={t('Status')}
               value={status}
               onChange={(v) => setStatus(v as TaskStatus)}
               options={Object.entries(TASK_STATUS_META).map(([key, meta]) => ({
                 value: key,
-                label: meta.label,
+                label: t(meta.label),
               }))}
             />
           </div>
           <div>
-            <label style={labelStyle}>Priority</label>
+            <label style={labelStyle}>{t('Priority')}</label>
             <Select
-              ariaLabel="Priority"
+              ariaLabel={t('Priority')}
               value={priority}
               onChange={(v) => setPriority(v as TaskPriority)}
               options={[
-                { value: 'urgent', label: 'Urgent' },
-                { value: 'high', label: 'High' },
-                { value: 'medium', label: 'Medium' },
-                { value: 'low', label: 'Low' },
-                { value: 'none', label: 'None' },
+                { value: 'urgent', label: t('Urgent') },
+                { value: 'high', label: t('High') },
+                { value: 'medium', label: t('Medium') },
+                { value: 'low', label: t('Low') },
+                { value: 'none', label: t('None') },
               ]}
             />
           </div>
           <div>
-            <label style={labelStyle}>Assignee agent</label>
+            <label style={labelStyle}>{t('Assignee agent')}</label>
             <Select
-              ariaLabel="Assignee agent"
+              ariaLabel={t('Assignee agent')}
               value={assigneeAgentId}
               onChange={setAssigneeAgentId}
               options={[
-                { value: '', label: 'Unassigned' },
+                { value: '', label: t('Unassigned') },
                 ...projectAgents.map((a) => ({ value: a.id, label: a.name, hint: a.role })),
               ]}
             />
@@ -205,8 +205,7 @@ export function TaskModal({
               border: '1px solid var(--border-subtle)',
             }}
           >
-            <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: 4 }}>
-              Latest Deliverable Summary
+            <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: 4 }}>{t('Latest Deliverable Summary')}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--text-primary)', lineHeight: '19px', whiteSpace: 'pre-wrap' }}>
               {existingTask.deliverableSummary}
@@ -216,23 +215,23 @@ export function TaskModal({
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <div>
-            <label style={labelStyle}>Branch (optional)</label>
+            <label style={labelStyle}>{t('Branch (optional)')}</label>
             <input
               type="text"
               value={branch}
               onChange={(e) => setBranch(e.target.value)}
-              placeholder="feat/my-task"
+              placeholder={t('feat/my-task')}
               className="mono-num"
               style={inputStyle}
             />
           </div>
           <div>
-            <label style={labelStyle}>PR URL (optional)</label>
+            <label style={labelStyle}>{t('PR URL (optional)')}</label>
             <input
               type="url"
               value={prUrl}
               onChange={(e) => setPrUrl(e.target.value)}
-              placeholder="https://github.com/..."
+              placeholder={t('https://github.com/...')}
               className="mono-num"
               style={inputStyle}
             />
@@ -257,7 +256,7 @@ export function TaskModal({
                 type="button"
                 disabled={busy}
                 onClick={() => void handleDelete()}
-                title="Delete task"
+                title={t('Delete task')}
                 style={{ ...secondaryBtnStyle, color: 'var(--agent-red)', padding: '0 10px' }}
               >
                 <Trash2 size={13} strokeWidth={1.5} />
@@ -272,21 +271,18 @@ export function TaskModal({
                 }}
                 style={secondaryBtnStyle}
               >
-                <MessageSquare size={13} strokeWidth={1.5} />
-                Agent Chat
+                <MessageSquare size={13} strokeWidth={1.5} />{t('Agent Chat')}
               </button>
             )}
             {existingTask?.prUrl && (
               <a href={existingTask.prUrl} target="_blank" rel="noreferrer" style={secondaryBtnStyle}>
-                <ExternalLink size={13} strokeWidth={1.5} />
-                PR
+                <ExternalLink size={13} strokeWidth={1.5} />{t('PR')}
               </a>
             )}
           </div>
 
           <div style={{ display: 'flex', gap: 8 }}>
-            <button type="submit" disabled={busy} style={secondaryBtnStyle}>
-              Save
+            <button type="submit" disabled={busy} style={secondaryBtnStyle}>{t('Save')}
             </button>
             <button
               type="button"
@@ -295,7 +291,7 @@ export function TaskModal({
               style={primaryBtnStyle}
             >
               <Play size={12} strokeWidth={1.75} />
-              {busy ? 'Working…' : 'Dispatch to Agent'}
+              {busy ? t('Working…') : t('Dispatch to Agent')}
             </button>
           </div>
         </div>

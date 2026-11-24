@@ -1,3 +1,4 @@
+import { useT } from '../i18n';
 import type { Agent, AgentViewTab, Project, WorkspaceTab } from '@atelier/contracts';
 import { MoreHorizontal } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -49,6 +50,7 @@ export function ThreadHeader({
   onOpenLinkRepo,
   onOpenProjectManage,
 }: ThreadHeaderProps) {
+  const t = useT();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -103,11 +105,7 @@ export function ThreadHeader({
             textOverflow: 'ellipsis',
           }}
         >
-          {mode === 'agent' && activeAgent
-            ? `${activeAgent.name} · Direct`
-            : project
-              ? `${activeAgent?.name ?? 'Agent'} · ${project.name}`
-              : 'Atelier · Agent Harness & Task Studio'}
+          {mode === 'agent' && activeAgent ? t('{name} · Direct', { name: activeAgent.name }) : project ? `${activeAgent?.name ?? 'Agent'} · ${project.name}` : t('Atelier · Agent Harness & Task Studio')}
         </div>
 
         {hasContext && activeAgent?.role && (
@@ -132,7 +130,7 @@ export function ThreadHeader({
       {hasContext && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }} ref={menuRef}>
           <nav
-            aria-label="Workspace views"
+            aria-label={t('Workspace views')}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -161,7 +159,7 @@ export function ThreadHeader({
                         background: active ? 'var(--surface-2)' : 'transparent',
                       }}
                     >
-                      {tab.label}
+                      {t(tab.label)}
                     </button>
                   );
                 })
@@ -182,7 +180,7 @@ export function ThreadHeader({
                         background: active ? 'var(--surface-2)' : 'transparent',
                       }}
                     >
-                      {tab.label}
+                      {t(tab.label)}
                     </button>
                   );
                 })}
@@ -191,7 +189,7 @@ export function ThreadHeader({
           <button
             type="button"
             onClick={() => setMenuOpen((v) => !v)}
-            aria-label="Options"
+            aria-label={t('Options')}
             className="transition-atelier"
             style={{
               width: 28,
@@ -233,17 +231,17 @@ export function ThreadHeader({
               }}
             >
               {[
-                ...(activeAgent ? [{ label: 'Edit agent & skills', action: onEditAgent }] : []),
+                ...(activeAgent ? [{ label: t('Edit agent & skills'), action: onEditAgent }] : []),
                 ...(activeAgent && onCompactContext && activeAgent.status !== 'working'
-                  ? [{ label: 'Compact context now', action: onCompactContext }]
+                  ? [{ label: t('Compact context now'), action: onCompactContext }]
                   : []),
-                ...(mode === 'project' ? [{ label: 'New task', action: onNewTask }] : []),
-                { label: 'MCP connections', action: onOpenMcp },
-                { label: 'Ask Chief of Staff', action: onOpenChiefOfStaff },
+                ...(mode === 'project' ? [{ label: t('New task'), action: onNewTask }] : []),
+                { label: t('MCP connections'), action: onOpenMcp },
+                { label: t('Ask Chief of Staff'), action: onOpenChiefOfStaff },
                 ...(mode === 'project'
                   ? [
-                      { label: 'Link repository', action: onOpenLinkRepo },
-                      { label: 'Archive / delete project', action: onOpenProjectManage, danger: true },
+                      { label: t('Link repository'), action: onOpenLinkRepo },
+                      { label: t('Archive / delete project'), action: onOpenProjectManage, danger: true },
                     ]
                   : []),
               ].map((item) => (

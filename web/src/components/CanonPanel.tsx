@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import type { CanonEntry } from '@atelier/contracts';
 import { api } from '../api';
+import { useT } from '../i18n';
 
 export function CanonPanel({ entries }: { entries: CanonEntry[] }) {
+  const t = useT();
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -14,7 +16,7 @@ export function CanonPanel({ entries }: { entries: CanonEntry[] }) {
       await action();
       setEditing(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not update Canon.');
+      setError(err instanceof Error ? err.message : t('Could not update Canon.'));
     } finally {
       setBusy(false);
     }
@@ -22,8 +24,8 @@ export function CanonPanel({ entries }: { entries: CanonEntry[] }) {
 
   return (
     <details className="canon-panel">
-      <summary>Canon <span>{entries.length}</span></summary>
-      {entries.length === 0 && <p>No saved decisions or assets yet.</p>}
+      <summary>{t('Canon')} <span>{entries.length}</span></summary>
+      {entries.length === 0 && <p>{t('No saved decisions or assets yet.')}</p>}
       {error && <p role="alert">{error}</p>}
       {entries.map((entry) => (
         <div key={entry.id} className="canon-entry">
@@ -43,11 +45,11 @@ export function CanonPanel({ entries }: { entries: CanonEntry[] }) {
                 title: String(form.get('title')), value: String(form.get('value')), path: entry.path,
               }));
             }}>
-              <input name="title" aria-label="Title" defaultValue={entry.title} maxLength={120} required />
-              <textarea name="value" aria-label="Value" defaultValue={entry.value} maxLength={300} required />
+              <input name="title" aria-label={t('Title')} defaultValue={entry.title} maxLength={120} required />
+              <textarea name="value" aria-label={t('Value')} defaultValue={entry.value} maxLength={300} required />
               <div className="canon-entry-actions">
-                <button disabled={busy}>Save</button>
-                <button type="button" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+                <button disabled={busy}>{t('Save')}</button>
+                <button type="button" disabled={busy} onClick={() => setEditing(null)}>{t('Cancel')}</button>
               </div>
             </form>
           ) : (
@@ -56,8 +58,8 @@ export function CanonPanel({ entries }: { entries: CanonEntry[] }) {
               <p>{entry.value}</p>
               {entry.path && <code>{entry.path}</code>}
               <div className="canon-entry-actions">
-                <button type="button" disabled={busy} onClick={() => setEditing(entry.id)}>Edit</button>
-                <button type="button" disabled={busy} onClick={() => void save(() => api.deleteCanon(entry))}>Delete</button>
+                <button type="button" disabled={busy} onClick={() => setEditing(entry.id)}>{t('Edit')}</button>
+                <button type="button" disabled={busy} onClick={() => void save(() => api.deleteCanon(entry))}>{t('Delete')}</button>
               </div>
             </>
           )}

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { api } from '../../api';
 import { toast } from '../Toast';
 import { ModalShell, primaryBtnStyle, secondaryBtnStyle } from './ModalShell';
+import { useT } from '../../i18n';
 
 type RowState = { state: 'pending' | 'busy' | 'done'; note?: string; error?: string };
 
@@ -12,6 +13,7 @@ type RowState = { state: 'pending' | 'busy' | 'done'; note?: string; error?: str
  * Each project can be pointed at its folder, re-cloned from GitHub, or left unlinked for now.
  */
 export function RelinkWizard({ candidates, onClose }: { candidates: RelinkCandidate[]; onClose: () => void }) {
+  const t = useT();
   const [rows, setRows] = useState<Record<string, RowState>>(() =>
     Object.fromEntries(candidates.map((c) => [c.projectId, { state: 'pending' as const }])),
   );
@@ -33,7 +35,7 @@ export function RelinkWizard({ candidates, onClose }: { candidates: RelinkCandid
       } else {
         set(c.projectId, { state: 'busy' });
         await api.unlinkRepo(c.projectId);
-        set(c.projectId, { state: 'done', note: 'Dilepas — bisa ditautkan lagi kapan saja' });
+        set(c.projectId, { state: 'done', note: t('Unlinked — you can link it again any time') });
       }
     } catch (err) {
       set(c.projectId, { state: 'pending', error: err instanceof Error ? err.message : 'Gagal' });
@@ -44,8 +46,8 @@ export function RelinkWizard({ candidates, onClose }: { candidates: RelinkCandid
 
   return (
     <ModalShell
-      title="Tautkan ulang folder repo"
-      subtitle={`${candidates.length} project menunjuk ke folder yang tidak ada di laptop ini.`}
+      title={t('Relink repo folders')}
+      subtitle={t('{length} projects point to folders that don’t exist on this laptop.', { length: candidates.length })}
       width={620}
       onClose={onClose}
     >
@@ -95,17 +97,17 @@ export function RelinkWizard({ candidates, onClose }: { candidates: RelinkCandid
               ) : (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   <button type="button" disabled={busy} onClick={() => run(c, 'folder')} style={secondaryBtnStyle}>
-                    <FolderOpen size={13} strokeWidth={1.6} /> Pilih folder…
+                    <FolderOpen size={13} strokeWidth={1.6} />{t('Choose folder…')}
                   </button>
                   {c.canClone && (
                     <button type="button" disabled={busy} onClick={() => run(c, 'clone')} style={secondaryBtnStyle}>
-                      <GitBranch size={13} strokeWidth={1.6} /> Clone dari GitHub
+                      <GitBranch size={13} strokeWidth={1.6} />{t('Clone from GitHub')}
                     </button>
                   )}
                   <button type="button" disabled={busy} onClick={() => run(c, 'unlink')} style={secondaryBtnStyle}>
-                    <Unlink size={13} strokeWidth={1.6} /> Lewati
+                    <Unlink size={13} strokeWidth={1.6} />{t('Skip')}
                   </button>
-                  {busy && <span style={{ fontSize: 12, color: 'var(--text-tertiary)', alignSelf: 'center' }}>{row.note ?? 'Menautkan…'}</span>}
+                  {busy && <span style={{ fontSize: 12, color: 'var(--text-tertiary)', alignSelf: 'center' }}>{row.note ?? t('Linking…')}</span>}
                 </div>
               )}
               {row.error && <div style={{ fontSize: 11.5, color: 'var(--agent-red)' }}>{row.error}</div>}
@@ -118,11 +120,11 @@ export function RelinkWizard({ candidates, onClose }: { candidates: RelinkCandid
             type="button"
             style={primaryBtnStyle}
             onClick={() => {
-              if (remaining === 0) toast.success('Semua repo sudah tertaut');
+              if (remaining === 0) toast.success(t('All repos are linked'));
               onClose();
             }}
           >
-            {remaining === 0 ? 'Selesai' : `Nanti saja (${remaining} tersisa)`}
+            {remaining === 0 ? t('Done') : t('Later ({remaining} left)', { remaining })}
           </button>
         </div>
       </div>

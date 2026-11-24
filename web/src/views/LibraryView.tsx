@@ -1,3 +1,4 @@
+import { useT } from '../i18n';
 import type { LibraryImage } from '@atelier/contracts';
 import { ChevronLeft, ChevronRight, Download, ImageIcon, RefreshCw, Search, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
@@ -52,6 +53,7 @@ const iconButton: CSSProperties = {
 };
 
 export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps) {
+  const t = useT();
   const [images, setImages] = useState<LibraryImage[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -63,7 +65,7 @@ export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps
     api
       .libraryImages(projectId, agentId)
       .then((res) => setImages(res.images))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Gagal memuat library.'));
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : t('Could not load the library.')));
   }, [projectId, agentId]);
 
   useEffect(() => {
@@ -120,8 +122,8 @@ export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps
               setQuery(event.target.value);
               setOpenIndex(null);
             }}
-            placeholder="Cari gambar…"
-            aria-label="Cari gambar"
+            placeholder={t('Search images…')}
+            aria-label={t('Search images')}
             style={{
               flex: 1,
               minWidth: 0,
@@ -163,12 +165,12 @@ export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps
                   background: active ? 'var(--surface-2)' : 'transparent',
                 }}
               >
-                {item.label}
+                {t(item.label)}
               </button>
             );
           })}
         </div>
-        <button type="button" onClick={load} title="Muat ulang" aria-label="Muat ulang" className="transition-atelier" style={iconButton}>
+        <button type="button" onClick={load} title={t('Reload')} aria-label={t('Reload')} className="transition-atelier" style={iconButton}>
           <RefreshCw size={14} strokeWidth={1.75} />
         </button>
       </div>
@@ -176,7 +178,7 @@ export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps
       {error ? (
         <div style={{ color: 'var(--agent-red)', fontSize: 13 }}>{error}</div>
       ) : images === null ? (
-        <div style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Memuat library…</div>
+        <div style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>{t('Loading library…')}</div>
       ) : visible.length === 0 ? (
         <div
           style={{
@@ -191,9 +193,7 @@ export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps
           }}
         >
           <ImageIcon size={28} strokeWidth={1.25} />
-          {images.length === 0
-            ? 'Belum ada gambar. Lampirkan gambar di chat atau pilih opsi desain, dan hasilnya tersimpan di sini.'
-            : 'Tidak ada gambar yang cocok.'}
+          {images.length === 0 ? t('No images yet. Attach an image in chat or choose a design option and it will be saved here.') : t('No matching images.')}
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
@@ -246,7 +246,7 @@ export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps
                   {image.name}
                 </span>
                 <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                  {image.source === 'attachment' ? 'Upload' : 'Design'} · {formatSize(image.sizeBytes)} · {formatDate(image.createdAt)}
+                  {image.source === 'attachment' ? t('Upload') : t('Design')} · {formatSize(image.sizeBytes)} · {formatDate(image.createdAt)}
                 </span>
               </div>
             </button>
@@ -281,10 +281,10 @@ export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps
             <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
               {(openIndex ?? 0) + 1} / {visible.length}
             </span>
-            <a href={current.url} download={downloadName(current)} title="Unduh" aria-label="Unduh" style={iconButton}>
+            <a href={current.url} download={downloadName(current)} title={t('Download')} aria-label={t('Download')} style={iconButton}>
               <Download size={14} strokeWidth={1.75} />
             </a>
-            <button type="button" onClick={() => setOpenIndex(null)} title="Tutup" aria-label="Tutup" style={iconButton}>
+            <button type="button" onClick={() => setOpenIndex(null)} title={t('Close')} aria-label={t('Close')} style={iconButton}>
               <X size={14} strokeWidth={1.75} />
             </button>
           </div>
@@ -296,7 +296,7 @@ export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps
               type="button"
               onClick={() => setOpenIndex((i) => Math.max(0, (i ?? 0) - 1))}
               disabled={(openIndex ?? 0) === 0}
-              aria-label="Sebelumnya"
+              aria-label={t('Previous')}
               style={{ ...iconButton, opacity: (openIndex ?? 0) === 0 ? 0.35 : 1 }}
             >
               <ChevronLeft size={16} strokeWidth={1.75} />
@@ -316,7 +316,7 @@ export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps
               type="button"
               onClick={() => setOpenIndex((i) => Math.min(visible.length - 1, (i ?? 0) + 1))}
               disabled={(openIndex ?? 0) >= visible.length - 1}
-              aria-label="Berikutnya"
+              aria-label={t('Next')}
               style={{ ...iconButton, opacity: (openIndex ?? 0) >= visible.length - 1 ? 0.35 : 1 }}
             >
               <ChevronRight size={16} strokeWidth={1.75} />

@@ -2,6 +2,7 @@ import type { McpOAuthStatus } from '@atelier/contracts';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { toast } from '../components/Toast';
+import { t } from '../i18n';
 
 /** Login (OAuth) state for MCP servers + the popup login flow, shared by the Plugins page and chat menu. */
 export function useMcpOAuth() {
@@ -25,8 +26,8 @@ export function useMcpOAuth() {
       const d = e.data as { type?: string; ok?: boolean; message?: string } | null;
       if (d?.type !== 'atelier-mcp-oauth' || e.source !== popupRef.current) return;
       setConnectingId(null);
-      setError(d.ok ? null : (d.message ?? 'Login failed'));
-      if (d.ok) toast.success('Logged in. Connection is ready.');
+      setError(d.ok ? null : (d.message ?? t('Login failed')));
+      if (d.ok) toast.success(t('Logged in. Connection is ready.'));
       void refresh();
     };
     window.addEventListener('message', onMessage);
@@ -51,12 +52,12 @@ export function useMcpOAuth() {
     popupRef.current = w;
     try {
       const { authUrl } = await api.startMcpOAuth(id);
-      if (!w) throw new Error('The login window was blocked. Allow popups for this page and try again.');
+      if (!w) throw new Error(t('The login window was blocked. Allow popups for this page and try again.'));
       w.location.href = authUrl;
     } catch (err) {
       w?.close();
       setConnectingId(null);
-      const message = err instanceof Error ? err.message : 'Could not start login';
+      const message = err instanceof Error ? err.message : t('Could not start login');
       setError(message);
       toast.error(message);
     }
@@ -67,9 +68,9 @@ export function useMcpOAuth() {
       try {
         await api.disconnectMcpOAuth(id);
         await refresh();
-        toast.info('Logged out');
+        toast.info(t('Logged out'));
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to disconnect');
+        toast.error(err instanceof Error ? err.message : t('Failed to disconnect'));
       }
     },
     [refresh],

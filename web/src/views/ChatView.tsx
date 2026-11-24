@@ -1,3 +1,4 @@
+import { useT } from '../i18n';
 import {
   BUILT_IN_MODELS,
   parseMessageSegments,
@@ -107,6 +108,7 @@ export function ChatView({
   onOpenTask,
   onOpenEditAgent,
 }: ChatViewProps) {
+  const tr = useT();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [expandedWorkIds, setExpandedWorkIds] = useState<Record<string, boolean>>({});
@@ -183,14 +185,14 @@ export function ChatView({
 
   const suggestions = project
     ? [
-        'Review open tasks in this project and propose an execution plan',
-        'Inspect the workspace repository and summarize what exists so far',
-        'Create a task breakdown for my next feature and start on the first item',
+        tr('Review open tasks in this project and propose an execution plan'),
+        tr('Inspect the workspace repository and summarize what exists so far'),
+        tr('Create a task breakdown for my next feature and start on the first item'),
       ]
     : [
-        'Summarize all your open tasks and deliverables across projects',
-        'Help me with a quick ad-hoc task outside any project',
-        'Coordinate directly with another agent on the team to review something',
+        tr('Summarize all your open tasks and deliverables across projects'),
+        tr('Help me with a quick ad-hoc task outside any project'),
+        tr('Coordinate directly with another agent on the team to review something'),
       ];
 
   return (
@@ -207,7 +209,7 @@ export function ChatView({
     >
       {threadMessages.length > 0 && (
         <div
-          aria-label="Conversation scrubber"
+          aria-label={tr('Conversation scrubber')}
           style={{
             width: 24,
             flexShrink: 0,
@@ -291,7 +293,7 @@ export function ChatView({
               <button
                 type="button"
                 onClick={onOpenEditAgent}
-                title="Edit instructions & skills"
+                title={tr('Edit instructions & skills')}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -305,17 +307,13 @@ export function ChatView({
                 }}
               >
                 <SlidersHorizontal size={11} strokeWidth={1.5} />
-                {enabledSkills.length} {enabledSkills.length === 1 ? 'skill' : 'skills'}
+                {enabledSkills.length} {enabledSkills.length === 1 ? tr('skill') : tr('skills')}
               </button>
             </div>
 
             <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', maxWidth: 500, lineHeight: '20px' }}>
-              {agent.systemInstructions.trim()
-                ? agent.systemInstructions.trim().slice(0, 220) +
-                  (agent.systemInstructions.trim().length > 220 ? '…' : '')
-                : project
-                  ? `Ready in ${project.name}. Give instructions directly here or dispatch Linear-style tasks from the Tasks tab.`
-                  : `Direct 1-on-1 channel with ${agent.name}. Ask for quick help outside any project or discuss reports across all assigned projects.`}
+              {agent.systemInstructions.trim() ? agent.systemInstructions.trim().slice(0, 220) +
+                  (agent.systemInstructions.trim().length > 220 ? '…' : '') : project ? tr('Ready in {name}. Give instructions directly here or dispatch Linear-style tasks from the Tasks tab.', { name: project.name }) : tr('Direct 1-on-1 channel with {name}. Ask for quick help outside any project or discuss reports across all assigned projects.', { name: agent.name })}
             </div>
 
             {enabledSkills.length > 0 && (
@@ -461,7 +459,7 @@ export function ChatView({
                       type="button"
                       onClick={() => toggleWork(msg.id)}
                       className="transition-atelier"
-                      title="Toggle compacted context memory"
+                      title={tr('Toggle compacted context memory')}
                       style={{
                         display: 'inline-flex',
                         alignItems: 'center',
@@ -475,10 +473,10 @@ export function ChatView({
                       }}
                     >
                       <Minimize2 size={12} strokeWidth={1.5} style={{ color: 'var(--agent-amber)' }} />
-                      <span>Context compacted</span>
+                      <span>{tr('Context compacted')}</span>
                       {compactedCount > 0 && (
                         <span className="mono-num" style={{ color: 'var(--text-secondary)' }}>
-                          · {compactedCount} msgs
+                          · {compactedCount}{tr('msgs')}
                         </span>
                       )}
                       {summaryOpen ? (
@@ -639,11 +637,7 @@ export function ChatView({
                       )}
                       <LayoutGrid size={13} strokeWidth={1.5} />
                       <span>
-                        {msg.streaming
-                          ? `Working · ${msgActivities.length} step${msgActivities.length === 1 ? '' : 's'}`
-                          : `Worked for ${formatDuration(msg.durationMs)}${
-                              msgActivities.length > 0 ? ` · ${msgActivities.length} tools` : ''
-                            }`}
+                        {msg.streaming ? tr('Working · {length} step{v1}', { length: msgActivities.length, v1: msgActivities.length === 1 ? '' : 's' }) : tr('Worked for {v0}{v1}', { v0: formatDuration(msg.durationMs), v1: msgActivities.length > 0 ? ` · ${msgActivities.length} tools` : '' })}
                       </span>
                     </button>
 
@@ -712,8 +706,7 @@ export function ChatView({
                     }}
                   >
                     <RefreshCw size={10} strokeWidth={1.75} />
-                    <span>
-                      Backup · {msg.metadata.fallbackTo.provider} / {msg.metadata.fallbackTo.model}
+                    <span>{tr('Backup ·')} {msg.metadata.fallbackTo.provider} / {msg.metadata.fallbackTo.model}
                     </span>
                   </div>
                 )}
@@ -756,8 +749,7 @@ export function ChatView({
                   })}
 
                 {msg.metadata?.cancelled && (
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    Stopped by user.
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{tr('Stopped by user.')}
                   </div>
                 )}
 
@@ -776,7 +768,7 @@ export function ChatView({
                           color: 'var(--text-secondary)',
                         }}
                       >
-                        <span>Messaged</span>
+                        <span>{tr('Messaged')}</span>
                         <span
                           style={{
                             width: 8,
@@ -825,7 +817,7 @@ export function ChatView({
                     }}
                   >
                     <DotMatrixGrid pulsing color="var(--text-secondary)" />
-                    <span>{latestTool ? `${latestTool.label}…` : 'Working…'}</span>
+                    <span>{latestTool ? `${latestTool.label}…` : tr('Working…')}</span>
                     <LiveTimer startIso={msg.createdAt} />
                   </div>
                 ) : (
@@ -842,7 +834,7 @@ export function ChatView({
                     <span>{formatTime(msg.createdAt)}</span>
                     <button
                       type="button"
-                      title="Copy reply"
+                      title={tr('Copy reply')}
                       onClick={() => void handleCopy(msg.id, msg.text)}
                       style={{ display: 'inline-flex', alignItems: 'center' }}
                     >
@@ -855,7 +847,7 @@ export function ChatView({
                     {project && onCreateTaskFromReply && (
                       <button
                         type="button"
-                        title="Create task from this reply"
+                        title={tr('Create task from this reply')}
                         onClick={() => onCreateTaskFromReply(msg.text.slice(0, 400))}
                         style={{ display: 'inline-flex', alignItems: 'center' }}
                       >
@@ -864,7 +856,7 @@ export function ChatView({
                     )}
                     <button
                       type="button"
-                      title="Follow up in composer"
+                      title={tr('Follow up in composer')}
                       onClick={() => onReplyText(msg.text)}
                       style={{ display: 'inline-flex', alignItems: 'center' }}
                     >
@@ -901,7 +893,7 @@ export function ChatView({
                   />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
-                      {agent.pendingFallback.failedProvider} · {agent.pendingFallback.failedModel} stopped (
+                      {agent.pendingFallback.failedProvider} · {agent.pendingFallback.failedModel}{tr('stopped (')}
                       {agent.pendingFallback.errorKind.replace('_', ' ')})
                     </div>
                     <div
@@ -944,8 +936,7 @@ export function ChatView({
                         fontWeight: 500,
                       }}
                     >
-                      <RefreshCw size={12} strokeWidth={1.75} />
-                      Continue with {formatModelLabel(cand.provider, cand.model)}
+                      <RefreshCw size={12} strokeWidth={1.75} />{tr('Continue with')} {formatModelLabel(cand.provider, cand.model)}
                     </button>
                   ))}
                 </div>
@@ -954,9 +945,9 @@ export function ChatView({
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 200 }}>
                   <Select
-                    ariaLabel="Choose another backup model"
+                    ariaLabel={tr('Choose another backup model')}
                     value={pickedFallback}
-                    placeholder="Or choose another model…"
+                    placeholder={tr('Or choose another model…')}
                     onChange={setPickedFallback}
                     options={(settings ? shownModels(allModels, settings) : allModels)
                       .filter(
@@ -995,8 +986,7 @@ export function ChatView({
                       fontWeight: 500,
                       flexShrink: 0,
                     }}
-                  >
-                    Run on selected
+                  >{tr('Run on selected')}
                   </button>
                 )}
               </div>
@@ -1025,8 +1015,7 @@ export function ChatView({
                     type="checkbox"
                     checked={makeDefaultOnRetry}
                     onChange={(e) => setMakeDefaultOnRetry(e.target.checked)}
-                  />
-                  Also set as this agent&apos;s default model
+                  />{tr("Also set as this agent's default model")}
                 </label>
 
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
@@ -1046,8 +1035,7 @@ export function ChatView({
                       fontWeight: 500,
                     }}
                   >
-                    <RotateCcw size={11} strokeWidth={1.5} />
-                    Retry primary
+                    <RotateCcw size={11} strokeWidth={1.5} />{tr('Retry primary')}
                   </button>
                   {onDismissFallback && (
                     <button
@@ -1058,8 +1046,7 @@ export function ChatView({
                         fontSize: 11.5,
                         color: 'var(--text-tertiary)',
                       }}
-                    >
-                      Dismiss
+                    >{tr('Dismiss')}
                     </button>
                   )}
                 </div>
@@ -1097,8 +1084,7 @@ export function ChatView({
                   flexShrink: 0,
                 }}
               >
-                <RotateCcw size={12} strokeWidth={1.5} />
-                Retry
+                <RotateCcw size={12} strokeWidth={1.5} />{tr('Retry')}
               </button>
             </div>
           )

@@ -1,3 +1,4 @@
+import { useT } from '../../i18n';
 import {
   AGENT_COLORS,
   AGENT_TEMPLATES,
@@ -49,6 +50,7 @@ export function AgentModal({
   onDeleted?: () => void;
   onOpenMcp?: () => void;
 }) {
+  const tr = useT();
   const isEdit = Boolean(existingAgent);
 
   const [name, setName] = useState(existingAgent?.name ?? '');
@@ -133,7 +135,7 @@ export function AgentModal({
       setSkills((prev) => [...prev, nextSkill]);
       setLocalSkillPath('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to read skill file');
+      setError(err instanceof Error ? err.message : tr('Failed to read skill file'));
     } finally {
       setImportingFile(false);
     }
@@ -172,7 +174,7 @@ export function AgentModal({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !role.trim()) {
-      setError('Agent name and role are required.');
+      setError(tr('Agent name and role are required.'));
       return;
     }
     setSaving(true);
@@ -197,10 +199,10 @@ export function AgentModal({
           ? await api.createAgent(project.id, payload)
           : await api.createGlobalAgent(payload);
       onSaved(res.agent);
-      toast.success(isEdit ? `Saved changes to ${res.agent.name}` : `Agent “${res.agent.name}” created`);
+      toast.success(isEdit ? tr('Saved changes to {name}', { name: res.agent.name }) : tr('Agent “{name}” created', { name: res.agent.name }));
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save agent');
+      setError(err instanceof Error ? err.message : tr('Failed to save agent'));
     } finally {
       setSaving(false);
     }
@@ -211,19 +213,19 @@ export function AgentModal({
     setSaving(true);
     try {
       await api.deleteAgent(existingAgent.id);
-      toast.deleted(`Agent “${existingAgent.name}” removed`);
+      toast.deleted(tr('Agent “{name}” removed', { name: existingAgent.name }));
       onDeleted?.();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete agent');
+      setError(err instanceof Error ? err.message : tr('Failed to delete agent'));
       setSaving(false);
     }
   };
 
   return (
     <ModalShell
-      title={isEdit ? `Configure ${existingAgent?.name}` : 'Add custom agent'}
-      subtitle="Define role, instructions, model override, and installable skills for this bot."
+      title={isEdit ? tr('Configure {name}', { name: existingAgent?.name ?? '' }) : tr('Add custom agent')}
+      subtitle={tr('Define role, instructions, model override, and installable skills for this bot.')}
       width={680}
       onClose={onClose}
     >
@@ -241,7 +243,7 @@ export function AgentModal({
           }}
         >
           <div
-            title="Click to poke!"
+            title={tr('Click to poke!')}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -263,7 +265,7 @@ export function AgentModal({
           {/* 18-color 2x9 swatch grid */}
           <div
             role="radiogroup"
-            aria-label="Mascot color"
+            aria-label={tr('Mascot color')}
             style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(9, 24px)',
@@ -301,7 +303,7 @@ export function AgentModal({
           {/* 12-shape 3D fuzzy mascot picker */}
           <div
             role="radiogroup"
-            aria-label="Mascot shape"
+            aria-label={tr('Mascot shape')}
             style={{
               display: 'flex',
               flexWrap: 'wrap',
@@ -349,7 +351,7 @@ export function AgentModal({
 
         {/* Starter presets */}
         {!isEdit && (
-          <Section title="Start from a preset" hint="Optional. Fills in everything below.">
+          <Section title={tr('Start from a preset')} hint={tr('Optional. Fills in everything below.')}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
               {AGENT_TEMPLATES.map((tpl) => {
                 const on = activeTpl === tpl.id;
@@ -404,26 +406,26 @@ export function AgentModal({
         )}
 
         {/* Identity */}
-        <Section title="Identity">
+        <Section title={tr('Identity')}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
-              <label style={labelStyle}>Agent name</label>
+              <label style={labelStyle}>{tr('Agent name')}</label>
               <input
                 type="text"
                 autoFocus
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Tyr, QA Reviewer, Architect"
+                placeholder={tr('e.g. Tyr, QA Reviewer, Architect')}
                 style={inputStyle}
               />
             </div>
             <div>
-              <label style={labelStyle}>Role / specialty</label>
+              <label style={labelStyle}>{tr('Role / specialty')}</label>
               <input
                 type="text"
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
-                placeholder="e.g. Backend API & Tests"
+                placeholder={tr('e.g. Backend API & Tests')}
                 style={inputStyle}
               />
             </div>
@@ -431,12 +433,12 @@ export function AgentModal({
         </Section>
 
         {/* Model & permissions */}
-        <Section title="Model & permissions">
+        <Section title={tr('Model & permissions')}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: 12 }}>
             <div>
-              <label style={labelStyle}>Provider</label>
+              <label style={labelStyle}>{tr('Provider')}</label>
               <Select
-                ariaLabel="Provider"
+                ariaLabel={tr('Provider')}
                 value={providerOverride}
                 onChange={(v) => {
                   const next = v as ModelProvider | '';
@@ -444,20 +446,20 @@ export function AgentModal({
                   if (!next) setModelOverride('');
                 }}
                 options={[
-                  { value: '', label: `Workspace default (${settings.provider})` },
-                  { value: 'claude', label: 'Claude' },
-                  { value: 'openai', label: 'ChatGPT' },
-                  { value: 'antigravity', label: 'Antigravity' },
-                  { value: 'deepseek', label: 'DeepSeek' },
-                  { value: 'openrouter', label: 'OpenRouter' },
-                  { value: 'opencode', label: 'OpenCode' },
+                  { value: '', label: tr('Workspace default ({provider})', { provider: settings.provider }) },
+                  { value: 'claude', label: tr('Claude') },
+                  { value: 'openai', label: tr('ChatGPT') },
+                  { value: 'antigravity', label: tr('Antigravity') },
+                  { value: 'deepseek', label: tr('DeepSeek') },
+                  { value: 'openrouter', label: tr('OpenRouter') },
+                  { value: 'opencode', label: tr('OpenCode') },
                 ]}
               />
             </div>
             <div>
-              <label style={labelStyle}>Model</label>
+              <label style={labelStyle}>{tr('Model')}</label>
               <Select
-                ariaLabel="Model"
+                ariaLabel={tr('Model')}
                 value={modelOverride}
                 onChange={(val) => {
                   setModelOverride(val);
@@ -465,7 +467,7 @@ export function AgentModal({
                   if (found) setProviderOverride(found.provider);
                 }}
                 options={[
-                  { value: '', label: `Workspace default (${settings.model})` },
+                  { value: '', label: tr('Workspace default ({model})', { model: settings.model }) },
                   ...shownModels(allModels, settings, {
                     provider: providerOverride,
                     model: modelOverride,
@@ -490,11 +492,10 @@ export function AgentModal({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)' }}>
-                Backup models (optional override)
+              <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)' }}>{tr('Backup models (optional override)')}
               </span>
               <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                {fallbackChain.length === 0 ? 'Inherits workspace chain' : `${fallbackChain.length} configured`}
+                {fallbackChain.length === 0 ? tr('Inherits workspace chain') : tr('{length} configured', { length: fallbackChain.length })}
               </span>
             </div>
             {fallbackChain.length > 0 && (
@@ -527,7 +528,7 @@ export function AgentModal({
                         onClick={() =>
                           setFallbackChain((prev) => prev.filter((_, i) => i !== idx))
                         }
-                        title="Remove"
+                        title={tr('Remove')}
                         style={{ color: 'var(--text-muted)', display: 'inline-flex' }}
                       >
                         <Trash2 size={11} strokeWidth={1.5} />
@@ -539,9 +540,9 @@ export function AgentModal({
             )}
             {fallbackChain.length < 5 && (
               <Select
-                ariaLabel="Add agent backup model"
+                ariaLabel={tr('Add agent backup model')}
                 value=""
-                placeholder="Add backup model override…"
+                placeholder={tr('Add backup model override…')}
                 onChange={(val) => {
                   const [prov, ...rest] = val.split(':');
                   const modId = rest.join(':');
@@ -579,32 +580,29 @@ export function AgentModal({
             }}
           >
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>
-                Shell & code editing
+              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{tr('Shell & code editing')}
               </div>
-              <div style={{ fontSize: 11.5, lineHeight: '16px', color: 'var(--text-tertiary)', marginTop: 2 }}>
-                Lets the agent run commands and edit files in the repository workspace. Turn off for
-                read-only or spec-writing bots.
+              <div style={{ fontSize: 11.5, lineHeight: '16px', color: 'var(--text-tertiary)', marginTop: 2 }}>{tr('Lets the agent run commands and edit files in the repository workspace. Turn off for read-only or spec-writing bots.')}
               </div>
             </div>
-            <Switch checked={allowShell} onChange={setAllowShell} label="Allow shell and code editing" />
+            <Switch checked={allowShell} onChange={setAllowShell} label={tr('Allow shell and code editing')} />
           </div>
         </Section>
 
         {/* System instructions */}
-        <Section title="System instructions">
+        <Section title={tr('System instructions')}>
           <textarea
             rows={4}
             value={systemInstructions}
             onChange={(e) => setSystemInstructions(e.target.value)}
-            placeholder="Persona rules, coding conventions, output format, constraints…"
+            placeholder={tr('Persona rules, coding conventions, output format, constraints…')}
             style={{ ...inputStyle, resize: 'vertical', lineHeight: '19px' }}
           />
         </Section>
 
         {/* Skills */}
         <Section
-          title="Skills"
+          title={tr('Skills')}
           count={`${skills.filter((s) => s.enabled).length}/${skills.length}`}
           action={
             <button
@@ -618,8 +616,7 @@ export function AgentModal({
                 gap: 4,
               }}
             >
-              <Plus size={12} strokeWidth={1.5} />
-              Write custom skill
+              <Plus size={12} strokeWidth={1.5} />{tr('Write custom skill')}
             </button>
           }
         >
@@ -639,7 +636,7 @@ export function AgentModal({
                     opacity: sk.enabled ? 1 : 0.6,
                   }}
                 >
-                  <Switch checked={sk.enabled} onChange={() => toggleSkill(sk.id)} label={`Enable ${sk.name}`} small />
+                  <Switch checked={sk.enabled} onChange={() => toggleSkill(sk.id)} label={tr('Enable {name}', { name: sk.name })} small />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)' }}>
                       {sk.name}
@@ -659,7 +656,7 @@ export function AgentModal({
                   <button
                     type="button"
                     onClick={() => removeSkill(sk.id)}
-                    title="Uninstall skill"
+                    title={tr('Uninstall skill')}
                     style={{ color: 'var(--text-muted)', padding: 4 }}
                   >
                     <Trash2 size={13} strokeWidth={1.5} />
@@ -669,8 +666,7 @@ export function AgentModal({
             </div>
           )}
 
-          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginBottom: 6 }}>
-            Add a built-in skill
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginBottom: 6 }}>{tr('Add a built-in skill')}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {BUILT_IN_SKILLS.map((preset) => {
@@ -710,7 +706,7 @@ export function AgentModal({
               type="text"
               value={localSkillPath}
               onChange={(e) => setLocalSkillPath(e.target.value)}
-              placeholder="Or import a local SKILL.md, e.g. D:\Skills\my-skill\SKILL.md"
+              placeholder={tr('Or import a local SKILL.md, e.g. D:\\Skills\\my-skill\\SKILL.md')}
               className="mono-num"
               style={{ ...inputStyle, fontSize: 12 }}
             />
@@ -721,7 +717,7 @@ export function AgentModal({
               style={{ ...secondaryBtnStyle, flexShrink: 0, fontSize: 12 }}
             >
               <FileText size={13} strokeWidth={1.5} />
-              {importingFile ? 'Reading…' : 'Import .md'}
+              {importingFile ? tr('Reading…') : tr('Import .md')}
             </button>
           </div>
 
@@ -744,14 +740,14 @@ export function AgentModal({
                   type="text"
                   value={customSkillName}
                   onChange={(e) => setCustomSkillName(e.target.value)}
-                  placeholder="Skill name (e.g. Prisma Migration)"
+                  placeholder={tr('Skill name (e.g. Prisma Migration)')}
                   style={inputStyle}
                 />
                 <input
                   type="text"
                   value={customSkillDesc}
                   onChange={(e) => setCustomSkillDesc(e.target.value)}
-                  placeholder="Short description"
+                  placeholder={tr('Short description')}
                   style={inputStyle}
                 />
               </div>
@@ -759,7 +755,7 @@ export function AgentModal({
                 rows={3}
                 value={customSkillContent}
                 onChange={(e) => setCustomSkillContent(e.target.value)}
-                placeholder="Skill markdown instructions…"
+                placeholder={tr('Skill markdown instructions…')}
                 style={{ ...inputStyle, resize: 'vertical' }}
               />
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
@@ -767,16 +763,14 @@ export function AgentModal({
                   type="button"
                   onClick={() => setWritingCustomSkill(false)}
                   style={{ ...secondaryBtnStyle, height: 30, fontSize: 12 }}
-                >
-                  Cancel
+                >{tr('Cancel')}
                 </button>
                 <button
                   type="button"
                   onClick={handleAddCustomSkill}
                   disabled={!customSkillName.trim() || !customSkillContent.trim()}
                   style={{ ...primaryBtnStyle, height: 30, fontSize: 12 }}
-                >
-                  Install skill
+                >{tr('Install skill')}
                 </button>
               </div>
             </div>
@@ -785,7 +779,7 @@ export function AgentModal({
 
         {/* MCP connections */}
         <Section
-          title="MCP connections"
+          title={tr('MCP connections')}
           count={`${mcpServerIds.filter((id) => settings.mcpServers.some((m) => m.id === id && m.enabled)).length} active`}
           action={
             onOpenMcp && (
@@ -798,8 +792,7 @@ export function AgentModal({
                   textDecoration: 'underline',
                   textUnderlineOffset: 3,
                 }}
-              >
-                Manage connections…
+              >{tr('Manage connections…')}
               </button>
             )
           }
@@ -814,9 +807,7 @@ export function AgentModal({
                 lineHeight: '18px',
                 color: 'var(--text-tertiary)',
               }}
-            >
-              No MCP servers yet. Use “Manage connections…” to log in to a service or add a command,
-              URL, or JSON.
+            >{tr('No MCP servers yet. Use “Manage connections…” to log in to a service or add a command, URL, or JSON.')}
             </div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
@@ -859,7 +850,7 @@ export function AgentModal({
                         {srv.name}
                       </span>
                       <span className="mono-num" style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
-                        {srv.auth === 'oauth' ? 'login' : srv.transport}
+                        {srv.auth === 'oauth' ? tr('login') : srv.transport}
                         {!srv.enabled && ' · disabled'}
                       </span>
                     </span>
@@ -924,8 +915,7 @@ export function AgentModal({
                   type="button"
                   onClick={() => setConfirmDelete(true)}
                   style={{ ...secondaryBtnStyle, color: 'var(--agent-red)' }}
-                >
-                  Remove agent
+                >{tr('Remove agent')}
                 </button>
               ) : (
                 <button
@@ -937,16 +927,14 @@ export function AgentModal({
                     borderColor: 'rgba(248, 113, 113, 0.45)',
                     color: 'var(--agent-red)',
                   }}
-                >
-                  Confirm delete
+                >{tr('Confirm delete')}
                 </button>
               )}
             </div>
           )}
 
           <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" onClick={onClose} style={secondaryBtnStyle}>
-              Cancel
+            <button type="button" onClick={onClose} style={secondaryBtnStyle}>{tr('Cancel')}
             </button>
             <button
               type="submit"
@@ -956,7 +944,7 @@ export function AgentModal({
                 opacity: !name.trim() || !role.trim() ? 0.45 : 1,
               }}
             >
-              {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create agent'}
+              {saving ? tr('Saving…') : isEdit ? tr('Save changes') : tr('Create agent')}
             </button>
           </div>
         </div>

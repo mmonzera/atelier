@@ -1,4 +1,5 @@
-import type { ApiErrorResponse, LibraryImage, Message } from '@atelier/contracts';
+import { createHash } from 'node:crypto';
+import { type ApiErrorResponse, type LibraryImage, type Message, extractSvgBlocks } from '@atelier/contracts';
 import { Hono } from 'hono';
 import { AttachmentStore, INLINE_IMAGE_MIMES, sniffImage } from './attachments.js';
 import type { AppConfig } from './config.js';
@@ -68,6 +69,27 @@ export function createLibraryRoutes(deps: { store: AtelierStore; config: AppConf
       });
     }
 
+    // SVG drawings the agent wrote in its replies (fenced code). Same drawing posted twice = one entry.
+    const seenSvg = new Set<string>();
+    for (const message of store.listMessagesWithSvg(projectId, agentId)) {
+      for (const block of extractSvgBlocks(message.text)) {
+        if (!block.closed) continue;
+        const hash = createHash('sha1').update(block.svg).digest('hex');
+        if (seenSvg.has(hash)) continue;
+        seenSvg.add(hash);
+        images.push({
+          id: `svg_${message.id}_${block.index}`,
+          source: 'artifact',
+          name: block.name,
+          mime: 'image/svg+xml',
+          sizeBytes: Buffer.byteLength(block.svg),
+          url: `/api/projects/${encodeURIComponent(scope)}/library/svg/${encodeURIComponent(message.id)}/${block.index}`,
+          createdAt: message.createdAt,
+          messageId: message.id,
+        });
+      }
+    }
+
     images.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return c.json({ images });
   });
@@ -93,6 +115,28 @@ export function createLibraryRoutes(deps: { store: AtelierStore; config: AppConf
     return new Response(new Uint8Array(bytes), {
       headers: {
         'Content-Type': mime,
+        'Content-Length': String(bytes.length),
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        'X-Content-Type-Options': 'nosniff',
+        'Cross-Origin-Resource-Policy': 'same-origin',
+        'Cache-Control': 'private, max-age=3600',
+      },
+    });
+  });
+
+  // One SVG written in a chat reply, served as an image (sandboxed, so scripts inside never run).
+  api.get('/projects/:id/library/svg/:messageId/:index', (c) => {
+    const scope = c.req.param('id');
+    const message = store.getMessage(c.req.param('messageId'));
+    if (!message || message.author !== 'agent' || (message.projectId ?? 'direct') !== scope) {
+      return c.json(apiError('not_found', 'Gambar tidak ditemukan.'), 404);
+    }
+    const block = extractSvgBlocks(message.text).find((b) => b.index === Number(c.req.param('index')));
+    if (!block) return c.json(apiError('not_found', 'Gambar tidak ditemukan.'), 404);
+    const bytes = Buffer.from(block.svg, 'utf8');
+    return new Response(new Uint8Array(bytes), {
+      headers: {
+        'Content-Type': 'image/svg+xml',
         'Content-Length': String(bytes.length),
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
         'X-Content-Type-Options': 'nosniff',

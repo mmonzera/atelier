@@ -9,6 +9,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useState } from 'react';
+import { useT } from '../i18n';
 
 export function QaReportCard({
   run,
@@ -19,6 +20,7 @@ export function QaReportCard({
   compact?: boolean;
   onSendFailuresToAgent?: (run: QaRun) => void;
 }) {
+  const t = useT();
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(!run.passed);
 
@@ -55,8 +57,7 @@ export function QaReportCard({
             ) : (
               <XCircle size={15} strokeWidth={1.75} style={{ color: 'var(--agent-red)', flexShrink: 0 }} />
             )}
-            <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
-              Browser QA {run.passed ? 'Passed' : 'Failed'}
+            <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{t('Browser QA')} {run.passed ? t('Passed') : t('Failed')}
             </span>
             <span
               className="mono-num"
@@ -81,7 +82,7 @@ export function QaReportCard({
               }}
             >
               {run.watchLive ? <Eye size={11} /> : <EyeOff size={11} />}
-              {run.watchLive ? 'Watch live' : 'Headless'}
+              {run.watchLive ? t('Watch live') : t('Headless')}
             </span>
           </div>
 
@@ -101,8 +102,7 @@ export function QaReportCard({
                 fontWeight: 500,
               }}
             >
-              <Send size={11} strokeWidth={1.75} />
-              Fix in Chat
+              <Send size={11} strokeWidth={1.75} />{t('Fix in Chat')}
             </button>
           )}
         </div>
@@ -144,7 +144,7 @@ export function QaReportCard({
                   </span>
                 </span>
                 <span className="mono-num" style={{ fontSize: 10.5, color: 'var(--text-muted)', flexShrink: 0 }}>
-                  {s.durationMs}ms
+                  {s.durationMs}{t('ms')}
                 </span>
               </div>
             ))}
@@ -166,7 +166,7 @@ export function QaReportCard({
               }}
             >
               <AlertCircle size={12} />
-              {showErrors ? 'Hide' : 'Show'} {errorCount} console / network issue
+              {showErrors ? t('Hide') : t('Show')} {errorCount}{t('console / network issue')}
               {errorCount === 1 ? '' : 's'}
             </button>
             {showErrors && (
@@ -188,13 +188,11 @@ export function QaReportCard({
                 }}
               >
                 {run.pageErrors.map((err, i) => (
-                  <div key={`pe-${i}`} style={{ color: 'var(--agent-red)' }}>
-                    [PageError] {err}
+                  <div key={`pe-${i}`} style={{ color: 'var(--agent-red)' }}>{t('[PageError]')} {err}
                   </div>
                 ))}
                 {run.consoleErrors.map((err, i) => (
-                  <div key={`ce-${i}`} style={{ color: 'var(--agent-red)' }}>
-                    [Console] {err}
+                  <div key={`ce-${i}`} style={{ color: 'var(--agent-red)' }}>{t('[Console]')} {err}
                   </div>
                 ))}
                 {run.failedRequests.map((req, i) => (
@@ -214,7 +212,7 @@ export function QaReportCard({
                 key={shot.url}
                 type="button"
                 onClick={() => setLightboxUrl(shot.url)}
-                title={`View ${shot.label}`}
+                title={t('View {label}', { label: shot.label })}
                 style={{
                   display: 'flex',
                   flexDirection: 'column',
@@ -273,7 +271,7 @@ export function QaReportCard({
             <button
               type="button"
               onClick={() => setLightboxUrl(null)}
-              aria-label="Close screenshot"
+              aria-label={t('Close screenshot')}
               style={{
                 position: 'absolute',
                 top: 14,
@@ -292,7 +290,7 @@ export function QaReportCard({
             </button>
             <img
               src={lightboxUrl}
-              alt="QA Screenshot"
+              alt={t('QA Screenshot')}
               style={{
                 maxWidth: '85vw',
                 maxHeight: '82vh',

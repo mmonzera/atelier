@@ -1,3 +1,4 @@
+import { useT } from '../../i18n';
 import {
   MCP_PRESETS,
   type McpPreset,
@@ -69,6 +70,7 @@ export function McpModal({
   initialMode?: AddMode;
   initialPresetId?: string;
 }) {
+  const t = useT();
   const initialPreset = initialPresetId
     ? (MCP_PRESETS.find((p) => p.id === initialPresetId) ?? null)
     : null;
@@ -116,9 +118,9 @@ export function McpModal({
       const d = e.data as { type?: string; ok?: boolean; message?: string } | null;
       if (d?.type !== 'atelier-mcp-oauth' || e.source !== popupRef.current) return;
       setConnectingId(null);
-      setError(d.ok ? null : (d.message ?? 'Login failed'));
+      setError(d.ok ? null : (d.message ?? t('Login failed')));
       if (d.ok) {
-        toast.success('Logged in. Connection is ready.');
+        toast.success(t('Logged in. Connection is ready.'));
         if (addOnly) onClose();
       }
       void refreshOauth();
@@ -145,12 +147,12 @@ export function McpModal({
     popupRef.current = w;
     try {
       const { authUrl } = await api.startMcpOAuth(id, creds);
-      if (!w) throw new Error('The login window was blocked. Allow popups for this page and try again.');
+      if (!w) throw new Error(t('The login window was blocked. Allow popups for this page and try again.'));
       w.location.href = authUrl;
     } catch (err) {
       w?.close();
       setConnectingId(null);
-      setError(err instanceof Error ? err.message : 'Could not start login');
+      setError(err instanceof Error ? err.message : t('Could not start login'));
     }
   };
 
@@ -158,9 +160,9 @@ export function McpModal({
     try {
       await api.disconnectMcpOAuth(id);
       await refreshOauth();
-      toast.info('Logged out');
+      toast.info(t('Logged out'));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to disconnect');
+      setError(err instanceof Error ? err.message : t('Failed to disconnect'));
     }
   };
 
@@ -185,7 +187,7 @@ export function McpModal({
         [id]: {
           ok: false,
           tools: [],
-          error: err instanceof Error ? err.message : 'Test failed',
+          error: err instanceof Error ? err.message : t('Test failed'),
           durationMs: 0,
         },
       }));
@@ -198,7 +200,7 @@ export function McpModal({
     try {
       await api.updateMcpServer(s.id, { enabled: !s.enabled });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to toggle MCP server');
+      setError(err instanceof Error ? err.message : t('Failed to toggle MCP server'));
     }
   };
 
@@ -206,9 +208,9 @@ export function McpModal({
     try {
       const removed = settings.mcpServers.find((m) => m.id === id);
       await api.deleteMcpServer(id);
-      toast.deleted(`MCP server “${removed?.name ?? 'server'}” removed`);
+      toast.deleted(t('MCP server “{v0}” removed', { v0: removed?.name ?? 'server' }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to remove MCP server');
+      setError(err instanceof Error ? err.message : t('Failed to remove MCP server'));
     }
   };
 
@@ -222,7 +224,7 @@ export function McpModal({
       if (selectedPreset.auth === 'oauth') {
         const needsClient = selectedPreset.oauthClient === 'manual';
         if (needsClient && !oauthClientId.trim()) {
-          setError('Enter the Client ID of your OAuth app.');
+          setError(t('Enter the Client ID of your OAuth app.'));
           return;
         }
         const { server } = await api.createMcpServer({
@@ -279,10 +281,10 @@ export function McpModal({
         });
       }
       setSelectedPreset(null);
-      toast.success(`MCP server “${name}” added`);
+      toast.success(t('MCP server “{name}” added', { name }));
       if (addOnly) onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add preset MCP server');
+      setError(err instanceof Error ? err.message : t('Failed to add preset MCP server'));
     } finally {
       setBusy(false);
     }
@@ -320,10 +322,10 @@ export function McpModal({
       setCustomEnvText('');
       setCustomUrl('');
       setCustomHeadersText('');
-      toast.success('Custom MCP server added');
+      toast.success(t('Custom MCP server added'));
       if (addOnly) onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add custom MCP server');
+      setError(err instanceof Error ? err.message : t('Failed to add custom MCP server'));
     } finally {
       setBusy(false);
     }
@@ -337,10 +339,10 @@ export function McpModal({
     try {
       await api.importMcpJson(jsonText.trim());
       setJsonText('');
-      toast.success('MCP servers imported');
+      toast.success(t('MCP servers imported'));
       if (addOnly) onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid MCP JSON');
+      setError(err instanceof Error ? err.message : t('Invalid MCP JSON'));
     } finally {
       setBusy(false);
     }
@@ -355,8 +357,7 @@ export function McpModal({
         {/* Configured MCP servers */}
         <div style={{ display: addOnly ? 'none' : 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={labelStyle}>
-              Configured servers ({settings.mcpServers.length})
+            <span style={labelStyle}>{t('Configured servers (')}{settings.mcpServers.length})
             </span>
           </div>
 
@@ -376,8 +377,7 @@ export function McpModal({
               }}
             >
               <Plug size={18} strokeWidth={1.5} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
-              <span>
-                No MCP connections yet. Pick a preset below, or add a custom command/URL or pasted JSON.
+              <span>{t('No MCP connections yet. Pick a preset below, or add a custom command/URL or pasted JSON.')}
               </span>
             </div>
           ) : (
@@ -425,7 +425,7 @@ export function McpModal({
                         <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
                           <McpIcon presetId={s.presetId} name={s.name} size={30} />
                           <span
-                            title={probe ? (probe.ok ? 'Connected' : 'Failed') : 'Not tested'}
+                            title={probe ? (probe.ok ? t('Connected') : t('Failed')) : t('Not tested')}
                             style={{
                               position: 'absolute',
                               right: -2,
@@ -465,11 +465,7 @@ export function McpModal({
                               color: oauthConnected ? 'var(--agent-green)' : 'var(--agent-amber)',
                             }}
                           >
-                            {connectingId === s.id
-                              ? 'Waiting for login…'
-                              : oauthConnected
-                                ? 'Logged in'
-                                : 'Login needed'}
+                            {connectingId === s.id ? t('Waiting for login…') : oauthConnected ? t('Logged in') : t('Login needed')}
                           </span>
                         )}
                       </div>
@@ -495,7 +491,7 @@ export function McpModal({
                             ) : (
                               <LogIn size={12} strokeWidth={1.5} />
                             )}
-                            {oauthConnected ? 'Log out' : 'Log in'}
+                            {oauthConnected ? t('Log out') : t('Log in')}
                           </button>
                         )}
                         <label
@@ -512,8 +508,7 @@ export function McpModal({
                             type="checkbox"
                             checked={s.enabled}
                             onChange={() => void handleToggle(s)}
-                          />
-                          Enabled
+                          />{t('Enabled')}
                         </label>
                         <button
                           type="button"
@@ -530,12 +525,12 @@ export function McpModal({
                           }}
                         >
                           <FlaskConical size={12} strokeWidth={1.5} />
-                          {testingId === s.id ? 'Testing…' : 'Test'}
+                          {testingId === s.id ? t('Testing…') : t('Test')}
                         </button>
                         <button
                           type="button"
                           onClick={() => void handleDelete(s.id)}
-                          title="Delete MCP server"
+                          title={t('Delete MCP server')}
                           style={{ color: 'var(--text-muted)', padding: 4 }}
                         >
                           <Trash2 size={14} strokeWidth={1.5} />
@@ -563,11 +558,7 @@ export function McpModal({
                           color: probe.ok ? 'var(--agent-green)' : 'var(--agent-red)',
                         }}
                       >
-                        {probe.ok
-                          ? `Connected (${probe.durationMs}ms) · ${probe.tools.length} tool${
-                              probe.tools.length === 1 ? '' : 's'
-                            }${probe.tools.length > 0 ? `: ${probe.tools.slice(0, 6).join(', ')}${probe.tools.length > 6 ? '…' : ''}` : ''}`
-                          : probe.error || 'Connection test failed'}
+                        {probe.ok ? t('Connected ({durationMs}ms) · {length} tool{v2}{v3}', { durationMs: probe.durationMs, length: probe.tools.length, v2: probe.tools.length === 1 ? '' : 's', v3: probe.tools.length > 0 ? `: ${probe.tools.slice(0, 6).join(', ')}${probe.tools.length > 6 ? '…' : ''}` : '' }) : probe.error || t('Connection test failed')}
                       </div>
                     )}
                   </div>
@@ -600,9 +591,9 @@ export function McpModal({
           >
             {(
               [
-                { id: 'preset', label: 'Preset' },
-                { id: 'custom', label: 'Custom' },
-                { id: 'json', label: 'Paste JSON' },
+                { id: 'preset', label: t('Preset') },
+                { id: 'custom', label: t('Custom') },
+                { id: 'json', label: t('Paste JSON') },
               ] as const
             ).map((tab) => {
               const active = mode === tab.id;
@@ -694,7 +685,7 @@ export function McpModal({
                               flexShrink: 0,
                             }}
                           >
-                            {preset.auth === 'oauth' ? 'login' : preset.transport}
+                            {preset.auth === 'oauth' ? t('login') : preset.transport}
                           </span>
                           {selected && (
                             <Check
@@ -715,7 +706,7 @@ export function McpModal({
                             overflow: 'hidden',
                           }}
                         >
-                          {preset.description}
+                          {t(preset.description)}
                         </span>
                       </div>
                     </button>
@@ -738,11 +729,11 @@ export function McpModal({
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 500 }}>
                     <McpIcon presetId={selectedPreset.id} name={selectedPreset.name} size={24} />
-                    <span>Configure {selectedPreset.name}</span>
+                    <span>{t('Configure')} {selectedPreset.name}</span>
                   </div>
 
                   <div>
-                    <label style={labelStyle}>Server name</label>
+                    <label style={labelStyle}>{t('Server name')}</label>
                     <input
                       type="text"
                       value={presetName}
@@ -752,9 +743,7 @@ export function McpModal({
                   </div>
 
                   {selectedPreset.auth === 'oauth' && (
-                    <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--text-tertiary)' }}>
-                      You’ll log in to {selectedPreset.name} in a small window. No token to copy, and
-                      you can log out any time.
+                    <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--text-tertiary)' }}>{t('You’ll log in to')} {selectedPreset.name}{t('in a small window. No token to copy, and you can log out any time.')}
                     </div>
                   )}
 
@@ -771,11 +760,10 @@ export function McpModal({
                           border: '1px solid var(--border-subtle)',
                         }}
                       >
-                        {selectedPreset.name} can’t register apps automatically. Create an OAuth app
+                        {selectedPreset.name}{t('can’t register apps automatically. Create an OAuth app')}
                         {selectedPreset.docsUrl && (
                           <>
-                            {' '}
-                            at{' '}
+                            {' '}{t('at')}{' '}
                             <a
                               href={selectedPreset.docsUrl}
                               target="_blank"
@@ -785,15 +773,13 @@ export function McpModal({
                               {selectedPreset.docsUrl.replace('https://', '')}
                             </a>
                           </>
-                        )}
-                        , set its callback URL to{' '}
+                        )}{t(', set its callback URL to')}{' '}
                         <code className="mono-num" style={{ color: 'var(--text-primary)', wordBreak: 'break-all' }}>
-                          {redirectUri || 'http://127.0.0.1:8787/api/mcp/oauth/callback'}
-                        </code>
-                        , then paste its credentials. They stay on this machine.
+                          {redirectUri || t('http://127.0.0.1:8787/api/mcp/oauth/callback')}
+                        </code>{t(', then paste its credentials. They stay on this machine.')}
                       </div>
                       <div>
-                        <label style={labelStyle}>Client ID</label>
+                        <label style={labelStyle}>{t('Client ID')}</label>
                         <input
                           type="text"
                           value={oauthClientId}
@@ -803,7 +789,7 @@ export function McpModal({
                         />
                       </div>
                       <div>
-                        <label style={labelStyle}>Client secret</label>
+                        <label style={labelStyle}>{t('Client secret')}</label>
                         <input
                           type="password"
                           value={oauthClientSecret}
@@ -817,7 +803,7 @@ export function McpModal({
 
                   {selectedPreset.argHint && (
                     <div>
-                      <label style={labelStyle}>Target argument ({selectedPreset.argHint})</label>
+                      <label style={labelStyle}>{t('Target argument (')}{selectedPreset.argHint})</label>
                       <input
                         type="text"
                         value={presetExtraArg}
@@ -838,7 +824,7 @@ export function McpModal({
                         onChange={(e) =>
                           setPresetSecrets((prev) => ({ ...prev, [k]: e.target.value }))
                         }
-                        placeholder={`Paste ${k}`}
+                        placeholder={t('Paste {k}', { k })}
                         className="mono-num"
                         style={inputStyle}
                       />
@@ -847,14 +833,14 @@ export function McpModal({
 
                   {(selectedPreset.headerKeys ?? []).map((k) => (
                     <div key={k}>
-                      <label style={labelStyle}>Header: {k}</label>
+                      <label style={labelStyle}>{t('Header:')} {k}</label>
                       <input
                         type="password"
                         value={presetSecrets[k] ?? ''}
                         onChange={(e) =>
                           setPresetSecrets((prev) => ({ ...prev, [k]: e.target.value }))
                         }
-                        placeholder="Bearer ..."
+                        placeholder={t('Bearer ...')}
                         className="mono-num"
                         style={inputStyle}
                       />
@@ -866,15 +852,10 @@ export function McpModal({
                       type="button"
                       onClick={() => (inline ? onClose() : setSelectedPreset(null))}
                       style={secondaryBtnStyle}
-                    >
-                      Cancel
+                    >{t('Cancel')}
                     </button>
                     <button type="submit" disabled={busy} style={primaryBtnStyle}>
-                      {busy
-                        ? 'Adding…'
-                        : selectedPreset.auth === 'oauth'
-                          ? 'Log in & connect'
-                          : 'Add MCP server'}
+                      {busy ? t('Adding…') : selectedPreset.auth === 'oauth' ? t('Log in & connect') : t('Add MCP server')}
                     </button>
                   </div>
                 </form>
@@ -886,25 +867,25 @@ export function McpModal({
             <form onSubmit={handleAddCustom} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 10 }}>
                 <div>
-                  <label style={labelStyle}>Server name</label>
+                  <label style={labelStyle}>{t('Server name')}</label>
                   <input
                     type="text"
                     value={customName}
                     onChange={(e) => setCustomName(e.target.value)}
-                    placeholder="e.g. my-internal-api"
+                    placeholder={t('e.g. my-internal-api')}
                     style={inputStyle}
                   />
                 </div>
                 <div>
-                  <label style={labelStyle}>Transport</label>
+                  <label style={labelStyle}>{t('Transport')}</label>
                   <Select
-                    ariaLabel="Transport"
+                    ariaLabel={t('Transport')}
                     value={customTransport}
                     onChange={(v) => setCustomTransport(v as McpTransport)}
                     options={[
-                      { value: 'stdio', label: 'stdio (local command)' },
-                      { value: 'http', label: 'http (Streamable HTTP)' },
-                      { value: 'sse', label: 'sse (legacy SSE URL)' },
+                      { value: 'stdio', label: t('stdio (local command)') },
+                      { value: 'http', label: t('http (Streamable HTTP)') },
+                      { value: 'sse', label: t('sse (legacy SSE URL)') },
                     ]}
                   />
                 </div>
@@ -914,35 +895,35 @@ export function McpModal({
                 <>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: 10 }}>
                     <div>
-                      <label style={labelStyle}>Command</label>
+                      <label style={labelStyle}>{t('Command')}</label>
                       <input
                         type="text"
                         value={customCommand}
                         onChange={(e) => setCustomCommand(e.target.value)}
-                        placeholder="npx, uvx, node, python..."
+                        placeholder={t('npx, uvx, node, python...')}
                         className="mono-num"
                         style={inputStyle}
                       />
                     </div>
                     <div>
-                      <label style={labelStyle}>Args (space-separated or 1 per line)</label>
+                      <label style={labelStyle}>{t('Args (space-separated or 1 per line)')}</label>
                       <textarea
                         rows={2}
                         value={customArgs}
                         onChange={(e) => setCustomArgs(e.target.value)}
-                        placeholder="-y @my-org/mcp-server"
+                        placeholder={t('-y @my-org/mcp-server')}
                         className="mono-num"
                         style={{ ...inputStyle, resize: 'vertical' }}
                       />
                     </div>
                   </div>
                   <div>
-                    <label style={labelStyle}>Environment variables (optional, KEY=VALUE per line)</label>
+                    <label style={labelStyle}>{t('Environment variables (optional, KEY=VALUE per line)')}</label>
                     <textarea
                       rows={2}
                       value={customEnvText}
                       onChange={(e) => setCustomEnvText(e.target.value)}
-                      placeholder="API_TOKEN=..."
+                      placeholder={t('API_TOKEN=...')}
                       className="mono-num"
                       style={{ ...inputStyle, resize: 'vertical' }}
                     />
@@ -951,23 +932,23 @@ export function McpModal({
               ) : (
                 <>
                   <div>
-                    <label style={labelStyle}>Endpoint URL</label>
+                    <label style={labelStyle}>{t('Endpoint URL')}</label>
                     <input
                       type="url"
                       value={customUrl}
                       onChange={(e) => setCustomUrl(e.target.value)}
-                      placeholder="https://mcp.example.com/mcp"
+                      placeholder={t('https://mcp.example.com/mcp')}
                       className="mono-num"
                       style={inputStyle}
                     />
                   </div>
                   <div>
-                    <label style={labelStyle}>Headers (optional, Key=Value or Key: Value per line)</label>
+                    <label style={labelStyle}>{t('Headers (optional, Key=Value or Key: Value per line)')}</label>
                     <textarea
                       rows={2}
                       value={customHeadersText}
                       onChange={(e) => setCustomHeadersText(e.target.value)}
-                      placeholder="Authorization: Bearer ..."
+                      placeholder={t('Authorization: Bearer ...')}
                       className="mono-num"
                       style={{ ...inputStyle, resize: 'vertical' }}
                     />
@@ -985,7 +966,7 @@ export function McpModal({
                   }
                   style={primaryBtnStyle}
                 >
-                  {busy ? 'Adding…' : 'Add custom MCP'}
+                  {busy ? t('Adding…') : t('Add custom MCP')}
                 </button>
               </div>
             </form>
@@ -994,12 +975,12 @@ export function McpModal({
           {mode === 'json' && (
             <form onSubmit={handleImportJson} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div>
-                <label style={labelStyle}>Paste Claude Desktop / MCP JSON</label>
+                <label style={labelStyle}>{t('Paste Claude Desktop / MCP JSON')}</label>
                 <textarea
                   rows={6}
                   value={jsonText}
                   onChange={(e) => setJsonText(e.target.value)}
-                  placeholder={`{\n  "mcpServers": {\n    "filesystem": {\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]\n    }\n  }\n}`}
+                  placeholder={t('{\n  "mcpServers": {\n    "filesystem": {\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]\n    }\n  }\n}')}
                   className="mono-num"
                   style={{ ...inputStyle, resize: 'vertical' }}
                 />
@@ -1010,7 +991,7 @@ export function McpModal({
                   disabled={busy || !jsonText.trim()}
                   style={primaryBtnStyle}
                 >
-                  {busy ? 'Importing…' : 'Import MCP JSON'}
+                  {busy ? t('Importing…') : t('Import MCP JSON')}
                 </button>
               </div>
             </form>
@@ -1024,11 +1005,9 @@ export function McpModal({
   if (inline) return body;
   return (
     <ModalShell
-      title={addOnly ? 'Add plugin' : 'MCP connections'}
+      title={addOnly ? t('Add plugin') : t('MCP connections')}
       subtitle={
-        addOnly
-          ? 'Pick a connector, add a custom command or URL, or paste MCP JSON.'
-          : 'Connect external MCP tools via presets, custom stdio/HTTP, or JSON import, then attach them per agent.'
+        addOnly ? t('Pick a connector, add a custom command or URL, or paste MCP JSON.') : t('Connect external MCP tools via presets, custom stdio/HTTP, or JSON import, then attach them per agent.')
       }
       width={620}
       onClose={onClose}

@@ -11,6 +11,7 @@ import {
 import { Markdown } from './Markdown';
 import { BotMascot } from './mascot/BotMascot';
 import { MASCOT_COLORS } from './mascot/mascotConfig';
+import { useT } from '../i18n';
 
 export function getColorVar(color: AgentColor): string {
   if (color in MASCOT_COLORS) {
@@ -172,9 +173,10 @@ export function TaskStatusIcon({ status, size = 14 }: { status: TaskStatus; size
 }
 
 export function PriorityBars({ priority }: { priority: TaskPriority }) {
+  const t = useT();
   if (priority === 'urgent') {
     return (
-      <span title="Urgent" style={{ display: 'inline-flex', alignItems: 'center' }}>
+      <span title={t('Urgent')} style={{ display: 'inline-flex', alignItems: 'center' }}>
         <AlertCircle size={13} strokeWidth={1.5} style={{ color: 'var(--agent-red)' }} />
       </span>
     );
@@ -184,7 +186,7 @@ export function PriorityBars({ priority }: { priority: TaskPriority }) {
 
   return (
     <span
-      title={`Priority: ${priority}`}
+      title={t('Priority: {priority}', { priority })}
       style={{
         display: 'inline-flex',
         alignItems: 'flex-end',

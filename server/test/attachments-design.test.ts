@@ -313,6 +313,40 @@ describe('project image library', () => {
     expect((await fetch(`${base}/api/projects/nope/library`)).status).toBe(404);
     expect((await list('direct')).images).toEqual([]);
   });
+  it('lists SVG drawings an agent wrote in a reply, named after the file it mentioned', async () => {
+    const drawing = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><circle r="1"/></svg>';
+    const reply = `Salin kode ini ke \`hero.svg\`.
+
+\`\`\`svg
+${drawing}
+\`\`\`
+
+Dan sekali lagi:
+
+\`\`\`svg
+${drawing}
+\`\`\``;
+    const runner: AgentRunner = { async run(_t, cb) { cb.onText(reply); return { finalText: reply }; } };
+    const { handle, base } = await boot(runner);
+    const { project, agents } = handle.store.createProject({ name: 'Svg', starterAgents: [{ name: 'Bot', role: 'Eng' }] });
+    await fetch(`${base}/api/agents/${agents[0]!.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'gambar logo', projectId: project.id }),
+    });
+    for (let i = 0; i < 60 && handle.store.listMessagesWithSvg(project.id).length === 0; i += 1) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const { images } = (await (await fetch(`${base}/api/projects/${project.id}/library`)).json()) as { images: LibraryImage[] };
+    // the same drawing posted twice shows up once
+    expect(images.map((i) => i.name)).toEqual(['hero.svg']);
+    const res = await fetch(`${base}${images[0]!.url}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/svg+xml');
+    expect(await res.text()).toBe(drawing);
+    const other = handle.store.createProject({ name: 'Other', starterAgents: [{ name: 'B', role: 'Eng' }] }).project;
+    expect((await fetch(`${base}${images[0]!.url.replace(project.id, other.id)}`)).status).toBe(404);
+  });
   it('limits a direct-chat library to the requested agent', async () => {
     const runner: AgentRunner = { async run(_t, cb) { cb.onText('ok'); return { finalText: 'ok' }; } };
     const { handle, base } = await boot(runner);

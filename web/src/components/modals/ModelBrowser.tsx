@@ -12,6 +12,7 @@ import { ProviderIcon } from '../ProviderIcon';
 import { Switch } from '../Switch';
 import { toast } from '../Toast';
 import { inputStyle, secondaryBtnStyle } from './ModalShell';
+import { useT } from '../../i18n';
 
 const chip = (active: boolean) =>
   ({
@@ -44,6 +45,7 @@ export function ModelBrowser({
   providers: Array<{ id: RealProvider; label: string }>;
   initialProvider: RealProvider;
 }) {
+  const t = useT();
   const [provider, setProvider] = useState<RealProvider>(initialProvider);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,7 +61,7 @@ export function ModelBrowser({
         setCatalog(await api.getModelCatalog(provider, refresh));
       } catch (err) {
         setCatalog(null);
-        setError(err instanceof Error ? err.message : 'Could not load models');
+        setError(err instanceof Error ? err.message : t('Could not load models'));
       } finally {
         setLoading(false);
       }
@@ -123,7 +125,7 @@ export function ModelBrowser({
         ...(extra.length > 0 ? { customModels: [...(settings.customModels ?? []), ...extra] } : {}),
       });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save your choice');
+      toast.error(err instanceof Error ? err.message : t('Could not save your choice'));
     } finally {
       setBusy(false);
     }
@@ -151,7 +153,7 @@ export function ModelBrowser({
     setBusy(true);
     try {
       await api.updateSettings({ visibleModels: rest });
-      toast.info('Back to the default list');
+      toast.info(t('Back to the default list'));
     } finally {
       setBusy(false);
     }
@@ -194,7 +196,7 @@ export function ModelBrowser({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={`Search ${providers.find((p) => p.id === provider)?.label ?? ''} models`}
+            placeholder={t('Search {v0} models', { v0: providers.find((p) => p.id === provider)?.label ?? '' })}
             style={{
               flex: 1,
               minWidth: 0,
@@ -210,11 +212,10 @@ export function ModelBrowser({
           type="button"
           onClick={() => void load(true)}
           disabled={loading}
-          title="Fetch the list again"
+          title={t('Fetch the list again')}
           style={{ ...secondaryBtnStyle, height: 34, padding: '0 12px', fontSize: 12 }}
         >
-          <RefreshCw size={13} strokeWidth={1.5} />
-          Refresh
+          <RefreshCw size={13} strokeWidth={1.5} />{t('Refresh')}
         </button>
       </div>
 
@@ -229,20 +230,15 @@ export function ModelBrowser({
         }}
       >
         <span>
-          {loading
-            ? 'Loading models…'
-            : `${shownCount} of ${rows.length} shown in chat${catalog?.source === 'live' ? ' · live list' : ''}`}
+          {loading ? t('Loading models…') : t('{shownCount} of {length} shown in chat{v2}', { shownCount, length: rows.length, v2: catalog?.source === 'live' ? t(' · live list') : '' })}
         </span>
         <span style={{ display: 'inline-flex', gap: 12 }}>
-          <button type="button" disabled={busy || loading} onClick={() => bulk(true)} style={{ color: 'var(--text-secondary)' }}>
-            Show all{query ? ' results' : ''}
+          <button type="button" disabled={busy || loading} onClick={() => bulk(true)} style={{ color: 'var(--text-secondary)' }}>{t('Show all')}{query ? t(' results') : ''}
           </button>
-          <button type="button" disabled={busy || loading} onClick={() => bulk(false)} style={{ color: 'var(--text-secondary)' }}>
-            Hide all{query ? ' results' : ''}
+          <button type="button" disabled={busy || loading} onClick={() => bulk(false)} style={{ color: 'var(--text-secondary)' }}>{t('Hide all')}{query ? t(' results') : ''}
           </button>
           {settings.visibleModels?.[provider] && (
-            <button type="button" disabled={busy} onClick={() => void reset()} style={{ color: 'var(--text-secondary)' }}>
-              Reset
+            <button type="button" disabled={busy} onClick={() => void reset()} style={{ color: 'var(--text-secondary)' }}>{t('Reset')}
             </button>
           )}
         </span>
@@ -262,8 +258,7 @@ export function ModelBrowser({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 380, overflowY: 'auto' }}>
         {!loading && rows.length === 0 && (
-          <div style={{ padding: '16px 4px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-            No model matches.
+          <div style={{ padding: '16px 4px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>{t('No model matches.')}
           </div>
         )}
         {rows.map((m) => {
@@ -296,8 +291,7 @@ export function ModelBrowser({
                 >
                   {m.label}
                   {active && (
-                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--agent-green)', fontWeight: 400 }}>
-                      in use
+                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--agent-green)', fontWeight: 400 }}>{t('in use')}
                     </span>
                   )}
                 </div>
@@ -317,7 +311,7 @@ export function ModelBrowser({
               <Switch
                 checked={on}
                 disabled={busy || active}
-                label={`${on ? 'Hide' : 'Show'} ${m.label} in chat`}
+                label={t('{v0} {label} in chat', { v0: on ? 'Hide' : 'Show', label: m.label })}
                 onChange={(next) => toggle(m, next)}
               />
             </div>

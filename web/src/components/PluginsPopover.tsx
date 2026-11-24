@@ -6,6 +6,7 @@ import { useMcpOAuth } from '../state/useMcpOAuth';
 import { McpIcon } from './modals/McpIcon';
 import { Switch } from './Switch';
 import { toast } from './Toast';
+import { useT } from '../i18n';
 
 type OAuth = ReturnType<typeof useMcpOAuth>;
 
@@ -42,6 +43,7 @@ export function PluginsPopover({
   oauth: OAuth;
   onManage: () => void;
 }) {
+  const t = useT();
   const [query, setQuery] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -61,7 +63,7 @@ export function PluginsPopover({
     try {
       await setPluginAttached(agent, server, next);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update plugin');
+      toast.error(err instanceof Error ? err.message : t('Failed to update plugin'));
     } finally {
       setBusyId(null);
     }
@@ -95,7 +97,7 @@ export function PluginsPopover({
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search plugins"
+          placeholder={t('Search plugins')}
           style={{
             flex: 1,
             minWidth: 0,
@@ -112,7 +114,7 @@ export function PluginsPopover({
       <div style={{ maxHeight: 250, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
         {list.length === 0 ? (
           <div style={{ padding: '14px 10px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-            {settings.mcpServers.length === 0 ? 'No plugins yet.' : 'No matching plugin.'}
+            {settings.mcpServers.length === 0 ? t('No plugins yet.') : t('No matching plugin.')}
           </div>
         ) : (
           list.map((s) => {
@@ -157,7 +159,7 @@ export function PluginsPopover({
                       color: 'var(--text-primary)',
                     }}
                   >
-                    {oauth.connectingId === s.id ? 'Waiting…' : 'Reconnect'}
+                    {oauth.connectingId === s.id ? t('Waiting…') : t('Reconnect')}
                   </button>
                 ) : (
                   <Switch
@@ -191,7 +193,7 @@ export function PluginsPopover({
         onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
       >
         <Plug size={15} strokeWidth={1.5} style={{ color: 'var(--text-secondary)' }} />
-        <span style={{ flex: 1, textAlign: 'left' }}>Manage plugins</span>
+        <span style={{ flex: 1, textAlign: 'left' }}>{t('Manage plugins')}</span>
         <ArrowUpRight size={14} strokeWidth={1.5} style={{ color: 'var(--text-tertiary)' }} />
       </button>
     </div>
