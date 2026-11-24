@@ -1,5 +1,5 @@
 import type { Agent, Project } from '@atelier/contracts';
-import { BarChart3, PanelRight, Plus, Settings as SettingsIcon } from 'lucide-react';
+import { BarChart3, PanelRight, Plug, Plus, Settings as SettingsIcon } from 'lucide-react';
 import { ProjectTile, getColorVar } from './Atoms';
 import { BotMascot } from './mascot/BotMascot';
 import { resolveMascotColor } from './mascot/mascotConfig';
@@ -18,6 +18,7 @@ interface LeftRailProps {
   onOpenNewGlobalAgent: () => void;
   onOpenUsage: () => void;
   onOpenSettings: () => void;
+  onOpenPlugins: () => void;
 }
 
 export function LeftRail({
@@ -34,6 +35,7 @@ export function LeftRail({
   onOpenNewGlobalAgent,
   onOpenUsage,
   onOpenSettings,
+  onOpenPlugins,
 }: LeftRailProps) {
   const visibleProjects = projects.filter((p) => !p.archived);
 
@@ -244,6 +246,33 @@ export function LeftRail({
         </button>
 
         <div style={{ width: 24, height: 1, background: 'var(--border-subtle)', flexShrink: 0 }} />
+
+        <button
+          type="button"
+          onClick={onOpenPlugins}
+          title="Plugins & MCP"
+          className="transition-atelier"
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 'var(--radius-sm)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--text-secondary)',
+            flexShrink: 0,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'var(--surface-3)';
+            e.currentTarget.style.color = 'var(--text-primary)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.color = 'var(--text-secondary)';
+          }}
+        >
+          <Plug size={18} strokeWidth={1.5} />
+        </button>
 
         <button
           type="button"

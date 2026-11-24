@@ -3,6 +3,7 @@ import {
   BUILT_IN_MODELS,
   type Agent,
   type AgentSkill,
+  type McpServerConfig,
   type MessageAttachment,
   type ModelEntry,
   type Project,
@@ -15,12 +16,14 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  ChevronRight,
   Folder,
   GitBranch,
   ListPlus,
   Mic,
   Minimize2,
   Paperclip,
+  Plug,
   Plus,
   Sparkles,
   Square,
@@ -28,9 +31,12 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import { useMcpOAuth } from '../state/useMcpOAuth';
 import { type PendingUpload, PendingAttachments } from './AttachmentViews';
 import { toast } from './Toast';
 import { TokenRing } from './Atoms';
+import { McpIcon } from './modals/McpIcon';
+import { PluginsPopover, needsAttention, setPluginAttached } from './PluginsPopover';
 import { ProviderIcon } from './ProviderIcon';
 
 interface FloatingComposerProps {
@@ -52,6 +58,7 @@ interface FloatingComposerProps {
   onOpenModels: () => void;
   onOpenUsage: () => void;
   onOpenSettings: () => void;
+  onOpenPlugins: () => void;
 }
 
 const EFFORTS: ReasoningEffort[] = ['Low', 'Medium', 'High'];
@@ -200,8 +207,13 @@ export function FloatingComposer({
   onOpenModels,
   onOpenUsage,
   onOpenSettings,
+  onOpenPlugins,
 }: FloatingComposerProps) {
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [pluginsMenuOpen, setPluginsMenuOpen] = useState(false);
+  const oauth = useMcpOAuth();
+  const [pickedPlugins, setPickedPlugins] = useState<McpServerConfig[]>([]);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const [effortMenuOpen, setEffortMenuOpen] = useState(false);
   const [usageData, setUsageData] = useState<UsageDashboardResponse | null>(null);
   const [sending, setSending] = useState(false);
@@ -235,6 +247,30 @@ export function FloatingComposer({
     setPickedSkills((prev) => (prev.some((p) => p.id === skill.id) ? prev : [...prev, skill].slice(0, 5)));
     onChangeDraft('');
     setSlashIndex(0);
+    inputRef.current?.focus();
+  };
+
+  // Plugins picked with "@" belong to one agent's message, like skills.
+  useEffect(() => setPickedPlugins([]), [agent?.id]);
+
+  // Typing "@" (at the start of a word, at the end of the draft) opens the plugin picker.
+  const mentionQuery = agent ? (/(?:^|\s)@(\S*)$/.exec(draftText)?.[1] ?? null) : null;
+  const mentionOptions =
+    mentionQuery === null
+      ? []
+      : settings.mcpServers.filter((s) => {
+          if (!s.enabled || needsAttention(s, oauth.status)) return false;
+          if (pickedPlugins.some((p) => p.id === s.id)) return false;
+          const needle = mentionQuery.toLowerCase();
+          return !needle || `${s.name} ${s.description ?? ''}`.toLowerCase().includes(needle);
+        });
+  const mentionOpen = mentionQuery !== null && !slashOpen;
+  const activeMentionIndex = Math.min(mentionIndex, Math.max(0, mentionOptions.length - 1));
+
+  const pickPlugin = (server: McpServerConfig) => {
+    setPickedPlugins((prev) => (prev.some((p) => p.id === server.id) ? prev : [...prev, server].slice(0, 5)));
+    onChangeDraft(draftText.replace(/(^|\s)@\S*$/, '$1'));
+    setMentionIndex(0);
     inputRef.current?.focus();
   };
 
@@ -322,6 +358,7 @@ export function FloatingComposer({
     const onDown = (e: MouseEvent) => {
       if (plusRef.current && !plusRef.current.contains(e.target as Node)) {
         setPlusMenuOpen(false);
+        setPluginsMenuOpen(false);
       }
       if (effortRef.current && !effortRef.current.contains(e.target as Node)) {
         setEffortMenuOpen(false);
@@ -331,16 +368,24 @@ export function FloatingComposer({
     return () => window.removeEventListener('mousedown', onDown);
   }, []);
 
+  const attentionCount = settings.mcpServers.filter((s) => needsAttention(s, oauth.status)).length;
+  const hintParts = [
+    agent && agent.skills.length > 0 ? '/ for skills' : null,
+    settings.mcpServers.length > 0 ? '@ for plugins' : null,
+  ].filter(Boolean);
+  const placeholderHint = hintParts.length > 0 ? ` (type ${hintParts.join(', ')})` : '';
   const isWorking = agent?.status === 'working';
   const doneAttachments = pending.filter((p) => p.status === 'done' && p.attachment);
   const uploading = pending.some((p) => p.status === 'uploading');
-  const canSubmit = Boolean(agent && (draftText.trim() || doneAttachments.length > 0) && !uploading && !sending);
+  const canSubmit = Boolean(
+    agent && (draftText.trim() || doneAttachments.length > 0 || pickedPlugins.length > 0) && !uploading && !sending,
+  );
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!agent) return;
     const text = draftText.trim();
-    if (!text && doneAttachments.length === 0) return;
+    if (!text && doneAttachments.length === 0 && pickedPlugins.length === 0) return;
     if (uploading) return;
     setSending(true);
     try {
@@ -353,7 +398,21 @@ export function FloatingComposer({
       });
       const skillIds = pickedSkills.map((s) => s.id);
       setPickedSkills([]);
-      await onSend(text, sent.length > 0 ? sent : undefined, skillIds.length > 0 ? skillIds : undefined);
+      // plugins called with "@": make sure the agent can use them, then name them in the message
+      const plugins = pickedPlugins;
+      setPickedPlugins([]);
+      for (const plugin of plugins) {
+        if (agent.mcpServerIds?.includes(plugin.id) && plugin.enabled) continue;
+        try {
+          await setPluginAttached(agent, plugin, true);
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : `Could not attach ${plugin.name}`);
+        }
+      }
+      const finalText = plugins.length
+        ? `${plugins.map((p) => `@${p.name}`).join(' ')} ${text}`.trim()
+        : text;
+      await onSend(finalText, sent.length > 0 ? sent : undefined, skillIds.length > 0 ? skillIds : undefined);
     } finally {
       setSending(false);
       inputRef.current?.focus();
@@ -434,6 +493,38 @@ export function FloatingComposer({
                 type="button"
                 aria-label={`Remove skill ${skill.name}`}
                 onClick={() => setPickedSkills((prev) => prev.filter((p) => p.id !== skill.id))}
+                style={{ display: 'inline-flex', color: 'var(--text-tertiary)' }}
+              >
+                <X size={12} strokeWidth={1.75} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {pickedPlugins.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 6px 6px' }}>
+          {pickedPlugins.map((plugin) => (
+            <span
+              key={plugin.id}
+              title={plugin.description || plugin.name}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '3px 6px 3px 5px',
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border-default)',
+                fontSize: 12,
+                color: 'var(--text-primary)',
+              }}
+            >
+              <McpIcon presetId={plugin.presetId} name={plugin.name} size={18} />
+              {plugin.name}
+              <button
+                type="button"
+                aria-label={`Remove plugin ${plugin.name}`}
+                onClick={() => setPickedPlugins((prev) => prev.filter((p) => p.id !== plugin.id))}
                 style={{ display: 'inline-flex', color: 'var(--text-tertiary)' }}
               >
                 <X size={12} strokeWidth={1.75} />
@@ -569,11 +660,86 @@ export function FloatingComposer({
           </div>
         )}
 
+        {mentionOpen && (
+          <div
+            role="listbox"
+            aria-label="Plugins"
+            className="popover-shadow"
+            style={{
+              position: 'absolute',
+              bottom: 58,
+              left: 0,
+              right: 0,
+              maxHeight: 260,
+              overflowY: 'auto',
+              background: 'var(--surface-1)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-md)',
+              padding: 6,
+              zIndex: 60,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+            }}
+          >
+            {mentionOptions.length === 0 ? (
+              <div style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+                {settings.mcpServers.length === 0
+                  ? 'No plugins yet. Add some from the + menu → Plugins.'
+                  : 'No matching plugin ready to use.'}
+              </div>
+            ) : (
+              mentionOptions.map((server, index) => (
+                <button
+                  key={server.id}
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeMentionIndex}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pickPlugin(server)}
+                  onMouseEnter={() => setMentionIndex(index)}
+                  className="transition-atelier"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    textAlign: 'left',
+                    padding: '7px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: index === activeMentionIndex ? 'var(--surface-3)' : 'transparent',
+                  }}
+                >
+                  <McpIcon presetId={server.presetId} name={server.name} size={24} />
+                  <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{server.name}</span>
+                    {server.description && (
+                      <span
+                        style={{
+                          fontSize: 11.5,
+                          color: 'var(--text-tertiary)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {server.description}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
         <div ref={plusRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
           <button
             type="button"
             disabled={!agent && !project}
-            onClick={() => setPlusMenuOpen((v) => !v)}
+            onClick={() => {
+              setPlusMenuOpen((v) => !v);
+              setPluginsMenuOpen(false);
+            }}
             title="Quick actions"
             className="transition-atelier"
             style={{
@@ -606,7 +772,7 @@ export function FloatingComposer({
                 position: 'absolute',
                 bottom: 44,
                 left: 0,
-                width: 210,
+                width: 250,
                 background: 'var(--surface-1)',
                 border: '1px solid var(--border-default)',
                 borderRadius: 'var(--radius-md)',
@@ -656,6 +822,53 @@ export function FloatingComposer({
                   {item.label}
                 </button>
               ))}
+
+              <button
+                type="button"
+                onClick={() => setPluginsMenuOpen((v) => !v)}
+                className="transition-atelier"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  textAlign: 'left',
+                  padding: '7px 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 12.5,
+                  color: 'var(--text-primary)',
+                  background: pluginsMenuOpen ? 'var(--surface-3)' : 'transparent',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--surface-3)';
+                }}
+                onMouseLeave={(e) => {
+                  if (!pluginsMenuOpen) e.currentTarget.style.background = 'transparent';
+                }}
+              >
+                <Plug size={15} strokeWidth={1.5} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                <span style={{ flex: 1 }}>Plugins</span>
+                {attentionCount > 0 && (
+                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                    {attentionCount} needs attention
+                  </span>
+                )}
+                <ChevronRight size={14} strokeWidth={1.5} style={{ color: 'var(--text-tertiary)' }} />
+              </button>
+
+              {pluginsMenuOpen && (
+                <div style={{ position: 'absolute', left: 'calc(100% + 6px)', bottom: 0 }}>
+                  <PluginsPopover
+                    agent={agent}
+                    settings={settings}
+                    oauth={oauth}
+                    onManage={() => {
+                      setPlusMenuOpen(false);
+                      setPluginsMenuOpen(false);
+                      onOpenPlugins();
+                    }}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -676,9 +889,24 @@ export function FloatingComposer({
           disabled={!agent}
           onChange={(e) => {
             setSlashIndex(0);
+            setMentionIndex(0);
             onChangeDraft(e.target.value);
           }}
           onKeyDown={(e) => {
+            if (mentionOpen) {
+              if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && mentionOptions.length > 0) {
+                e.preventDefault();
+                const step = e.key === 'ArrowDown' ? 1 : -1;
+                setMentionIndex((activeMentionIndex + step + mentionOptions.length) % mentionOptions.length);
+              } else if ((e.key === 'Enter' || e.key === 'Tab') && mentionOptions.length > 0) {
+                e.preventDefault();
+                pickPlugin(mentionOptions[activeMentionIndex]!);
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                onChangeDraft(draftText.replace(/(^|\s)@\S*$/, '$1'));
+              }
+              return;
+            }
             if (!slashOpen) return;
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
               if (slashOptions.length === 0) return;
@@ -703,8 +931,8 @@ export function FloatingComposer({
           placeholder={
             agent
               ? project
-                ? `Message ${agent.name}...${agent.skills.length ? ' (type / for skills)' : ''}`
-                : `Message ${agent.name} directly...${agent.skills.length ? ' (type / for skills)' : ''}`
+                ? `Message ${agent.name}...${placeholderHint}`
+                : `Message ${agent.name} directly...${placeholderHint}`
               : 'Create or select an agent to start...'
           }
           style={{

@@ -18,7 +18,6 @@ import { RightPanel } from './components/RightPanel';
 import { ThreadHeader } from './components/ThreadHeader';
 import { toast } from './components/Toast';
 import { AgentModal } from './components/modals/AgentModal';
-import { McpModal } from './components/modals/McpModal';
 import { TaskModal } from './components/modals/TaskModal';
 import { UsageModal } from './components/modals/UsageModal';
 import {
@@ -31,6 +30,7 @@ import { AgentReportsView } from './views/AgentReportsView';
 import { ChatView } from './views/ChatView';
 import { LibraryView } from './views/LibraryView';
 import { OnboardingView } from './views/OnboardingView';
+import { PluginsView } from './views/PluginsView';
 import { PreviewView } from './views/PreviewView';
 import { SettingsView, type SettingsTab } from './views/SettingsView';
 import { TasksView } from './views/TasksView';
@@ -44,7 +44,6 @@ type ActiveModal =
   | { type: 'new-task'; status?: TaskStatus; assigneeAgentId?: string | null; description?: string }
   | { type: 'edit-task'; taskId: string }
   | { type: 'manage-project' }
-  | { type: 'mcp' }
   | { type: 'usage' }
   | { type: 'settings'; initialTab?: SettingsTab }
   | null;
@@ -62,6 +61,11 @@ export function App() {
   const [draftText, setDraftText] = useState('');
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [modal, setModal] = useState<ActiveModal>(null);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
+  const openPlugins = () => {
+    setModal(null);
+    setPluginsOpen(true);
+  };
   const [discoveredModels, setDiscoveredModels] = useState<ModelEntry[]>([]);
   const [hostname, setHostname] = useState('Local Workstation');
   const [creatingSample, setCreatingSample] = useState(false);
@@ -329,6 +333,7 @@ export function App() {
     : state.agents;
 
   const dimmedBackground =
+    pluginsOpen ||
     (viewMode === 'project' && (activeTab === 'tasks' || activeTab === 'preview' || activeTab === 'library')) ||
     (viewMode === 'agent' && (agentTab === 'reports' || agentTab === 'library'));
 
@@ -360,6 +365,7 @@ export function App() {
         onOpenNewGlobalAgent={() => setModal({ type: 'new-global-agent' })}
         onOpenUsage={() => setModal({ type: 'usage' })}
         onOpenSettings={() => setModal({ type: 'settings' })}
+        onOpenPlugins={openPlugins}
       />
 
       <main
@@ -421,7 +427,7 @@ export function App() {
               onNewTask={() => setModal({ type: 'new-task' })}
               onCompactContext={() => void handleCompactContext()}
               onOpenChiefOfStaff={() => void handleOpenChiefOfStaff()}
-              onOpenMcp={() => setModal({ type: 'mcp' })}
+              onOpenMcp={openPlugins}
               onOpenLinkRepo={() => setModal({ type: 'link-repo' })}
               onOpenProjectManage={() => setModal({ type: 'manage-project' })}
             />
@@ -719,7 +725,24 @@ export function App() {
               onOpenModels={() => setModal({ type: 'settings', initialTab: 'providers' })}
               onOpenUsage={() => setModal({ type: 'usage' })}
               onOpenSettings={() => setModal({ type: 'settings', initialTab: 'general' })}
+              onOpenPlugins={openPlugins}
             />
+
+            {pluginsOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 30,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  background: 'var(--bg-base)',
+                  paddingTop: 4,
+                }}
+              >
+                <PluginsView settings={state.settings} onBack={() => setPluginsOpen(false)} />
+              </div>
+            )}
           </>
         )}
       </main>
@@ -754,7 +777,7 @@ export function App() {
           onOpenPortPreview={(p) => void handleOpenPortPreview(p)}
           onOpenLinkRepo={() => setModal({ type: 'link-repo' })}
           onOpenModels={() => setModal({ type: 'settings', initialTab: 'providers' })}
-          onOpenMcp={() => setModal({ type: 'mcp' })}
+          onOpenMcp={openPlugins}
           onOpenSettings={() => setModal({ type: 'settings', initialTab: 'general' })}
         />
       )}
@@ -778,7 +801,7 @@ export function App() {
           discoveredModels={discoveredModels}
           onClose={() => setModal(null)}
           onSaved={(saved) => handleSelectProjectAgent(saved.id)}
-          onOpenMcp={() => setModal({ type: 'mcp' })}
+          onOpenMcp={openPlugins}
         />
       )}
 
@@ -790,7 +813,7 @@ export function App() {
           discoveredModels={discoveredModels}
           onClose={() => setModal(null)}
           onSaved={(saved) => handleSelectDirectAgent(saved.id)}
-          onOpenMcp={() => setModal({ type: 'mcp' })}
+          onOpenMcp={openPlugins}
         />
       )}
 
@@ -809,7 +832,7 @@ export function App() {
             if (viewMode === 'agent') setActiveDirectAgentId(null);
             else setActiveAgentId(null);
           }}
-          onOpenMcp={() => setModal({ type: 'mcp' })}
+          onOpenMcp={openPlugins}
         />
       )}
 
@@ -855,13 +878,6 @@ export function App() {
         />
       )}
 
-      {modal?.type === 'mcp' && (
-        <McpModal
-          settings={state.settings}
-          onClose={() => setModal(null)}
-        />
-      )}
-
       {modal?.type === 'usage' && <UsageModal onClose={() => setModal(null)} />}
 
       {modal?.type === 'settings' && (
@@ -870,7 +886,7 @@ export function App() {
           activeProject={activeProject}
           discoveredModels={discoveredModels}
           initialTab={modal.initialTab ?? 'general'}
-          onOpenMcp={() => setModal({ type: 'mcp' })}
+          onOpenMcp={openPlugins}
           onClose={() => setModal(null)}
         />
       )}

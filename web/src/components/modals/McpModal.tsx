@@ -55,13 +55,23 @@ function parseArgsInput(raw: string): string[] {
 export function McpModal({
   settings,
   onClose,
+  addOnly = false,
+  initialMode = 'preset',
+  initialPresetId,
 }: {
   settings: Settings;
   onClose: () => void;
+  /** Hide the configured-servers list (the Plugins page shows it already). */
+  addOnly?: boolean;
+  initialMode?: AddMode;
+  initialPresetId?: string;
 }) {
-  const [mode, setMode] = useState<AddMode>('preset');
-  const [selectedPreset, setSelectedPreset] = useState<McpPreset | null>(null);
-  const [presetName, setPresetName] = useState('');
+  const initialPreset = initialPresetId
+    ? (MCP_PRESETS.find((p) => p.id === initialPresetId) ?? null)
+    : null;
+  const [mode, setMode] = useState<AddMode>(initialMode);
+  const [selectedPreset, setSelectedPreset] = useState<McpPreset | null>(initialPreset);
+  const [presetName, setPresetName] = useState(initialPreset?.name ?? '');
   const [presetExtraArg, setPresetExtraArg] = useState('');
   const [presetSecrets, setPresetSecrets] = useState<Record<string, string>>({});
 
@@ -104,7 +114,10 @@ export function McpModal({
       if (d?.type !== 'atelier-mcp-oauth' || e.source !== popupRef.current) return;
       setConnectingId(null);
       setError(d.ok ? null : (d.message ?? 'Login failed'));
-      if (d.ok) toast.success('Logged in. Connection is ready.');
+      if (d.ok) {
+        toast.success('Logged in. Connection is ready.');
+        if (addOnly) onClose();
+      }
       void refreshOauth();
     };
     window.addEventListener('message', onMessage);
@@ -264,6 +277,7 @@ export function McpModal({
       }
       setSelectedPreset(null);
       toast.success(`MCP server “${name}” added`);
+      if (addOnly) onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add preset MCP server');
     } finally {
@@ -304,6 +318,7 @@ export function McpModal({
       setCustomUrl('');
       setCustomHeadersText('');
       toast.success('Custom MCP server added');
+      if (addOnly) onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add custom MCP server');
     } finally {
@@ -320,6 +335,7 @@ export function McpModal({
       await api.importMcpJson(jsonText.trim());
       setJsonText('');
       toast.success('MCP servers imported');
+      if (addOnly) onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid MCP JSON');
     } finally {
@@ -333,14 +349,18 @@ export function McpModal({
 
   return (
     <ModalShell
-      title="MCP connections"
-      subtitle="Connect external MCP tools via presets, custom stdio/HTTP, or JSON import, then attach them per agent."
+      title={addOnly ? 'Add plugin' : 'MCP connections'}
+      subtitle={
+        addOnly
+          ? 'Pick a connector, add a custom command or URL, or paste MCP JSON.'
+          : 'Connect external MCP tools via presets, custom stdio/HTTP, or JSON import, then attach them per agent.'
+      }
       width={620}
       onClose={onClose}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {/* Configured MCP servers */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: addOnly ? 'none' : 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={labelStyle}>
               Configured servers ({settings.mcpServers.length})
