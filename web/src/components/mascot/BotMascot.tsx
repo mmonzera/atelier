@@ -66,6 +66,8 @@ export function BotMascot({
     cx: 0,
     cy: 0,
     phase: hashSeed(seed) * Math.PI * 2,
+    // Last rendered frame, so unchanged frames can be skipped (each render is a GPU pass + copy).
+    drawn: null as null | { key: string; v: number[] },
   });
 
   useEffect(() => {
@@ -156,6 +158,17 @@ export function BotMascot({
       const breathSpeed = isWorking ? 0.0068 : 0.0024;
       const breath = Math.sin(nowMs * breathSpeed + st.phase);
 
+      const hover = Math.min(1, st.hoverMix + st.hopMix * 0.7);
+      const working = isWorking ? 1 : st.hopMix;
+      const error = cur.status === 'error' ? 1 : 0;
+
+      const key = `${cur.size}|${cur.color}|${cur.shape}|${cur.seed}`;
+      const v = [st.lookX, st.lookY, st.blink, breath, hover, working, error];
+      const eps = [0.012, 0.012, 0.02, 0.05, 0.01, 0.01, 0.5];
+      const prev = st.drawn;
+      if (prev && prev.key === key && v.every((x, i) => Math.abs(x - prev.v[i]) < eps[i])) return;
+      st.drawn = { key, v };
+
       mascotEngine.render(canvas, {
         size: cur.size,
         color: cur.color,
@@ -165,9 +178,9 @@ export function BotMascot({
         lookY: st.lookY,
         blink: st.blink,
         breath,
-        hover: Math.min(1, st.hoverMix + st.hopMix * 0.7),
-        working: isWorking ? 1 : st.hopMix,
-        error: cur.status === 'error' ? 1 : 0,
+        hover,
+        working,
+        error,
       });
     };
 

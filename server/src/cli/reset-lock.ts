@@ -21,7 +21,7 @@ export function runResetLock(dataDir?: string): { dbPath: string; removed: boole
   }
 }
 
-const isMain = !process.versions.electron && process.argv[1] && /reset-lock\.(t|j)s$/.test(process.argv[1]);
+const isMain = !process.env.ATELIER_EMBEDDED && process.argv[1] && /reset-lock\.(t|j)s$/.test(process.argv[1]);
 if (isMain) {
   const argDir = process.argv.find((a) => a.startsWith('--data-dir='))?.slice('--data-dir='.length);
   const { dbPath, removed } = runResetLock(argDir);

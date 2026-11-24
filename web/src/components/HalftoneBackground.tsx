@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { isAnimationActive, subscribeAnimationGate } from '../state/animationGate';
 
 type FireData = typeof import('../assets/halftone-fire.json');
 
@@ -18,7 +19,7 @@ const STRIDE = 6; // x, y, r*100, R, G, B
 const POINTER_RADIUS = 135; // in SVG units
 const POINTER_STRENGTH = 42;
 const ALPHA_LEVELS = 5;
-const FRAME_MS = 1000 / 30; // fire doesn't need 60fps; saves CPU/battery
+const FRAME_MS = 1000 / 15; // fire doesn't need 60fps; saves CPU/GPU/battery
 
 interface Dots {
   n: number;
@@ -32,6 +33,7 @@ interface Dots {
   dy: Float32Array;
   bucket: Uint8Array; // palette bucket index per dot
   palette: string[];
+  col: Float32Array; // quantized r,g,b (0..1) per dot, for the WebGL renderer
 }
 
 function hash(i: number): number {
@@ -55,6 +57,7 @@ function buildDots(fire: FireData): Dots {
     dy: new Float32Array(n),
     bucket: new Uint8Array(n),
     palette: [],
+    col: new Float32Array(n * 3),
   };
   const rgb = new Array<[number, number, number]>(n);
   let i = 0;
@@ -88,8 +91,133 @@ function buildDots(fire: FireData): Dots {
       index.set(key, b);
     }
     d.bucket[j] = b;
+    d.col[j * 3] = q(rgb[j][0]) / 255;
+    d.col[j * 3 + 1] = q(rgb[j][1]) / 255;
+    d.col[j * 3 + 2] = q(rgb[j][2]) / 255;
   }
   return d;
+}
+
+const VERT = `
+attribute vec4 a_dot; // x, y (css px), radius (css px), alpha
+attribute vec3 a_col;
+uniform vec2 u_res;
+uniform float u_dpr;
+uniform float u_max;
+varying vec3 v_col;
+varying float v_a;
+void main() {
+  vec2 clip = (a_dot.xy / u_res) * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  gl_PointSize = clamp(a_dot.z * 2.0 * u_dpr + 1.0, 1.0, u_max);
+  v_col = a_col;
+  v_a = a_dot.w;
+}`;
+
+const FRAG = `
+precision mediump float;
+varying vec3 v_col;
+varying float v_a;
+void main() {
+  float d = length(gl_PointCoord * 2.0 - 1.0);
+  float m = 1.0 - smoothstep(0.7, 1.0, d);
+  if (m <= 0.0) discard;
+  float a = v_a * m;
+  gl_FragColor = vec4(v_col * a, a);
+}`;
+
+interface GLRenderer {
+  resize(cssW: number, cssH: number, dpr: number): void;
+  draw(data: Float32Array, n: number): void;
+  dispose(): void;
+}
+
+/**
+ * All dots in a single draw call (point sprites). The previous 2D-canvas version rasterised
+ * ~10k arcs per frame, which kept the GPU process near 100% of a core even when idle.
+ */
+function createGLRenderer(canvas: HTMLCanvasElement, col: Float32Array, n: number): GLRenderer | null {
+  const gl = canvas.getContext('webgl', {
+    alpha: true,
+    premultipliedAlpha: true,
+    antialias: false,
+    depth: false,
+    stencil: false,
+    powerPreference: 'low-power',
+  });
+  if (!gl) return null;
+
+  const compile = (type: number, src: string) => {
+    const sh = gl.createShader(type);
+    if (!sh) return null;
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    return gl.getShaderParameter(sh, gl.COMPILE_STATUS) ? sh : null;
+  };
+  const vs = compile(gl.VERTEX_SHADER, VERT);
+  const fs = compile(gl.FRAGMENT_SHADER, FRAG);
+  const prog = gl.createProgram();
+  if (!vs || !fs || !prog) return null;
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
+  gl.useProgram(prog);
+
+  const dyn = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, dyn);
+  gl.bufferData(gl.ARRAY_BUFFER, n * 16, gl.DYNAMIC_DRAW);
+  const aDot = gl.getAttribLocation(prog, 'a_dot');
+  gl.enableVertexAttribArray(aDot);
+  gl.vertexAttribPointer(aDot, 4, gl.FLOAT, false, 0, 0);
+
+  const stat = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, stat);
+  gl.bufferData(gl.ARRAY_BUFFER, col, gl.STATIC_DRAW);
+  const aCol = gl.getAttribLocation(prog, 'a_col');
+  gl.enableVertexAttribArray(aCol);
+  gl.vertexAttribPointer(aCol, 3, gl.FLOAT, false, 0, 0);
+
+  const uRes = gl.getUniformLocation(prog, 'u_res');
+  const uDpr = gl.getUniformLocation(prog, 'u_dpr');
+  gl.uniform1f(
+    gl.getUniformLocation(prog, 'u_max'),
+    (gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE) as Float32Array)[1],
+  );
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.clearColor(0, 0, 0, 0);
+
+  let lost = false;
+  const onLost = (e: Event) => {
+    e.preventDefault();
+    lost = true;
+  };
+  canvas.addEventListener('webglcontextlost', onLost);
+
+  return {
+    resize(cssW, cssH, dpr) {
+      canvas.width = Math.floor(cssW * dpr);
+      canvas.height = Math.floor(cssH * dpr);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.uniform2f(uRes, cssW, cssH);
+      gl.uniform1f(uDpr, dpr);
+    },
+    draw(data, count) {
+      if (lost) return;
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.bindBuffer(gl.ARRAY_BUFFER, dyn);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+      gl.bindBuffer(gl.ARRAY_BUFFER, stat);
+      gl.drawArrays(gl.POINTS, 0, count);
+    },
+    dispose() {
+      canvas.removeEventListener('webglcontextlost', onLost);
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    },
+  };
 }
 
 export function HalftoneBackground({ dimmed = false }: { dimmed?: boolean }) {
@@ -98,8 +226,8 @@ export function HalftoneBackground({ dimmed = false }: { dimmed?: boolean }) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    let ctx: CanvasRenderingContext2D | null = null;
+    let gl: GLRenderer | null = null;
 
     let cancelled = false;
     let cleanup: (() => void) | null = null;
@@ -108,6 +236,10 @@ export function HalftoneBackground({ dimmed = false }: { dimmed?: boolean }) {
       if (cancelled) return;
       const fire: FireData = mod.default;
       const dots = buildDots(fire);
+      gl = createGLRenderer(canvas, dots.col, dots.n);
+      if (!gl) ctx = canvas.getContext('2d');
+      if (!gl && !ctx) return;
+      const glBuf = new Float32Array(dots.n * 4);
       const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
       let scale = 1;
@@ -118,18 +250,23 @@ export function HalftoneBackground({ dimmed = false }: { dimmed?: boolean }) {
       let running = false;
 
       const resize = () => {
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        // Soft decorative dots don't need retina resolution; 1x cuts fill cost 2-4x.
+        const dpr = gl ? Math.min(window.devicePixelRatio || 1, 1.5) : 1;
         const w = window.innerWidth;
         const h = window.innerHeight;
-        canvas.width = Math.floor(w * dpr);
-        canvas.height = Math.floor(h * dpr);
-        canvas.style.width = `${w}px`;
-        canvas.style.height = `${h}px`;
+        if (gl) {
+          gl.resize(w, h, dpr);
+        } else {
+          canvas.width = Math.floor(w * dpr);
+          canvas.height = Math.floor(h * dpr);
+          canvas.style.width = `${w}px`;
+          canvas.style.height = `${h}px`;
+        }
         // "slice": cover the viewport like preserveAspectRatio="xMidYMid slice"
         scale = Math.max(w / fire.w, h / fire.h);
         offX = (w - fire.w * scale) / 2;
         offY = (h - fire.h * scale) / 2;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
         if (!running) frame(performance.now());
       };
 
@@ -137,7 +274,7 @@ export function HalftoneBackground({ dimmed = false }: { dimmed?: boolean }) {
         const t = reduceMotion ? 0 : now / 1000;
         const w = canvas.clientWidth;
         const h = canvas.clientHeight;
-        ctx.clearRect(0, 0, w, h);
+        ctx?.clearRect(0, 0, w, h);
 
         const P = dots.palette.length;
         const paths: Path2D[] = new Array(P * ALPHA_LEVELS);
@@ -181,15 +318,29 @@ export function HalftoneBackground({ dimmed = false }: { dimmed?: boolean }) {
           const y = by + dots.dy[i] - (0.5 + 0.5 * Math.sin(t * sp + ph)) * 2.2 * sway;
           const rad = dots.r[i] * (0.8 + 0.5 * e + 0.25 * lift * wave);
 
-          const a = Math.min(ALPHA_LEVELS - 1, Math.floor(e * ALPHA_LEVELS));
-          const key = dots.bucket[i] * ALPHA_LEVELS + a;
-          const path = paths[key] ?? (paths[key] = new Path2D());
           const cx = offX + x * scale;
           const cy = offY + y * scale;
           const r = rad * scale;
+          if (gl) {
+            const o = i * 4;
+            glBuf[o] = cx;
+            glBuf[o + 1] = cy;
+            glBuf[o + 2] = r;
+            glBuf[o + 3] = 0.5 + 0.5 * Math.min(1, e);
+            continue;
+          }
+          const a = Math.min(ALPHA_LEVELS - 1, Math.floor(e * ALPHA_LEVELS));
+          const key = dots.bucket[i] * ALPHA_LEVELS + a;
+          const path = paths[key] ?? (paths[key] = new Path2D());
           path.moveTo(cx + r, cy);
           path.arc(cx, cy, r, 0, Math.PI * 2);
         }
+
+        if (gl) {
+          gl.draw(glBuf, dots.n);
+          return;
+        }
+        if (!ctx) return;
 
         for (let key = 0; key < paths.length; key += 1) {
           const path = paths[key];
@@ -209,7 +360,7 @@ export function HalftoneBackground({ dimmed = false }: { dimmed?: boolean }) {
         frame(now);
       };
       const start = () => {
-        if (running || reduceMotion) return;
+        if (running || reduceMotion || !isAnimationActive()) return;
         running = true;
         raf = requestAnimationFrame(loop);
       };
@@ -224,7 +375,8 @@ export function HalftoneBackground({ dimmed = false }: { dimmed?: boolean }) {
       const onLeave = () => {
         pointer = null;
       };
-      const onVisibility = () => (document.hidden ? stop() : start());
+      // Sleep (keeping the last frame) while unfocused / hidden / in the tray.
+      const unsubscribeGate = subscribeAnimationGate((active) => (active ? start() : stop()));
 
       resize();
       start();
@@ -232,14 +384,14 @@ export function HalftoneBackground({ dimmed = false }: { dimmed?: boolean }) {
       window.addEventListener('pointermove', onMove, { passive: true });
       document.addEventListener('pointerleave', onLeave);
       window.addEventListener('blur', onLeave);
-      document.addEventListener('visibilitychange', onVisibility);
       cleanup = () => {
+        unsubscribeGate();
+        gl?.dispose();
         stop();
         window.removeEventListener('resize', resize);
         window.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerleave', onLeave);
         window.removeEventListener('blur', onLeave);
-        document.removeEventListener('visibilitychange', onVisibility);
       };
     });
 

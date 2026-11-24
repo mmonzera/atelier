@@ -72,7 +72,7 @@ class MascotEngine {
       depth: false,
       stencil: false,
       preserveDrawingBuffer: true,
-      powerPreference: 'high-performance',
+      powerPreference: 'low-power', // tiny 2D-ish shader: never wake the discrete GPU
     });
 
     if (!gl) {

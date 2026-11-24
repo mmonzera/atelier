@@ -4,7 +4,12 @@ export interface PointerState {
   active: boolean;
 }
 
+import { isAnimationActive, subscribeAnimationGate } from '../../state/animationGate';
+
 type FrameCallback = (nowMs: number, dtSec: number) => void;
+
+// Mascots are small; ~30 fps looks identical to 60 and halves the WebGL work per second.
+const MIN_FRAME_MS = 1000 / 24;
 
 const pointer: PointerState = {
   x: 0,
@@ -16,6 +21,7 @@ const subscribers = new Set<FrameCallback>();
 let rafId = 0;
 let lastFrameMs = 0;
 let listenersAttached = false;
+let unsubscribeGate: (() => void) | null = null;
 
 function onPointerMove(e: PointerEvent) {
   pointer.x = e.clientX;
@@ -27,8 +33,8 @@ function onPointerLeave() {
   pointer.active = false;
 }
 
-function onVisibilityChange() {
-  if (document.hidden) {
+function onGateChange(active: boolean) {
+  if (!active) {
     stopLoop();
   } else if (subscribers.size > 0) {
     startLoop();
@@ -41,7 +47,7 @@ function attachGlobalListeners() {
   window.addEventListener('pointermove', onPointerMove, { passive: true });
   document.addEventListener('pointerleave', onPointerLeave);
   window.addEventListener('blur', onPointerLeave);
-  document.addEventListener('visibilitychange', onVisibilityChange);
+  unsubscribeGate = subscribeAnimationGate(onGateChange);
 }
 
 function detachGlobalListeners() {
@@ -50,15 +56,17 @@ function detachGlobalListeners() {
   window.removeEventListener('pointermove', onPointerMove);
   document.removeEventListener('pointerleave', onPointerLeave);
   window.removeEventListener('blur', onPointerLeave);
-  document.removeEventListener('visibilitychange', onVisibilityChange);
+  unsubscribeGate?.();
+  unsubscribeGate = null;
 }
 
 function tick(nowMs: number) {
-  if (subscribers.size === 0 || (typeof document !== 'undefined' && document.hidden)) {
+  if (subscribers.size === 0 || !isAnimationActive()) {
     rafId = 0;
     return;
   }
   rafId = requestAnimationFrame(tick);
+  if (lastFrameMs && nowMs - lastFrameMs < MIN_FRAME_MS - 2) return;
   const rawDt = lastFrameMs ? (nowMs - lastFrameMs) / 1000 : 1 / 60;
   lastFrameMs = nowMs;
   const dtSec = Math.min(0.05, Math.max(0.001, rawDt));
@@ -69,7 +77,7 @@ function tick(nowMs: number) {
 
 function startLoop() {
   if (rafId || typeof window === 'undefined') return;
-  if (typeof document !== 'undefined' && document.hidden) return;
+  if (!isAnimationActive()) return;
   lastFrameMs = performance.now();
   rafId = requestAnimationFrame(tick);
 }

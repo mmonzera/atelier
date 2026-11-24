@@ -2,21 +2,16 @@
   "name": "@atelier/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Atelier Windows desktop shell (Electron)",
+  "description": "Atelier Windows desktop shell (Tauri + Node sidecar)",
   "type": "module",
   "scripts": {
-    "icons": "node scripts/make-icons.mjs",
+    "icons": "node scripts/make-icons.mjs && tauri icon assets/icon.png",
     "stage": "node scripts/stage.mjs",
-    "start": "node scripts/stage.mjs && electron app",
-    "dist": "node scripts/stage.mjs && electron-builder --config electron-builder.config.cjs --win --publish never",
-    "dist:publish": "node scripts/stage.mjs && electron-builder --config electron-builder.config.cjs --win --publish always",
-    "typecheck": "tsc -p tsconfig.json"
+    "dev": "node scripts/stage.mjs && tauri dev",
+    "build": "node scripts/stage.mjs && tauri build",
+    "build:release": "node scripts/stage.mjs && tauri build --config src-tauri/tauri.release.conf.json"
   },
   "devDependencies": {
-    "electron": "^45.4.1",
-    "electron-builder": "^26.18.0"
-  },
-  "dependencies": {
-    "electron-updater": "^6.8.11"
+    "@tauri-apps/cli": "^2.12.6"
   }
 }

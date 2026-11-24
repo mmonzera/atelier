@@ -1,10 +1,9 @@
-// Builds desktop/app — the self-contained folder electron-builder packages:
+// Prepares everything the Tauri bundle ships next to the Rust exe:
 //
-//   app/main.mjs      Electron main + Hono server + node:sqlite store, bundled by esbuild
-//   app/preload.cjs   sandboxed preload bridge
-//   app/web/          Vite build of the frontend (served by the in-process server)
-//   app/assets/       icons
-//   app/node_modules  only runtime deps that cannot be bundled (installed with npm --omit=dev)
+//   desktop/server-dist/server.mjs    server + sidecar entry, bundled by esbuild
+//   desktop/server-dist/web/          Vite build of the frontend
+//   desktop/server-dist/node_modules  runtime deps that cannot be bundled (pruned to Windows x64)
+//   src-tauri/binaries/atelier-node-<triple>.exe   Node runtime used to run the server
 //
 // Run `npm run build` at the repo root first so web/dist exists.
 import { execSync } from 'node:child_process';
@@ -17,83 +16,94 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const rootDir = path.resolve(desktopDir, '..');
-const appDir = path.join(desktopDir, 'app');
-const rootPkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
-const serverPkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'server', 'package.json'), 'utf8'));
-const desktopPkg = JSON.parse(fs.readFileSync(path.join(desktopDir, 'package.json'), 'utf8'));
+const outDir = path.join(desktopDir, 'server-dist');
+const binDir = path.join(desktopDir, 'src-tauri', 'binaries');
+const TRIPLE = 'x86_64-pc-windows-msvc';
 
+const serverPkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'server', 'package.json'), 'utf8'));
+const rootPkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
 const webDist = path.join(rootDir, 'web', 'dist');
 if (!fs.existsSync(path.join(webDist, 'index.html'))) {
   console.error('web/dist missing — run `npm run build` at the repo root first.');
   process.exit(1);
 }
 
-// Runtime deps loaded from node_modules instead of the bundle (they spawn files / ship binaries).
-const EXTERNAL_RUNTIME = {
+// Loaded from node_modules at runtime instead of being bundled (they spawn their own files).
+const EXTERNAL = {
   'playwright-core': serverPkg.dependencies['playwright-core'],
   '@anthropic-ai/claude-agent-sdk': serverPkg.optionalDependencies?.['@anthropic-ai/claude-agent-sdk'],
-  'electron-updater': desktopPkg.dependencies['electron-updater'],
 };
 
-fs.mkdirSync(appDir, { recursive: true });
-for (const entry of ['main.mjs', 'main.mjs.map', 'preload.cjs', 'web', 'assets']) {
-  fs.rmSync(path.join(appDir, entry), { recursive: true, force: true });
+fs.mkdirSync(outDir, { recursive: true });
+for (const entry of ['server.mjs', 'server.mjs.map', 'web']) {
+  fs.rmSync(path.join(outDir, entry), { recursive: true, force: true });
 }
 
-// 1) Bundle main + server.
+// 1) Bundle the sidecar entry (+ whole server).
 const esbuild = require('esbuild');
 await esbuild.build({
-  entryPoints: [path.join(desktopDir, 'src', 'main.ts')],
-  outfile: path.join(appDir, 'main.mjs'),
+  entryPoints: [path.join(desktopDir, 'sidecar', 'entry.ts')],
+  outfile: path.join(outDir, 'server.mjs'),
   bundle: true,
   platform: 'node',
   format: 'esm',
   target: 'node22',
   sourcemap: 'linked',
   legalComments: 'none',
-  external: ['electron', 'bufferutil', 'utf-8-validate', ...Object.keys(EXTERNAL_RUNTIME)],
+  external: ['bufferutil', 'utf-8-validate', ...Object.keys(EXTERNAL)],
   alias: { '@atelier/contracts': path.join(rootDir, 'packages', 'contracts', 'src', 'index.ts') },
-  // Bundled CommonJS deps (ws, ...) call require(); give the ESM bundle a real one.
   banner: {
     js: "import { createRequire as __atelierCreateRequire } from 'node:module'; const require = __atelierCreateRequire(import.meta.url);",
   },
   logLevel: 'warning',
 });
 
-// 2) Static files.
-fs.copyFileSync(path.join(desktopDir, 'src', 'preload.cjs'), path.join(appDir, 'preload.cjs'));
-fs.cpSync(webDist, path.join(appDir, 'web'), { recursive: true });
-fs.cpSync(path.join(desktopDir, 'assets'), path.join(appDir, 'assets'), { recursive: true });
+// 2) Frontend.
+fs.cpSync(webDist, path.join(outDir, 'web'), { recursive: true });
 
-// 3) package.json for the packaged app.
-const dependencies = Object.fromEntries(Object.entries(EXTERNAL_RUNTIME).filter(([, v]) => Boolean(v)));
-const appPkg = {
-  name: 'atelier',
-  productName: 'Atelier',
-  version: rootPkg.version,
-  description: rootPkg.description || 'Atelier: Design-to-Ship Studio',
-  author: rootPkg.author || 'Atelier contributors',
-  license: rootPkg.license || 'MIT',
-  homepage: rootPkg.homepage,
-  private: true,
-  type: 'module',
-  main: 'main.mjs',
-  dependencies,
-};
-fs.writeFileSync(path.join(appDir, 'package.json'), `${JSON.stringify(appPkg, null, 2)}\n`);
-
-// 4) Install runtime deps only when they changed.
-const depsHash = crypto.createHash('sha256').update(JSON.stringify(dependencies)).digest('hex');
-const stampFile = path.join(appDir, 'node_modules', '.atelier-deps');
-const current = fs.existsSync(stampFile) ? fs.readFileSync(stampFile, 'utf8') : '';
-if (current !== depsHash) {
-  console.log('Installing desktop runtime dependencies…');
+// 3) Runtime node_modules (installed only when the dependency set changed).
+const deps = Object.fromEntries(Object.entries(EXTERNAL).filter(([, v]) => Boolean(v)));
+fs.writeFileSync(
+  path.join(outDir, 'package.json'),
+  `${JSON.stringify({ name: 'atelier-server', version: rootPkg.version, private: true, type: 'module', dependencies: deps }, null, 2)}\n`,
+);
+const stamp = path.join(outDir, 'node_modules', '.atelier-deps');
+const hash = crypto.createHash('sha256').update(JSON.stringify(deps)).digest('hex');
+if (!fs.existsSync(stamp) || fs.readFileSync(stamp, 'utf8') !== hash) {
+  console.log('Installing sidecar runtime dependencies…');
+  fs.rmSync(path.join(outDir, 'node_modules'), { recursive: true, force: true });
   execSync('npm install --omit=dev --no-package-lock --no-audit --no-fund --ignore-scripts', {
-    cwd: appDir,
+    cwd: outDir,
     stdio: 'inherit',
     env: { ...process.env, npm_config_workspaces: 'false' },
   });
-  fs.writeFileSync(stampFile, depsHash);
+  // The Agent SDK ships ripgrep for every OS; keep only Windows x64.
+  const vendor = path.join(outDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'vendor');
+  if (fs.existsSync(vendor)) {
+    for (const tool of fs.readdirSync(vendor)) {
+      const toolDir = path.join(vendor, tool);
+      if (!fs.statSync(toolDir).isDirectory()) continue;
+      for (const platform of fs.readdirSync(toolDir)) {
+        const p = path.join(toolDir, platform);
+        if (fs.statSync(p).isDirectory() && platform !== 'x64-win32') fs.rmSync(p, { recursive: true, force: true });
+      }
+    }
+  }
+  fs.writeFileSync(stamp, hash);
 }
 
-console.log(`Staged desktop app ${appPkg.version} -> ${appDir}`);
+// 4) Node runtime as the Tauri external binary.
+fs.mkdirSync(binDir, { recursive: true });
+fs.copyFileSync(process.execPath, path.join(binDir, `atelier-node-${TRIPLE}.exe`));
+
+const size = (p) => {
+  let total = 0;
+  for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+    const f = path.join(p, e.name);
+    total += e.isDirectory() ? size(f) : fs.statSync(f).size;
+  }
+  return total;
+};
+console.log(
+  `Staged sidecar ${rootPkg.version}: server-dist ${(size(outDir) / 1048576).toFixed(0)} MB + node ${(fs.statSync(process.execPath).size / 1048576).toFixed(0)} MB`,
+);

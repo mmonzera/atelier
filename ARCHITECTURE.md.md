@@ -332,20 +332,28 @@ Tetap zero server cost: semua berjalan di laptop user, cloud drive hanya dipakai
 
 ## 15. Windows desktop app (Fase 4) — `desktop/`
 
-- **Electron 45** (Node 24 bawaan, `node:sqlite` tanpa modul native → `npmRebuild: false`). `scripts/stage.mjs` mem-bundle `desktop/src/main.ts` + seluruh server dengan esbuild ke `desktop/app/main.mjs`, menyalin `web/dist`, dan meng-install hanya dependency runtime yang tidak bisa di-bundle (`playwright-core`, Claude Agent SDK, `electron-updater`).
-- **Data dir**: installer → `%APPDATA%\Atelier\{data,workspaces}`; portable `.exe` → `<folder exe>\AtelierData`; `ATELIER_DATA_DIR` / `ATELIER_WORKSPACES_DIR` menimpa keduanya. Cache Chromium di `...\Atelier\electron`. Uninstall tidak menghapus data.
-- **Port dinamis** (`port: 0`) + `requestSingleInstanceLock()` → tidak ada lagi `EADDRINUSE`; instance kedua hanya memfokuskan jendela yang ada.
-- **Tray**: menutup jendela = sembunyi ke tray, agent tetap jalan. Menu: Buka, Kunci sekarang, Buka folder data, Restart & update, Keluar. Keluar → stop agent → backup-on-close → tutup SQLite.
-- **Notifikasi native**: agent selesai / error / butuh persetujuan fallback, task masuk `in_review` (hanya saat jendela tidak fokus). Sumbernya `EventBus.onEvent` in-process.
-- **Folder picker native** lewat preload sandbox (`window.atelierDesktop.pickFolder`), fallback ke dialog PowerShell di mode browser.
-- **Keamanan jendela**: `contextIsolation`, `sandbox`, tanpa `nodeIntegration`; navigasi ke origin lain dibuka di browser default; popup `window.open` (login OAuth MCP) tetap in-app supaya `window.opener` jalan.
-- **Auto-update gratis** via GitHub Releases (`electron-updater`): aktif hanya di build installer yang dipublish dengan `ATELIER_GH_OWNER`/`ATELIER_GH_REPO`; cek 30 dtk setelah start lalu tiap 6 jam, dipasang saat keluar atau dari tray. Versi portable tidak auto-update.
+Cangkang native **Tauri 2 (Rust)** + server TypeScript yang berjalan sebagai *sidecar* Node. Semua logika app tetap di server dan web UI; Rust hanya mengurus jendela dan integrasi OS.
+
+```text
+atelier-desktop.exe (Rust, ~28 MB RAM) --stdin/stdout--> atelier-node.exe server.mjs (Hono + node:sqlite)
+        |  WebView2 (bawaan Windows 11)                         ^ 127.0.0.1:<port acak>
+        +-------- http://127.0.0.1:<port>/ ---------------------+
+```
+
+- **Sidecar** (`desktop/sidecar/entry.ts`, dibundel esbuild ke `server-dist/server.mjs`): protokol baris teks. stdout `ATELIER_READY {port}` dan `ATELIER_NOTIFY {title,body}`; stdin `lock`, `shutdown`, atau EOF (shell mati -> server ikut berhenti graceful, tidak ada proses yatim). Env `ATELIER_EMBEDDED=1` mencegah `server/src/index.ts` start sendiri.
+- **Port dinamis** (`port: 0`) + plugin single-instance: tidak ada `EADDRINUSE`; instance kedua hanya memunculkan jendela yang ada.
+- **Data**: `%APPDATA%\Atelier\{data,workspaces,logs}` (bisa ditimpa `ATELIER_DATA_DIR` / `ATELIER_WORKSPACES_DIR`). Uninstall tidak menghapus data. Tidak ada build portable (Tauri tidak punya target portable); pakai Export/Import `.atelier-backup` untuk pindah.
+- **Tray**: menutup jendela = sembunyi ke tray (agent tetap jalan). Menu: Buka, Kunci sekarang, Buka folder data, Periksa update, Keluar. Keluar -> `shutdown` ke sidecar -> stop agent -> backup-on-close -> tutup SQLite (maks 22 dtk, lalu kill).
+- **Notifikasi native** (agent selesai/error/butuh persetujuan, task `in_review`), hanya saat jendela tidak fokus.
+- **Folder picker**: dialog Windows asli lewat endpoint `/api/fs/pick-folder` yang sudah ada.
+- **Auto-update**: `tauri-plugin-updater` membaca `latest.json` dari GitHub Releases, diverifikasi tanda tangan minisign (public key ada di `tauri.conf.json`). Cek 30 dtk setelah start (hanya memberi tahu); pemasangan hanya saat user memilih "Periksa update" di tray. Private key ada di `~/.tauri/atelier-updater.key` (jangan di-commit, jangan sampai hilang).
+- **Animasi hemat GPU**: `web/src/state/animationGate.ts` menidurkan animasi dekoratif (api halftone WebGL, maskot, CSS glow) saat jendela tidak fokus atau tersembunyi ke tray (shell mengirim event `atelier-shell-hidden/shown`). Api halftone digambar sebagai satu draw call WebGL, bukan ~10 ribu busur 2D per frame.
 
 Perintah:
 
 ```text
-npm run desktop          # build + jalankan Electron dari source
-npm run dist:win         # build installer NSIS + portable ke desktop/release/
-ATELIER_GH_OWNER=… ATELIER_GH_REPO=… GH_TOKEN=… npm --workspace @atelier/desktop run dist:publish
-npm run lock:reset       # matikan app lock (versi source)
+npm run desktop          # build + jalankan shell Tauri (dev)
+npm run desktop:build    # installer NSIS di desktop/src-tauri/target/release/bundle/nsis/
+npm --workspace @atelier/desktop run build:release   # + artefak update bertanda tangan (set TAURI_SIGNING_PRIVATE_KEY)
+npm run lock:reset       # matikan app lock (versi source); installer: Atelier.exe --reset-lock
 ```

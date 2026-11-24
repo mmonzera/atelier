@@ -164,9 +164,9 @@ export async function startAtelierServer(opts?: {
 }
 
 // Run when executed directly as entrypoint
-// Never auto-start inside the Electron shell: it bundles this module and starts the server itself.
+// Never auto-start when bundled into the desktop sidecar: it starts the server itself.
 const isMain =
-  !process.versions.electron &&
+  !process.env.ATELIER_EMBEDDED &&
   process.argv[1] &&
   path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 

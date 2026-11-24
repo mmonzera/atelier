@@ -184,8 +184,10 @@ a {
 .fire-glow {
   position: absolute;
   border-radius: 50%;
-  filter: blur(70px);
+  /* No filter: blur() on a huge, endlessly animated element is re-blurred on the GPU every frame.
+     The radial-gradient below already fades to transparent, so the look is the same. */
   will-change: opacity, transform;
+  pointer-events: none;
 }
 .fire-glow-left {
   left: -8%;
@@ -413,4 +415,10 @@ button:disabled {
   .mascot-shape-btn:active {
     transform: none;
   }
+}
+
+/* Decorative animations sleep while the window is unfocused / hidden (see state/animationGate.ts). */
+html[data-animations='off'] .fire-glow,
+html[data-animations='off'] .fire-glow * {
+  animation-play-state: paused;
 }
