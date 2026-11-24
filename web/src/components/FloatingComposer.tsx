@@ -2,6 +2,7 @@ import {
   ATTACHMENT_LIMITS,
   BUILT_IN_MODELS,
   type Agent,
+  type AgentSkill,
   type MessageAttachment,
   type ModelEntry,
   type Project,
@@ -21,7 +22,9 @@ import {
   Minimize2,
   Paperclip,
   Plus,
+  Sparkles,
   Square,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
@@ -39,7 +42,7 @@ interface FloatingComposerProps {
   replyTo?: string | null;
   onClearReply?: () => void;
   onChangeDraft: (val: string) => void;
-  onSend: (text: string, attachments?: MessageAttachment[]) => Promise<void>;
+  onSend: (text: string, attachments?: MessageAttachment[], skillIds?: string[]) => Promise<void>;
   onStop: () => Promise<void>;
   onUpdateReasoning: (effort: ReasoningEffort) => Promise<void>;
   onSelectModel: (entry: ModelEntry) => Promise<void>;
@@ -209,6 +212,31 @@ export function FloatingComposer({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pending, setPending] = useState<PendingUpload[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [pickedSkills, setPickedSkills] = useState<AgentSkill[]>([]);
+  const [slashIndex, setSlashIndex] = useState(0);
+
+  // Skills picked for one agent must not leak into a message to another.
+  useEffect(() => setPickedSkills([]), [agent?.id]);
+
+  // Typing "/" (alone, as the first word) opens the skill picker for this agent.
+  const slashQuery = agent ? (/^\/(\S*)$/.exec(draftText)?.[1] ?? null) : null;
+  const slashOptions =
+    slashQuery === null || !agent
+      ? []
+      : agent.skills.filter((s) => {
+          if (pickedSkills.some((p) => p.id === s.id)) return false;
+          const needle = slashQuery.toLowerCase();
+          return !needle || `${s.name} ${s.id} ${s.description}`.toLowerCase().includes(needle);
+        });
+  const slashOpen = slashQuery !== null;
+  const activeSlashIndex = Math.min(slashIndex, Math.max(0, slashOptions.length - 1));
+
+  const pickSkill = (skill: AgentSkill) => {
+    setPickedSkills((prev) => (prev.some((p) => p.id === skill.id) ? prev : [...prev, skill].slice(0, 5)));
+    onChangeDraft('');
+    setSlashIndex(0);
+    inputRef.current?.focus();
+  };
 
   const addFiles = async (incoming: File[]) => {
     if (!agent || incoming.length === 0) return;
@@ -323,7 +351,9 @@ export function FloatingComposer({
         for (const p of prev) if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
         return [];
       });
-      await onSend(text, sent.length > 0 ? sent : undefined);
+      const skillIds = pickedSkills.map((s) => s.id);
+      setPickedSkills([]);
+      await onSend(text, sent.length > 0 ? sent : undefined, skillIds.length > 0 ? skillIds : undefined);
     } finally {
       setSending(false);
       inputRef.current?.focus();
@@ -380,6 +410,38 @@ export function FloatingComposer({
       }}
     >
       <PendingAttachments items={pending} onRemove={removePending} />
+      {pickedSkills.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 6px 6px' }}>
+          {pickedSkills.map((skill) => (
+            <span
+              key={skill.id}
+              title={skill.description || skill.name}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '3px 6px 3px 9px',
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border-default)',
+                fontSize: 12,
+                color: 'var(--text-primary)',
+              }}
+            >
+              <Sparkles size={12} strokeWidth={1.5} style={{ color: 'var(--agent-purple)' }} />
+              {skill.name}
+              <button
+                type="button"
+                aria-label={`Remove skill ${skill.name}`}
+                onClick={() => setPickedSkills((prev) => prev.filter((p) => p.id !== skill.id))}
+                style={{ display: 'inline-flex', color: 'var(--text-tertiary)' }}
+              >
+                <X size={12} strokeWidth={1.75} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <input
         ref={fileInputRef}
         type="file"
@@ -432,6 +494,81 @@ export function FloatingComposer({
           position: 'relative',
         }}
       >
+        {slashOpen && (
+          <div
+            role="listbox"
+            aria-label="Skills"
+            className="popover-shadow"
+            style={{
+              position: 'absolute',
+              bottom: 58,
+              left: 0,
+              right: 0,
+              maxHeight: 260,
+              overflowY: 'auto',
+              background: 'var(--surface-1)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-md)',
+              padding: 6,
+              zIndex: 60,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+            }}
+          >
+            {slashOptions.length === 0 ? (
+              <div style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+                {agent && agent.skills.length === 0
+                  ? 'No skills installed. Add some in Edit agent.'
+                  : 'No matching skill.'}
+              </div>
+            ) : (
+              slashOptions.map((skill, index) => (
+                <button
+                  key={skill.id}
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeSlashIndex}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pickSkill(skill)}
+                  onMouseEnter={() => setSlashIndex(index)}
+                  className="transition-atelier"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    textAlign: 'left',
+                    padding: '7px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: index === activeSlashIndex ? 'var(--surface-3)' : 'transparent',
+                  }}
+                >
+                  <Sparkles size={15} strokeWidth={1.5} style={{ color: 'var(--agent-purple)', marginTop: 2, flexShrink: 0 }} />
+                  <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>
+                      {skill.name}
+                      {!skill.enabled && <span style={{ color: 'var(--text-muted)' }}> · off</span>}
+                    </span>
+                    {skill.description && (
+                      <span
+                        style={{
+                          fontSize: 11.5,
+                          color: 'var(--text-tertiary)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {skill.description}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
         <div ref={plusRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
           <button
             type="button"
@@ -537,7 +674,25 @@ export function FloatingComposer({
           type="text"
           value={draftText}
           disabled={!agent}
-          onChange={(e) => onChangeDraft(e.target.value)}
+          onChange={(e) => {
+            setSlashIndex(0);
+            onChangeDraft(e.target.value);
+          }}
+          onKeyDown={(e) => {
+            if (!slashOpen) return;
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              if (slashOptions.length === 0) return;
+              e.preventDefault();
+              const step = e.key === 'ArrowDown' ? 1 : -1;
+              setSlashIndex((activeSlashIndex + step + slashOptions.length) % slashOptions.length);
+            } else if ((e.key === 'Enter' || e.key === 'Tab') && slashOptions.length > 0) {
+              e.preventDefault();
+              pickSkill(slashOptions[activeSlashIndex]!);
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              onChangeDraft('');
+            }
+          }}
           onPaste={(e) => {
             const files = Array.from(e.clipboardData?.files ?? []);
             if (files.length > 0) {
@@ -548,8 +703,8 @@ export function FloatingComposer({
           placeholder={
             agent
               ? project
-                ? `Message ${agent.name}...`
-                : `Message ${agent.name} directly...`
+                ? `Message ${agent.name}...${agent.skills.length ? ' (type / for skills)' : ''}`
+                : `Message ${agent.name} directly...${agent.skills.length ? ' (type / for skills)' : ''}`
               : 'Create or select an agent to start...'
           }
           style={{

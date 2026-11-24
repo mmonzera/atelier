@@ -171,7 +171,7 @@ export function App() {
     setAgentTab('chat');
   };
 
-  const handleSend = async (text: string, attachments?: MessageAttachment[]) => {
+  const handleSend = async (text: string, attachments?: MessageAttachment[], skillIds?: string[]) => {
     if (!activeAgent) return;
     const quoted = replyTo?.replace(/\s+/g, ' ').trim().slice(0, 400);
     setReplyTo(null);
@@ -181,6 +181,7 @@ export function App() {
       payload,
       scopedProject?.id ?? null,
       attachments?.map((a) => a.id),
+      skillIds,
     );
   };
 

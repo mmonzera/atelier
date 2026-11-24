@@ -7,6 +7,7 @@ import {
   AGENT_COLORS,
   AGENT_TEMPLATES,
   CHIEF_OF_STAFF_GREETING,
+  type AgentSkill,
   type ApiErrorResponse,
   type McpServerConfig,
   type Settings,
@@ -532,6 +533,7 @@ export function createHttpRouter(deps: {
         text: z.string().trim().default(''),
         projectId: z.string().trim().min(1).nullable().optional(),
         attachmentIds: z.array(z.string()).max(8).optional(),
+        skillIds: z.array(z.string().trim().min(1).max(120)).max(5).optional(),
       })
       .safeParse(body);
 
@@ -554,8 +556,21 @@ export function createHttpRouter(deps: {
       );
     }
 
+    // Skills invoked by hand with /skill must be installed on this agent (enabled or not).
+    const invokedSkills: AgentSkill[] = [];
+    if (parsed.data.skillIds?.length) {
+      const owner = store.getAgent(agentId);
+      if (!owner) return c.json(apiError('agent_not_found', 'Agent not found.'), 404);
+      for (const id of new Set(parsed.data.skillIds)) {
+        const skill = owner.skills.find((s) => s.id === id);
+        if (!skill) return c.json(apiError('skill_not_found', `Skill ${id} is not installed on this agent.`), 404);
+        invokedSkills.push(skill);
+      }
+    }
+
     try {
       const { agent, item } = runtime.enqueue({
+        skills: invokedSkills,
         agentId,
         projectId: parsed.data.projectId ?? null,
         kind: 'user',

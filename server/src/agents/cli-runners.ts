@@ -80,7 +80,8 @@ export function applyAtelierActions(
         const obj = JSON.parse(jsonPayload) as Record<string, unknown>;
         const toolName = typeof obj.tool === 'string' ? obj.tool : '';
         if (Object.hasOwn(MEMORY_ACTIONS, toolName)) {
-          const isRecall = toolName === 'search_history' || toolName === 'get_message' || toolName === 'get_artifact';
+          const isRecall =
+            toolName === 'search_history' || toolName === 'get_message' || toolName === 'get_artifact' || toolName === 'get_skill';
           if (isRecall && recall.length >= 2) return '';
           const result = tools.memoryAction(toolName as MemoryAction, obj);
           if (isRecall) recall.push({ tool: toolName, result });

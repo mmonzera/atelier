@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type {
   Agent,
+  AgentSkill,
   MessageActivitySummary,
   MessageAttachment,
   MessageMetadata,
@@ -117,6 +118,8 @@ export class AgentRuntime {
     replyToAgentId?: string | null;
     metadata?: MessageMetadata;
     attachments?: MessageAttachment[];
+    /** Skills the user invoked by hand for this message. */
+    skills?: Array<Pick<AgentSkill, 'id' | 'name' | 'content'>>;
   }): { agent: Agent; item: QueueItem } {
     const agent = this.store.getAgent(input.agentId);
     if (!agent) {
@@ -125,7 +128,7 @@ export class AgentRuntime {
 
     const projectId = input.projectId ?? null;
     const author = input.kind === 'user' ? 'user' : 'teammate';
-    const prompt = this.promptWithAttachments(input.prompt, input.attachments);
+    const prompt = this.promptWithSkills(this.promptWithAttachments(input.prompt, input.attachments), input.skills);
     const { item, agent: updatedAgent } = this.store.enqueueMessage({
       projectId,
       agentId: agent.id,
@@ -135,6 +138,7 @@ export class AgentRuntime {
       metadata: {
         ...input.metadata,
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        ...(input.skills?.length ? { skills: input.skills.map(({ id, name }) => ({ id, name })) } : {}),
         taskId: input.kind === 'task' ? (input.refId ?? undefined) : input.metadata?.taskId,
       },
     }, {
@@ -157,6 +161,18 @@ export class AgentRuntime {
       agent: updatedAgent ?? agent,
       item,
     };
+  }
+
+  /** Puts the full text of skills the user invoked by hand in front of their message. */
+  private promptWithSkills(prompt: string, skills?: Array<Pick<AgentSkill, 'name' | 'content'>>): string {
+    if (!skills?.length) return prompt;
+    const blocks = skills.map((s) => `## Skill: ${s.name}\n${s.content.trim().slice(0, 20000)}`);
+    return [
+      'The user invoked these skills for this message. Follow them for this request.',
+      ...blocks,
+      '---',
+      `User message:\n${prompt}`,
+    ].join('\n\n');
   }
 
   /** Message text + attached-file list (+ inlined small text files) as the model should see it. */
@@ -240,7 +256,12 @@ export class AgentRuntime {
             agentId: agent.id,
             projectId: lastUser.projectId ?? null,
             kind: 'user',
-            prompt: this.promptWithAttachments(lastUser.text, lastUser.metadata?.attachments),
+            prompt: this.promptWithSkills(
+              this.promptWithAttachments(lastUser.text, lastUser.metadata?.attachments),
+              lastUser.metadata?.skills
+                ?.map((ref) => agent.skills.find((s) => s.id === ref.id))
+                .filter((s): s is AgentSkill => Boolean(s)),
+            ),
             refId: lastUser.id,
             modelOverride: opts?.modelOverride ?? null,
           });

@@ -23,6 +23,7 @@ import {
   Reply,
   RotateCcw,
   SlidersHorizontal,
+  Sparkles,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
@@ -382,6 +383,29 @@ export function ChatView({
                   <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
                     {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
                       <MessageAttachments attachments={msg.metadata.attachments} />
+                    )}
+                    {msg.metadata?.skills && msg.metadata.skills.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6 }}>
+                        {msg.metadata.skills.map((skill) => (
+                          <span
+                            key={skill.id}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              padding: '2px 9px',
+                              borderRadius: 'var(--radius-full)',
+                              background: 'var(--surface-2)',
+                              border: '1px solid var(--border-subtle)',
+                              fontSize: 11.5,
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            <Sparkles size={11} strokeWidth={1.5} style={{ color: 'var(--agent-purple)' }} />
+                            {skill.name}
+                          </span>
+                        ))}
+                      </div>
                     )}
                     {!(msg.metadata?.attachments?.length && isAttachmentOnlyText(msg.text)) && (
                       <div

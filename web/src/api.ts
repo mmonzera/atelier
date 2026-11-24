@@ -257,13 +257,20 @@ export const api = {
     request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(entry.scopeKey)}/canon/${encodeURIComponent(entry.id)}`, {
       method: 'DELETE',
     }),
-  sendMessage: (agentId: string, text: string, projectId?: string | null, attachmentIds?: string[]) =>
+  sendMessage: (
+    agentId: string,
+    text: string,
+    projectId?: string | null,
+    attachmentIds?: string[],
+    skillIds?: string[],
+  ) =>
     request<{ ok: boolean }>(`/api/agents/${agentId}/messages`, {
       method: 'POST',
       body: JSON.stringify({
         text,
         projectId: projectId ?? null,
         ...(attachmentIds?.length ? { attachmentIds } : {}),
+        ...(skillIds?.length ? { skillIds } : {}),
       }),
     }),
 

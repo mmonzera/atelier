@@ -43,7 +43,7 @@ const ATELIER_HARNESS_PROTOCOL = [
   'Record durable user decisions immediately with record_decision. Ask the user before replacing a saved decision or asset.',
   '  <atelier-action>{"tool":"record_decision","kind":"decision","key":"brand.primary-color","title":"Primary color","value":"#6D28D9"}</atelier-action>',
   '  <atelier-action>{"tool":"forget_decision","key":"brand.primary-color"}</atelier-action>',
-  'Older details are archived. Use search_history (query, optional limit), get_message (id), or get_artifact (id) instead of guessing. Call the MCP tool when available, or emit an atelier-action containing its tool name and arguments, then wait for the result.',
+  'Older details are archived. Use search_history (query, optional limit), get_message (id), or get_artifact (id) instead of guessing. Skills listed as available but not loaded are read with get_skill (id). Call the MCP tool when available, or emit an atelier-action containing its tool name and arguments, then wait for the result.',
   'When you want to create agents, update the Tasklist, or notify another agent, emit single-line XML action tags at the end of your reply:',
   '- Create or update a specialist bot in this project:',
   '  <atelier-action>{"tool":"create_agent","name":"Content Writer","role":"Copywriting","color":"blue","systemInstructions":"...","skillIds":["skill_ui_design"],"mcpServerNames":["notion"]}</atelier-action>',
@@ -145,6 +145,17 @@ function buildChiefOfStaffCatalog(allConfiguredMcp: McpServerConfig[]): string {
   ].join('\n');
 }
 
+/** Skills at or below this size are always inlined; larger ones are loaded on demand. */
+export const INLINE_SKILL_MAX_CHARS = 500;
+
+function skillSummary(skill: { description: string; content: string }): string {
+  const text =
+    skill.description.trim() ||
+    skill.content.split('\n').map((line) => line.replace(/^#+\s*/, '').trim()).find(Boolean) ||
+    'No description.';
+  return text.replace(/\s+/g, ' ').slice(0, 160);
+}
+
 export function buildAgentSystemPrompt(
   agent: Agent,
   project: Project | null,
@@ -158,12 +169,24 @@ export function buildAgentSystemPrompt(
   canonText = renderCanon(canon).text,
 ): string {
   const enabledSkills = agent.skills.filter((s) => s.enabled);
-  const skillsSection =
-    enabledSkills.length > 0
-      ? enabledSkills
-          .map((s) => `## Skill: ${s.name}\n${s.content.trim()}`)
-          .join('\n\n')
-      : 'No extra skills installed.';
+  // Short skills stay inline. Long ones are listed by name and loaded on demand with get_skill,
+  // so a large skill library does not cost tokens on every turn.
+  const inlineSkills = enabledSkills.filter((s) => s.content.trim().length <= INLINE_SKILL_MAX_CHARS);
+  const indexedSkills = enabledSkills
+    .filter((s) => s.content.trim().length > INLINE_SKILL_MAX_CHARS)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const skillParts = [
+    ...inlineSkills.map((s) => `## Skill: ${s.name}\n${s.content.trim()}`),
+    ...(indexedSkills.length > 0
+      ? [
+          [
+            'More skills are available but not loaded. Call get_skill with the skill id BEFORE doing work it covers, and follow it. Do not guess its content.',
+            ...indexedSkills.map((s) => `- ${s.id} — ${s.name}: ${skillSummary(s)}`),
+          ].join('\n'),
+        ]
+      : []),
+  ];
+  const skillsSection = skillParts.length > 0 ? skillParts.join('\n\n') : 'No extra skills installed.';
 
   const teamRoster =
     teamAgents.length > 0

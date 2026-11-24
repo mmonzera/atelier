@@ -19,6 +19,8 @@ const SearchHistorySchema = z.object({
   limit: z.number().int().min(1).max(8).optional(),
 });
 const ArchiveIdSchema = z.object({ id: z.string().min(1).max(80) });
+const GetSkillSchema = z.object({ id: z.string().trim().min(1).max(120) });
+const SKILL_READ_LIMIT = 12000;
 
 export const MEMORY_ACTIONS = {
   record_decision: CanonInputSchema,
@@ -26,6 +28,7 @@ export const MEMORY_ACTIONS = {
   search_history: SearchHistorySchema,
   get_message: ArchiveIdSchema,
   get_artifact: ArchiveIdSchema,
+  get_skill: GetSkillSchema,
 };
 export type MemoryAction = keyof typeof MEMORY_ACTIONS;
 
@@ -161,6 +164,22 @@ export function createStudioTools(deps: {
           if (!message || message.projectId !== projectId || message.streaming) return { found: false };
           return { id, author: message.author, createdAt: message.createdAt, text: message.text.slice(0, 6000),
             truncated: message.text.length > 6000 };
+        }
+        case 'get_skill': {
+          const { id } = GetSkillSchema.parse(rawInput);
+          const wanted = id.toLowerCase();
+          const skill = store
+            .getAgent(actingAgentId)
+            ?.skills.find((s) => s.enabled && (s.id.toLowerCase() === wanted || s.name.toLowerCase() === wanted));
+          if (!skill) return { found: false };
+          const content = skill.content.trim();
+          return {
+            found: true,
+            id: skill.id,
+            name: skill.name,
+            content: content.slice(0, SKILL_READ_LIMIT),
+            truncated: content.length > SKILL_READ_LIMIT,
+          };
         }
         case 'get_artifact': {
           const { id } = ArchiveIdSchema.parse(rawInput);
@@ -534,6 +553,7 @@ export async function createAtelierSdkMcpServer(tools: StudioTools): Promise<unk
             search_history: 'Search archived messages within the current scope.',
             get_message: 'Read an archived message by ID.',
             get_artifact: 'Read an archived artifact by ID.',
+            get_skill: 'Read the full instructions of an installed skill by ID before using it.',
           }[name], name === 'record_decision' ? CanonInputFields.shape : MEMORY_ACTIONS[name].shape, async (args) => {
             try {
               return wrapResult(tools.memoryAction(name, args));
