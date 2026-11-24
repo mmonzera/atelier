@@ -467,6 +467,7 @@ export class AgentRuntime {
     let sessionId: string | null = initialResumeId;
     let usageIn = 0;
     let usageOut = 0;
+    let usageCostUsd: number | null = null;
     let providerContextTokens = 0;
 
     try {
@@ -512,9 +513,10 @@ export class AgentRuntime {
           onSession: (id) => {
             sessionId = id;
           },
-          onUsage: (inputTokens, outputTokens) => {
+          onUsage: (inputTokens, outputTokens, costUsd) => {
             usageIn = inputTokens;
             usageOut = outputTokens;
+            usageCostUsd = typeof costUsd === 'number' && Number.isFinite(costUsd) ? costUsd : null;
           },
           onMemoryTail: (tokens) => { memoryTokens.tail = tokens; },
           onContextTokens: (tokens) => { providerContextTokens = Math.max(providerContextTokens, tokens); },
@@ -595,12 +597,8 @@ export class AgentRuntime {
         inputTokens: loggedIn,
         outputTokens: loggedOut,
         memoryTokens,
-        estimatedCostUsd: estimateTurnCostUsd(
-          effectiveProvider,
-          effectiveModel,
-          loggedIn,
-          loggedOut,
-        ),
+        estimatedCostUsd:
+          usageCostUsd ?? estimateTurnCostUsd(effectiveProvider, effectiveModel, loggedIn, loggedOut),
       });
       if (process.env.ATELIER_LOG_LEVEL === 'debug') {
         console.debug('Atelier memory tokens', { scopeKey, agentId: agent.id, ...memoryTokens });

@@ -11,6 +11,7 @@ import type {
 } from '@atelier/contracts';
 import type { AppConfig } from '../config.js';
 import type { AtelierStore } from '../store.js';
+import { fetchClaudeOauthUsage } from './claude-oauth-usage.js';
 import { readLocalCliUsage } from './local-usage.js';
 
 const ALL_PROVIDERS: ModelProvider[] = [
@@ -19,6 +20,7 @@ const ALL_PROVIDERS: ModelProvider[] = [
   'antigravity',
   'deepseek',
   'opencode',
+  'openrouter',
 ];
 
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
@@ -144,6 +146,16 @@ function getPricingRate(provider: ModelProvider, model: string): PricingRate {
       if (m.includes('gpt')) return { inputPerMillion: 2.5, outputPerMillion: 10 };
       if (m.includes('deepseek')) return { inputPerMillion: 0.27, outputPerMillion: 1.1 };
       return { inputPerMillion: 0.5, outputPerMillion: 1.5 };
+    case 'openrouter':
+      // Fallback only: OpenRouter reports the real per-call cost, which is logged instead when present.
+      if (m.includes('opus')) return { inputPerMillion: 15, outputPerMillion: 75 };
+      if (m.includes('haiku')) return { inputPerMillion: 0.8, outputPerMillion: 4 };
+      if (m.includes('claude')) return { inputPerMillion: 3, outputPerMillion: 15 };
+      if (m.includes('gpt')) return { inputPerMillion: 1.25, outputPerMillion: 10 };
+      if (m.includes('flash')) return { inputPerMillion: 0.3, outputPerMillion: 2.5 };
+      if (m.includes('gemini')) return { inputPerMillion: 1.25, outputPerMillion: 10 };
+      if (m.includes('deepseek')) return { inputPerMillion: 0.27, outputPerMillion: 1.1 };
+      return { inputPerMillion: 1, outputPerMillion: 3 };
   }
 }
 
@@ -233,6 +245,46 @@ export async function fetchDeepSeekLiveBalance(
   }
 }
 
+/**
+ * Remaining OpenRouter credit. A per-key spending cap (`/key`) wins when set; otherwise the account
+ * balance (`/credits`, which OpenRouter may restrict to management keys) is total_credits - total_usage.
+ */
+export async function fetchOpenRouterLiveBalance(
+  store: AtelierStore,
+  config: AppConfig,
+): Promise<ProviderLiveBalance | null> {
+  const apiKey = store.getProviderSecret('openrouter') || config.openrouterApiKey;
+  if (!apiKey) return null;
+  const get = async (path: string): Promise<{ data?: Record<string, unknown> } | null> => {
+    try {
+      const res = await fetch(`${config.openrouterBaseUrl}${path}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(3500),
+      });
+      return res.ok ? ((await res.json()) as { data?: Record<string, unknown> }) : null;
+    } catch {
+      return null;
+    }
+  };
+  const toLive = (remaining: number): ProviderLiveBalance => ({
+    available: remaining > 0,
+    currency: 'USD',
+    remaining,
+    label: `$${remaining.toFixed(2)} left`,
+  });
+
+  const key = await get('/key');
+  const rawRemaining = key?.data?.limit_remaining;
+  if (rawRemaining !== null && rawRemaining !== undefined && Number.isFinite(Number(rawRemaining))) {
+    return toLive(Math.max(0, Number(rawRemaining)));
+  }
+  const credits = await get('/credits');
+  const total = Number(credits?.data?.total_credits);
+  const used = Number(credits?.data?.total_usage);
+  if (Number.isFinite(total) && Number.isFinite(used)) return toLive(Math.max(0, total - used));
+  return null;
+}
+
 export async function buildUsageDashboard(
   store: AtelierStore,
   config: AppConfig,
@@ -277,7 +329,11 @@ export async function buildUsageDashboard(
 
   const settings = store.getSettings();
   const limits = settings.usageLimits ?? {};
-  const deepseekBalance = await fetchDeepSeekLiveBalance(store, config);
+  const [deepseekBalance, openrouterBalance, claudeOfficial] = await Promise.all([
+    fetchDeepSeekLiveBalance(store, config),
+    fetchOpenRouterLiveBalance(store, config),
+    fetchClaudeOauthUsage(config, { forceRefresh: Boolean(opts?.forceRefresh) }),
+  ]);
 
   let totalTurns = 0;
   let totalInput = 0;
@@ -377,11 +433,32 @@ export async function buildUsageDashboard(
       }
     }
 
+    if (provider === 'claude' && claudeOfficial.status === 'ok') {
+      if (claudeOfficial.fiveHour && !hasCustomFiveHour) {
+        fiveHour = {
+          ...fiveHour,
+          percentUsed: claudeOfficial.fiveHour.percentUsed,
+          resetsAt: claudeOfficial.fiveHour.resetsAt ?? fiveHour.resetsAt,
+          isOfficial: true,
+        };
+      }
+      if (claudeOfficial.weekly && !hasCustomWeekly) {
+        weekly = {
+          ...weekly,
+          percentUsed: claudeOfficial.weekly.percentUsed,
+          resetsAt: claudeOfficial.weekly.resetsAt ?? weekly.resetsAt,
+          isOfficial: true,
+        };
+      }
+    }
+
     const sourceLabel =
       provider === 'claude'
-        ? hasLocalClaude
-          ? 'Local Claude Code logs'
-          : 'Atelier tracked'
+        ? claudeOfficial.status === 'ok'
+          ? 'Official Claude plan limits'
+          : hasLocalClaude
+            ? `Local Claude Code logs${claudeOfficial.status === 'expired' ? ' · sign-in expired, open Claude Code to refresh' : claudeOfficial.status === 'unauthorized' ? ' · plan limits unavailable (re-login to Claude Code)' : ''}`
+            : 'Atelier tracked'
         : provider === 'openai'
           ? localSnapshot.codexOfficialLimits
             ? 'Official Codex limits'
@@ -392,7 +469,11 @@ export async function buildUsageDashboard(
             ? deepseekBalance
               ? 'Live DeepSeek balance'
               : 'Atelier tracked'
-            : 'Atelier tracked';
+            : provider === 'openrouter'
+              ? openrouterBalance
+                ? 'Live OpenRouter credit · cost from OpenRouter'
+                : 'Atelier tracked · cost from OpenRouter'
+              : 'Atelier tracked';
 
     let limitWindowTokens = 0;
     let limitWindowCostUsd = 0;
@@ -442,7 +523,8 @@ export async function buildUsageDashboard(
       remainingTokens,
       remainingBudgetUsd,
       percentUsed,
-      liveBalance: provider === 'deepseek' ? deepseekBalance : null,
+      liveBalance:
+        provider === 'deepseek' ? deepseekBalance : provider === 'openrouter' ? openrouterBalance : null,
       sourceLabel,
     };
   });

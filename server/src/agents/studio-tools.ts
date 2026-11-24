@@ -106,7 +106,7 @@ export const CreateAgentToolSchema = z.object({
     .optional(),
   mcpServerNames: z.array(z.string()).optional(),
   providerOverride: z
-    .enum(['claude', 'openai', 'antigravity', 'deepseek', 'opencode'])
+    .enum(['claude', 'openai', 'antigravity', 'deepseek', 'opencode', 'openrouter'])
     .nullable()
     .optional(),
   modelOverride: z.string().nullable().optional(),

@@ -4,6 +4,7 @@ import {
   siDeepseek,
   siGooglegemini,
   siOpencode,
+  siOpenrouter,
 } from 'simple-icons';
 
 const OPENAI_PATH =
@@ -15,6 +16,7 @@ const PROVIDER_BRAND: Record<ModelProvider, { path: string; color: string }> = {
   antigravity: { path: siGooglegemini.path, color: '#60A5FA' },
   deepseek: { path: siDeepseek.path, color: '#5B8CFF' },
   opencode: { path: siOpencode.path, color: '#E4E4E7' },
+  openrouter: { path: siOpenrouter.path, color: '#8B8BF5' },
 };
 
 export function ProviderIcon({

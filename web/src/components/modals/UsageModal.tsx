@@ -25,6 +25,7 @@ const PROVIDER_NAMES: Record<ModelProvider, string> = {
   antigravity: 'Antigravity (Google)',
   deepseek: 'DeepSeek (API)',
   opencode: 'OpenCode CLI',
+  openrouter: 'OpenRouter (API)',
 };
 
 const RANGE_OPTIONS: Array<{ id: UsageRange; label: string }> = [

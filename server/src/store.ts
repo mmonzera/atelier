@@ -191,7 +191,8 @@ export class AtelierStore {
         raw.providerOverride === 'openai' ||
         raw.providerOverride === 'antigravity' ||
         raw.providerOverride === 'deepseek' ||
-        raw.providerOverride === 'opencode'
+        raw.providerOverride === 'opencode' ||
+        raw.providerOverride === 'openrouter'
           ? raw.providerOverride
           : null,
       modelOverride: typeof raw.modelOverride === 'string' ? raw.modelOverride : null,
@@ -344,6 +345,7 @@ export class AtelierStore {
     if (provider === 'antigravity') return 'gemini-4-neon';
     if (provider === 'deepseek') return 'deepseek-chat';
     if (provider === 'opencode') return 'opencode/big-pickle';
+    if (provider === 'openrouter') return 'openrouter/auto';
     return 'sonnet';
   }
 
@@ -389,7 +391,8 @@ export class AtelierStore {
       parsed.provider === 'antigravity' ||
       parsed.provider === 'claude' ||
       parsed.provider === 'deepseek' ||
-      parsed.provider === 'opencode'
+      parsed.provider === 'opencode' ||
+      parsed.provider === 'openrouter'
         ? parsed.provider
         : 'claude';
     const model = this.migrateLegacyModel(provider, parsed.model);

@@ -37,6 +37,7 @@ const PROVIDER_SHORT: Record<RealProvider, string> = {
   antigravity: 'Antigravity',
   deepseek: 'DeepSeek',
   opencode: 'OpenCode',
+  openrouter: 'OpenRouter',
 };
 
 const MODEL_PLACEHOLDER: Record<RealProvider, { id: string; label: string }> = {
@@ -45,6 +46,7 @@ const MODEL_PLACEHOLDER: Record<RealProvider, { id: string; label: string }> = {
   antigravity: { id: 'e.g. gemini-4-neon', label: 'e.g. Gemini 4 Neon' },
   deepseek: { id: 'e.g. deepseek-reasoner', label: 'e.g. DeepSeek R1' },
   opencode: { id: 'e.g. opencode/big-pickle', label: 'e.g. OpenCode Big Pickle' },
+  openrouter: { id: 'e.g. anthropic/claude-sonnet-4.5', label: 'e.g. OpenRouter · Claude Sonnet' },
 };
 
 const PROVIDER_ORDER: RealProvider[] = [
@@ -52,6 +54,7 @@ const PROVIDER_ORDER: RealProvider[] = [
   'openai',
   'antigravity',
   'deepseek',
+  'openrouter',
   'opencode',
 ];
 

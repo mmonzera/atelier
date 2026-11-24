@@ -18,6 +18,7 @@ const PROVIDER_LABELS: Record<RealProvider, string> = {
   antigravity: 'Antigravity (Google)',
   deepseek: 'DeepSeek (API)',
   opencode: 'OpenCode CLI',
+  openrouter: 'OpenRouter (API)',
 };
 
 function maskApiKey(key: string): string {
@@ -38,6 +39,9 @@ export class ProviderAuthManager {
   ): Promise<ProviderAuthStatus> {
     if (provider === 'deepseek') {
       return this.checkDeepSeekStatus(store);
+    }
+    if (provider === 'openrouter') {
+      return this.checkOpenRouterStatus(store);
     }
 
     const customPath = settings.cliPaths?.[provider];
@@ -66,6 +70,7 @@ export class ProviderAuthManager {
       this.getStatus('antigravity', settings, store),
       this.getStatus('deepseek', settings, store),
       this.getStatus('opencode', settings, store),
+      this.getStatus('openrouter', settings, store),
     ]);
   }
 
@@ -256,6 +261,29 @@ export class ProviderAuthManager {
     };
   }
 
+  private checkOpenRouterStatus(store?: AtelierStore): ProviderAuthStatus {
+    const savedKey = store?.getProviderSecret('openrouter')?.trim() || null;
+    const envKey = process.env.OPENROUTER_API_KEY?.trim() || null;
+    const effective = savedKey || envKey;
+
+    return {
+      provider: 'openrouter',
+      label: PROVIDER_LABELS.openrouter,
+      authMode: 'api_key',
+      cliInstalled: true,
+      cliPath: null,
+      authenticated: Boolean(effective),
+      accountLabel: savedKey ? maskApiKey(savedKey) : envKey ? 'OPENROUTER_API_KEY' : null,
+      loginInProgress: false,
+      authUrl: null,
+      message: savedKey
+        ? `API key saved locally (${maskApiKey(savedKey)}).`
+        : envKey
+          ? 'Authenticated via OPENROUTER_API_KEY.'
+          : 'Not configured. Click API key to enter your OpenRouter key.',
+    };
+  }
+
   private hasOpenCodeAuthFile(): boolean {
     const home = os.homedir();
     const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
@@ -339,8 +367,8 @@ export class ProviderAuthManager {
     settings: Settings,
     store?: AtelierStore,
   ): Promise<ProviderAuthStatus> {
-    if (provider === 'deepseek') {
-      return this.getStatus('deepseek', settings, store);
+    if (provider === 'deepseek' || provider === 'openrouter') {
+      return this.getStatus(provider, settings, store);
     }
 
     const customPath = settings.cliPaths?.[provider];
@@ -420,9 +448,9 @@ export class ProviderAuthManager {
     settings: Settings,
     store?: AtelierStore,
   ): Promise<ProviderAuthStatus> {
-    if (provider === 'deepseek') {
-      store?.setProviderSecret('deepseek', null);
-      return this.getStatus('deepseek', settings, store);
+    if (provider === 'deepseek' || provider === 'openrouter') {
+      store?.setProviderSecret(provider, null);
+      return this.getStatus(provider, settings, store);
     }
 
     const active = this.activeLogins.get(provider);

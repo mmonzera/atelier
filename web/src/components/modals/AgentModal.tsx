@@ -448,6 +448,7 @@ export function AgentModal({
                   { value: 'openai', label: 'ChatGPT' },
                   { value: 'antigravity', label: 'Antigravity' },
                   { value: 'deepseek', label: 'DeepSeek' },
+                  { value: 'openrouter', label: 'OpenRouter' },
                   { value: 'opencode', label: 'OpenCode' },
                 ]}
               />

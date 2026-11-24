@@ -44,6 +44,7 @@ function getCandidatePaths(provider: RealProvider): string[] {
           path.join(home, 'scoop', 'shims', 'opencode.exe'),
         ];
       case 'deepseek':
+      case 'openrouter':
         return [];
     }
   }
@@ -54,6 +55,7 @@ function getCandidatePaths(provider: RealProvider): string[] {
     antigravity: ['agy'],
     opencode: ['opencode'],
     deepseek: [],
+    openrouter: [],
   };
   return binNames[provider].flatMap((name) => [
     path.join(home, '.local', 'bin', name),
@@ -90,7 +92,7 @@ export async function resolveCliBinary(
   provider: RealProvider,
   customPath?: string,
 ): Promise<string | null> {
-  if (provider === 'deepseek') {
+  if (provider === 'deepseek' || provider === 'openrouter') {
     return null;
   }
   if (customPath && customPath.trim()) {
@@ -114,6 +116,7 @@ export async function resolveCliBinary(
     opencode:
       process.platform === 'win32' ? ['opencode.exe', 'opencode.cmd', 'opencode'] : ['opencode'],
     deepseek: [],
+    openrouter: [],
   };
 
   return findOnPath(pathNames[provider]);

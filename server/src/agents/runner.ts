@@ -21,7 +21,8 @@ export interface TurnCallbacks {
   onText(delta: string): void;
   onTool(name: string, input: unknown): void;
   onSession(sessionId: string): void;
-  onUsage?(inputTokens: number, outputTokens: number): void;
+  /** `costUsd` is the provider-reported cost when available (e.g. OpenRouter); otherwise it is estimated. */
+  onUsage?(inputTokens: number, outputTokens: number, costUsd?: number): void;
   onContextTokens?(tokens: number): void;
   onMemoryTail?(tokens: number): void;
 }

@@ -58,6 +58,7 @@ const PROVIDER_GROUPS = [
   { key: 'openai', label: 'ChatGPT' },
   { key: 'antigravity', label: 'Antigravity' },
   { key: 'deepseek', label: 'DeepSeek' },
+  { key: 'openrouter', label: 'OpenRouter' },
   { key: 'opencode', label: 'OpenCode' },
 ] as const;
 
@@ -66,6 +67,7 @@ const PROVIDER_SHORT_LABELS: Record<string, string> = {
   openai: 'ChatGPT',
   antigravity: 'Antigravity',
   deepseek: 'DeepSeek',
+  openrouter: 'OpenRouter',
   opencode: 'OpenCode',
 };
 

@@ -524,6 +524,7 @@ describe('HTTP + WebSocket integration (end-to-end custom agents, skills & Linea
         'antigravity',
         'deepseek',
         'opencode',
+        'openrouter',
       ]);
       expect(Array.isArray(discoveredModels)).toBe(true);
 

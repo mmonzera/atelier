@@ -130,7 +130,7 @@ export function createHttpRouter(deps: {
     });
   });
 
-  const providerSchema = z.enum(['claude', 'openai', 'antigravity', 'deepseek', 'opencode']);
+  const providerSchema = z.enum(['claude', 'openai', 'antigravity', 'deepseek', 'opencode', 'openrouter']);
 
   const modelRefSchema = z.object({
     provider: providerSchema,
@@ -1109,7 +1109,7 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
     if (!parsed.success) {
       return c.json(apiError('invalid_provider', 'Unsupported provider.'), 400);
     }
-    if (parsed.data !== 'deepseek') {
+    if (parsed.data !== 'deepseek' && parsed.data !== 'openrouter') {
       return c.json(apiError('unsupported_api_key', 'This provider uses CLI/OAuth login.'), 400);
     }
     const body = await c.req.json().catch(() => null);

@@ -44,7 +44,7 @@ export type ActivityKind = 'tool' | 'status' | 'task' | 'pr' | 'error';
 export type ReasoningEffort = 'Low' | 'Medium' | 'High';
 export type WorkspaceTab = 'chat' | 'tasks' | 'preview' | 'library';
 export type AgentViewTab = 'chat' | 'reports' | 'library';
-export type ModelProvider = 'claude' | 'openai' | 'antigravity' | 'deepseek' | 'opencode';
+export type ModelProvider = 'claude' | 'openai' | 'antigravity' | 'deepseek' | 'opencode' | 'openrouter';
 export type RealProvider = ModelProvider;
 
 export interface ModelRef {
@@ -125,6 +125,11 @@ export const BUILT_IN_MODELS: ModelEntry[] = [
   { id: 'gemini-4-argon', label: 'Gemini 4 Argon', provider: 'antigravity', builtIn: true },
   { id: 'deepseek-chat', label: 'DeepSeek V3 (Chat)', provider: 'deepseek', builtIn: true },
   { id: 'deepseek-reasoner', label: 'DeepSeek R1 (Reasoner)', provider: 'deepseek', builtIn: true },
+  { id: 'openrouter/auto', label: 'OpenRouter · Auto', provider: 'openrouter', builtIn: true },
+  { id: 'anthropic/claude-sonnet-4.5', label: 'OpenRouter · Claude Sonnet', provider: 'openrouter', builtIn: true },
+  { id: 'openai/gpt-5', label: 'OpenRouter · GPT-5', provider: 'openrouter', builtIn: true },
+  { id: 'google/gemini-2.5-pro', label: 'OpenRouter · Gemini 2.5 Pro', provider: 'openrouter', builtIn: true },
+  { id: 'deepseek/deepseek-chat', label: 'OpenRouter · DeepSeek V3', provider: 'openrouter', builtIn: true },
   { id: 'opencode/big-pickle', label: 'OpenCode Big Pickle', provider: 'opencode', builtIn: true },
   { id: 'anthropic/claude-sonnet-4-5', label: 'OpenCode · Claude Sonnet', provider: 'opencode', builtIn: true },
   { id: 'openai/gpt-5', label: 'OpenCode · GPT-5', provider: 'opencode', builtIn: true },

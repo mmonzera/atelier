@@ -57,6 +57,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   openai: 'ChatGPT',
   antigravity: 'Antigravity',
   deepseek: 'DeepSeek',
+  openrouter: 'OpenRouter',
   opencode: 'OpenCode',
 };
 

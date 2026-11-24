@@ -11,8 +11,13 @@ export interface AppConfig {
   anthropicApiKey: string | null;
   deepseekApiKey: string | null;
   deepseekBaseUrl: string;
+  openrouterApiKey: string | null;
+  openrouterBaseUrl: string;
   claudeProjectsDir: string | null;
   codexSessionsDir: string | null;
+  /** Claude Code's credentials file, used only to read official plan usage; null disables that. */
+  claudeCredentialsPath: string | null;
+  claudeUsageUrl: string;
 }
 
 function loadDotEnvIfPresent(): void {
@@ -39,8 +44,11 @@ export function loadConfig(
     port: number;
     dbPath: string;
     deepseekBaseUrl: string;
+    openrouterBaseUrl: string;
     claudeProjectsDir: string | null;
     codexSessionsDir: string | null;
+    claudeCredentialsPath: string | null;
+    claudeUsageUrl: string;
   }>,
 ): AppConfig {
   loadDotEnvIfPresent();
@@ -57,6 +65,12 @@ export function loadConfig(
     process.env.DEEPSEEK_BASE_URL?.trim() ??
     'https://api.deepseek.com'
   ).replace(/\/+$/, '');
+  const openrouterApiKey = process.env.OPENROUTER_API_KEY?.trim() || null;
+  const openrouterBaseUrl = (
+    overrides?.openrouterBaseUrl ??
+    process.env.OPENROUTER_BASE_URL?.trim() ??
+    'https://openrouter.ai/api/v1'
+  ).replace(/\/+$/, '');
   const isVitest = Boolean(process.env.VITEST);
   const claudeProjectsDir =
     overrides?.claudeProjectsDir !== undefined
@@ -71,6 +85,15 @@ export function loadConfig(
         ? null
         : path.join(os.homedir(), '.codex', 'sessions');
 
+  const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude');
+  const claudeCredentialsPath =
+    overrides?.claudeCredentialsPath !== undefined
+      ? overrides.claudeCredentialsPath
+      : isVitest || process.env.ATELIER_CLAUDE_OAUTH_USAGE === '0'
+        ? null
+        : path.join(claudeConfigDir, '.credentials.json');
+  const claudeUsageUrl = overrides?.claudeUsageUrl ?? 'https://api.anthropic.com/api/oauth/usage';
+
   return {
     port,
     host: '127.0.0.1',
@@ -80,8 +103,12 @@ export function loadConfig(
     anthropicApiKey,
     deepseekApiKey,
     deepseekBaseUrl,
+    openrouterApiKey,
+    openrouterBaseUrl,
     claudeProjectsDir,
     codexSessionsDir,
+    claudeCredentialsPath,
+    claudeUsageUrl,
   };
 }
 
