@@ -35,6 +35,26 @@ import { PreviewView } from './views/PreviewView';
 import { SettingsView, type SettingsTab } from './views/SettingsView';
 import { TasksView } from './views/TasksView';
 
+/**
+ * Soft band behind the chat column. The opacity follows an eased (smoothstep-like) curve so the
+ * background fades in without a visible edge, and it stays a little translucent in the middle so
+ * the cables still show faintly behind the text instead of a flat black slab.
+ */
+const CHAT_BAND_GRADIENT = (() => {
+  const peak = 0.84;
+  const steps = 14;
+  const stops: string[] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps; // 0 → 1 across the left half
+    const eased = t * t * (3 - 2 * t);
+    stops.push(`rgba(13, 13, 17, ${(peak * eased).toFixed(3)}) ${(t * 50).toFixed(1)}%`);
+  }
+  const mirrored = [...stops]
+    .reverse()
+    .map((s) => s.replace(/([\d.]+)%$/, (_, p: string) => `${(100 - Number(p)).toFixed(1)}%`));
+  return `linear-gradient(to right, ${[...stops, ...mirrored.slice(1)].join(', ')})`;
+})();
+
 type ActiveModal =
   | { type: 'new-project' }
   | { type: 'link-repo' }
@@ -389,12 +409,11 @@ export function App() {
               top: -12,
               bottom: -12,
               left: '50%',
-              width: 'min(100%, 940px)',
+              width: 'min(100%, 1200px)',
               transform: 'translateX(-50%)',
               zIndex: -1,
               pointerEvents: 'none',
-              background:
-                'linear-gradient(to right, transparent 0%, var(--bg-base) 17%, var(--bg-base) 83%, transparent 100%)',
+              background: CHAT_BAND_GRADIENT,
             }}
           />
         )}

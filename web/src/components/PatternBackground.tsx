@@ -153,7 +153,7 @@ export function PatternBackground({ dimmed = false }: { dimmed?: boolean }) {
         zIndex: 0,
         overflow: 'hidden',
         background: '#101115',
-        opacity: dimmed ? 0.45 : 1,
+        opacity: dimmed ? 0.45 : 0.78,
         transition: 'opacity 400ms var(--ease-atelier)',
       }}
     />
