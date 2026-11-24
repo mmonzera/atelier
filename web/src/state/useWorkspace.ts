@@ -13,6 +13,9 @@ import { useCallback, useEffect, useReducer, useState } from 'react';
 import { LOCKED_EVENT, api, authApi } from '../api';
 import { INITIAL_WORKSPACE_STATE, workspaceReducer } from './reducer';
 
+/** Window event carrying a MeetingLevelEvent (live recording loudness). */
+export const MEETING_LEVEL_EVENT = 'atelier:meeting-level';
+
 export function useWorkspace() {
   const [state, dispatch] = useReducer(workspaceReducer, INITIAL_WORKSPACE_STATE);
   const [connected, setConnected] = useState(false);
@@ -172,6 +175,19 @@ export function useWorkspace() {
               lastActive = parsed.payload;
             }
             setActiveMeeting(done ? null : parsed.payload);
+            return;
+          }
+          if (parsed.type === 'meeting-level') {
+            // Several times a second: handed straight to the recorder's waveform, so the rest of
+            // the app does not re-render on every update.
+            window.dispatchEvent(new CustomEvent(MEETING_LEVEL_EVENT, { detail: parsed.payload }));
+            return;
+          }
+          if (parsed.type === 'meeting-removed') {
+            if (lastActive?.meeting.id === parsed.payload.id) {
+              lastActive = null;
+              setActiveMeeting(null);
+            }
             return;
           }
           if (parsed.type === 'meeting-app') {

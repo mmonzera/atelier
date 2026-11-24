@@ -1237,6 +1237,18 @@ export interface MeetingSession {
   error: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Recording is paused (audio is not kept). */
+  paused: boolean;
+  /** Total time spent paused before `pausedSince`, ms. Recorded time = now − createdAt − paused time. */
+  pausedMs: number;
+  /** When the current pause began, or null. */
+  pausedSince: string | null;
+}
+
+/** Live loudness of the recording (RMS per 100 ms), streamed a few times a second. */
+export interface MeetingLevelEvent {
+  meetingId: string;
+  levels: number[];
 }
 
 export interface MeetingStatusEvent {
@@ -1436,7 +1448,9 @@ export type ServerEvent =
   | { type: 'browser-takeover'; payload: BrowserTakeoverEvent }
   | { type: 'stt-download-progress'; payload: SttDownloadProgressEvent }
   | { type: 'meeting-status'; payload: MeetingStatusEvent }
-  | { type: 'meeting-app'; payload: MeetingAppEvent };
+  | { type: 'meeting-app'; payload: MeetingAppEvent }
+  | { type: 'meeting-level'; payload: MeetingLevelEvent }
+  | { type: 'meeting-removed'; payload: { id: string } };
 
 export interface OnboardingStatus {
   hostname: string;

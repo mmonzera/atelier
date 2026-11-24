@@ -105,6 +105,13 @@ fn handle_audio(app: &AppHandle, v: serde_json::Value) {
                 }
                 state.send(&format!("audio-stopped {}", json!({ "meetingId": id })));
             }
+            Some(action @ ("pause" | "resume")) => {
+                if let Some(rec) = state.recorder.lock().unwrap().as_ref() {
+                    if id.is_empty() || rec.meeting_id == id {
+                        rec.set_paused(action == "pause");
+                    }
+                }
+            }
             _ => {}
         }
     });

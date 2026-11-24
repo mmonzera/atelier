@@ -625,6 +625,15 @@ export const meetingsApi = {
     request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/resume`, {
       method: 'POST',
     }),
+  pause: (id: string, paused: boolean) =>
+    request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/pause`, {
+      method: 'POST',
+      body: JSON.stringify({ paused }),
+    }),
+  discard: (id: string) =>
+    request<{ ok: boolean }>(`/api/meetings/${encodeURIComponent(id)}/discard`, {
+      method: 'POST',
+    }),
   rename: (id: string, title: string) =>
     request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}`, {
       method: 'PATCH',

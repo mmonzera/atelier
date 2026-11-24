@@ -637,7 +637,7 @@ describe('Local Whisper STT & Meeting Transcription', () => {
     }
     expect(handle.sttProvider.isRunning()).toBe(false);
 
-    const stopRes = await fetch(`${base}/api/meetings/${meeting.id}/stop`, { method: 'POST' });
+    const stopRes = await fetch(`${base}/api/meetings/${meeting.id}/stop?wait=1`, { method: 'POST' });
     expect(stopRes.status).toBe(200);
     const stopped = (await stopRes.json()) as MeetingStatusEvent;
 

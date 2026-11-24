@@ -5,6 +5,8 @@
  *
  *   stdout  ATELIER_AUDIO {"action":"start","meetingId":"…","dir":"…"}   start recording into dir
  *   stdout  ATELIER_AUDIO {"action":"stop","meetingId":"…"}              flush the last chunk, stop
+ *   stdout  ATELIER_AUDIO {"action":"pause"|"resume","meetingId":"…"}   drop audio until resumed
+ *   stdin   audio-level {"meetingId":"…","levels":[0.02,0.11]}          loudness per 100 ms (UI waveform)
  *   stdout  ATELIER_DETECT {"enabled":true}                              watch for meeting apps
  *   stdin   audio-started {"meetingId":"…"}
  *   stdin   audio-chunk {"meetingId":"…","path":"…","seconds":19.4}
@@ -17,6 +19,7 @@
 export interface MeetingAudioCaptureHandlers {
   onChunk: (meetingId: string, filePath: string) => void;
   onError: (meetingId: string, message: string, fatal: boolean) => void;
+  onLevel?: (meetingId: string, levels: number[]) => void;
 }
 
 export interface MeetingAudioCapture {
@@ -25,6 +28,8 @@ export interface MeetingAudioCapture {
   setHandlers(handlers: MeetingAudioCaptureHandlers): void;
   start(meetingId: string, dir: string): Promise<void>;
   stop(meetingId: string): Promise<void>;
+  /** Keep the devices open but drop the audio until resumed. */
+  setPaused(meetingId: string, paused: boolean): void;
 }
 
 type Waiter = { resolve: () => void; reject: (err: Error) => void; timer: NodeJS.Timeout };
@@ -71,10 +76,21 @@ export class ShellAudioCapture implements MeetingAudioCapture {
     });
   }
 
+  public setPaused(meetingId: string, paused: boolean): void {
+    this.emit('ATELIER_AUDIO', { action: paused ? 'pause' : 'resume', meetingId });
+  }
+
   /** Feed one stdin line from the shell. Returns true when the line belonged to audio capture. */
   public handleLine(command: string, payload: Record<string, unknown>): boolean {
     const meetingId = typeof payload.meetingId === 'string' ? payload.meetingId : '';
     switch (command) {
+      case 'audio-level': {
+        const levels = Array.isArray(payload.levels)
+          ? payload.levels.filter((v): v is number => typeof v === 'number' && Number.isFinite(v)).slice(0, 20)
+          : [];
+        if (meetingId && levels.length) this.handlers?.onLevel?.(meetingId, levels);
+        return true;
+      }
       case 'audio-started':
         this.settle(this.startWaiters, meetingId);
         return true;

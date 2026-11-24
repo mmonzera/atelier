@@ -119,7 +119,7 @@ describe('Meeting audio capture through the desktop shell', () => {
       await new Promise((r) => setTimeout(r, 20));
     }
 
-    const stopRes = await fetch(`${base}/api/meetings/${meeting.id}/stop`, { method: 'POST' });
+    const stopRes = await fetch(`${base}/api/meetings/${meeting.id}/stop?wait=1`, { method: 'POST' });
     const stopped = (await stopRes.json()) as MeetingStatusEvent;
     expect(emitted.some((e) => e.tag === 'ATELIER_AUDIO' && e.payload.action === 'stop')).toBe(true);
     // 2 during the meeting + the final flush; no engine installed, so they wait as pending.
@@ -163,6 +163,64 @@ describe('Meeting audio capture through the desktop shell', () => {
     expect(recovered.meeting.status).toBe('pending');
     expect(recovered.meeting.totalChunks).toBe(1);
     expect(fs.existsSync(path.join(incoming, '00001.wav'))).toBe(false);
+  });
+
+  it('marks the meeting as finishing the moment Stop is pressed', async () => {
+    const root = makeTempDir('atelier-capture-stop-');
+    const { capture } = fakeShell();
+    const handle = await startServer(root, capture);
+    const base = `http://127.0.0.1:${handle.port}`;
+    const started = await handle.meetingService.startMeeting({ mode: 'economy' });
+
+    const res = await fetch(`${base}/api/meetings/${started.meeting.id}/stop`, { method: 'POST' });
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as MeetingStatusEvent;
+    expect(body.meeting.status).not.toBe('recording');
+
+    // The rest finishes in the background (final flush, then pending: no engine installed).
+    const t0 = Date.now();
+    while (handle.meetingService.getMeeting(started.meeting.id)!.meeting.status === 'transcribing') {
+      if (Date.now() - t0 > 5_000) throw new Error('stop did not finish');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(handle.meetingService.getMeeting(started.meeting.id)!.meeting.totalChunks).toBe(1);
+  });
+
+  it('pauses without counting the paused time, and discards a recording', async () => {
+    const root = makeTempDir('atelier-capture-pause-');
+    const { capture, emitted } = fakeShell();
+    const handle = await startServer(root, capture);
+    const base = `http://127.0.0.1:${handle.port}`;
+    const events: ServerEvent[] = [];
+    handle.bus.onEvent((ev: ServerEvent) => events.push(ev));
+    const started = await handle.meetingService.startMeeting({ mode: 'economy' });
+    const id = started.meeting.id;
+
+    const post = (p: string, body?: unknown) =>
+      fetch(`${base}/api/meetings/${id}/${p}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+
+    const paused = (await (await post('pause', { paused: true })).json()) as MeetingStatusEvent;
+    expect(paused.meeting.paused).toBe(true);
+    expect(emitted.some((e) => e.payload.action === 'pause')).toBe(true);
+    await new Promise((r) => setTimeout(r, 60));
+    const resumed = (await (await post('pause', { paused: false })).json()) as MeetingStatusEvent;
+    expect(resumed.meeting.paused).toBe(false);
+    expect(resumed.meeting.pausedMs).toBeGreaterThanOrEqual(50);
+    expect(emitted.some((e) => e.payload.action === 'resume')).toBe(true);
+
+    // Levels from the shell are relayed for the waveform, not stored.
+    capture.handleLine('audio-level', { meetingId: id, levels: [0.1, 0.2] });
+    expect(events.some((e) => e.type === 'meeting-level' && e.payload.levels.length === 2)).toBe(true);
+
+    expect((await post('discard')).status).toBe(200);
+    expect(emitted.some((e) => e.payload.action === 'stop')).toBe(true);
+    expect(handle.meetingService.getMeeting(id)).toBeNull();
+    expect(events.some((e) => e.type === 'meeting-removed' && e.payload.id === id)).toBe(true);
+    expect(fs.existsSync(path.join(root, 'data', 'meetings', id))).toBe(false);
   });
 });
 

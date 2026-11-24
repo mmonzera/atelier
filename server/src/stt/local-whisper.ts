@@ -59,6 +59,7 @@ export class LocalWhisperProvider implements SttProvider {
   private inFlight = false;
   private queue: Promise<unknown> = Promise.resolve();
   private consecutiveCrashes = 0;
+  private background = false;
 
   constructor(private readonly opts: LocalWhisperOptions) {
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 120_000;
@@ -155,6 +156,25 @@ export class LocalWhisperProvider implements SttProvider {
     });
   }
 
+  public setBackground(background: boolean): void {
+    this.background = background;
+    this.applyPriority();
+  }
+
+  /** Idle while recording (only spare CPU), below normal otherwise. */
+  private applyPriority(): void {
+    const pid = this.child?.pid;
+    if (!pid || !this.isRunning()) return;
+    try {
+      os.setPriority(
+        pid,
+        this.background ? os.constants.priority.PRIORITY_LOW : os.constants.priority.PRIORITY_BELOW_NORMAL,
+      );
+    } catch {
+      // Ignore if the OS refuses the priority change
+    }
+  }
+
   public async shutdown(): Promise<void> {
     this.clearIdleTimer();
     await this.stopProcess();
@@ -217,13 +237,7 @@ export class LocalWhisperProvider implements SttProvider {
     this.port = port;
     this.activeConfigKey = desiredKey;
 
-    if (child.pid) {
-      try {
-        os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
-      } catch {
-        // Ignore if OS refuses priority change
-      }
-    }
+    this.applyPriority();
 
     let exitedEarly: string | null = null;
     const stderrChunks: string[] = [];

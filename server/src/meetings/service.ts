@@ -49,6 +49,8 @@ interface StoredMeetingRecord {
   warning?: string | null;
   createdAt: string;
   updatedAt: string;
+  pausedMs?: number;
+  pausedSince?: string | null;
 }
 
 interface ChunkRow {
@@ -68,6 +70,8 @@ export class MeetingService {
   private readonly workers = new Map<string, Promise<void>>();
   private readonly stoppingMeetings = new Set<string>();
   private readonly activeAborts = new Map<string, AbortController>();
+  /** Meetings whose Stop is in progress (protects against double clicks). */
+  private readonly finishing = new Set<string>();
 
   constructor(
     private readonly deps: {
@@ -88,6 +92,9 @@ export class MeetingService {
     deps.capture?.setHandlers({
       onChunk: (meetingId, filePath) => this.enqueueChunkFile(meetingId, filePath),
       onError: (meetingId, message, fatal) => this.handleCaptureError(meetingId, message, fatal),
+      // Not stored: only drives the live waveform while recording.
+      onLevel: (meetingId, levels) =>
+        this.deps.bus.broadcast({ type: 'meeting-level', payload: { meetingId, levels } }),
     });
     this.recoverInterruptedMeetings();
   }
@@ -232,6 +239,9 @@ export class MeetingService {
       error: rec.error,
       createdAt: rec.createdAt,
       updatedAt: rec.updatedAt,
+      paused: Boolean(rec.pausedSince),
+      pausedMs: rec.pausedMs ?? 0,
+      pausedSince: rec.pausedSince ?? null,
     };
 
     return {
@@ -346,6 +356,8 @@ export class MeetingService {
     };
 
     if (mode === 'live') {
+      // While recording, Whisper only gets CPU that the meeting app and Atelier don't need.
+      this.deps.sttProvider.setBackground?.(true);
       try {
         await this.deps.sttProvider.prepare();
       } catch (err) {
@@ -375,6 +387,65 @@ export class MeetingService {
     }
 
     return this.broadcastStatus(rec);
+  }
+
+  /** Pause or resume recording. Paused time is not recorded and not counted in the timer. */
+  public setPaused(meetingId: string, paused: boolean): MeetingStatusEvent {
+    const rec = this.readRecord(meetingId);
+    if (!rec) {
+      throw new MeetingServiceError('meeting_not_found', `Meeting ${meetingId} not found.`, 404);
+    }
+    if (rec.status !== 'recording') {
+      throw new MeetingServiceError('meeting_not_recording', 'This meeting is not being recorded.', 409);
+    }
+    const now = new Date();
+    if (paused && !rec.pausedSince) {
+      rec.pausedSince = now.toISOString();
+    } else if (!paused && rec.pausedSince) {
+      rec.pausedMs = (rec.pausedMs ?? 0) + Math.max(0, now.getTime() - Date.parse(rec.pausedSince));
+      rec.pausedSince = null;
+    }
+    rec.updatedAt = now.toISOString();
+    this.saveRecord(rec);
+    this.deps.capture?.setPaused(meetingId, paused);
+    return this.broadcastStatus(rec);
+  }
+
+  /** Close a running pause so the recorded duration stays right after the meeting ends. */
+  private foldPause(rec: StoredMeetingRecord): void {
+    if (!rec.pausedSince) return;
+    rec.pausedMs = (rec.pausedMs ?? 0) + Math.max(0, Date.now() - Date.parse(rec.pausedSince));
+    rec.pausedSince = null;
+  }
+
+  /** Throw a meeting away while (or after) recording: stops capture and deletes everything. */
+  public async discardMeeting(meetingId: string): Promise<void> {
+    const rec = this.readRecord(meetingId);
+    if (!rec) {
+      throw new MeetingServiceError('meeting_not_found', `Meeting ${meetingId} not found.`, 404);
+    }
+    this.stoppingMeetings.add(meetingId);
+    try {
+      this.activeAborts.get(meetingId)?.abort();
+      if (rec.status === 'recording' && this.deps.capture?.available) {
+        await this.deps.capture.stop(meetingId).catch(() => undefined);
+      }
+      await this.workers.get(meetingId)?.catch(() => undefined);
+      this.removeMeetingData(meetingId);
+      if (rec.mode === 'live') {
+        this.deps.sttProvider.setBackground?.(false);
+        await this.deps.sttProvider.release().catch(() => undefined);
+      }
+    } finally {
+      this.stoppingMeetings.delete(meetingId);
+    }
+  }
+
+  private removeMeetingData(meetingId: string): void {
+    this.deps.db.sqlite.prepare(`DELETE FROM meeting_chunks WHERE meeting_id = ?`).run(meetingId);
+    this.deps.db.sqlite.prepare(`DELETE FROM meetings WHERE id = ?`).run(meetingId);
+    fs.rmSync(path.join(this.meetingsDir, meetingId), { recursive: true, force: true });
+    this.deps.bus.broadcast({ type: 'meeting-removed', payload: { id: meetingId } });
   }
 
   /** Tray "Catat meeting": start a meeting, or stop the one being recorded. */
@@ -649,9 +720,28 @@ export class MeetingService {
     if (rec.status === 'completed') {
       return this.buildStatusEvent(rec);
     }
+    // A second click while finishing: nothing new to do.
+    if (this.finishing.has(meetingId)) {
+      return this.buildStatusEvent(rec);
+    }
+    this.finishing.add(meetingId);
+
+    // Show "finishing" right away: before, nothing changed on screen until the chunk being
+    // transcribed was done (up to ~20 s), which looked like the Stop button did not work.
+    const wasRecording = rec.status === 'recording';
+    if (wasRecording) {
+      this.foldPause(rec);
+      rec.status = 'transcribing';
+      rec.warning = null;
+      rec.updatedAt = new Date().toISOString();
+      this.saveRecord(rec);
+      this.broadcastStatus(rec);
+    }
+    // Recording is over: let Whisper use its normal share of the CPU to finish quickly.
+    this.deps.sttProvider.setBackground?.(false);
 
     // Let the shell flush the audio since the last pause before the queue is drained.
-    if (rec.status === 'recording' && this.deps.capture?.available) {
+    if (wasRecording && this.deps.capture?.available) {
       await this.deps.capture.stop(meetingId).catch(() => undefined);
     }
 
@@ -673,6 +763,7 @@ export class MeetingService {
       return await this.drainAndSummarize(meetingId);
     } finally {
       this.stoppingMeetings.delete(meetingId);
+      this.finishing.delete(meetingId);
     }
   }
 
@@ -691,6 +782,7 @@ export class MeetingService {
     rec.updatedAt = new Date().toISOString();
     this.saveRecord(rec);
     this.broadcastStatus(rec);
+    this.deps.sttProvider.setBackground?.(false);
 
     return await this.drainAndSummarize(meetingId);
   }
@@ -817,9 +909,7 @@ export class MeetingService {
         409,
       );
     }
-    this.deps.db.sqlite.prepare(`DELETE FROM meeting_chunks WHERE meeting_id = ?`).run(meetingId);
-    this.deps.db.sqlite.prepare(`DELETE FROM meetings WHERE id = ?`).run(meetingId);
-    fs.rmSync(path.join(this.meetingsDir, meetingId), { recursive: true, force: true });
+    this.removeMeetingData(meetingId);
   }
 
   /** Renames a meeting (the title shown in the list and the exported file). */

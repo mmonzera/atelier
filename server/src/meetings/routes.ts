@@ -113,10 +113,44 @@ export function createMeetingRoutes(deps: { meetingService: MeetingService }): H
     }
   });
 
+  // Answers at once (202) with the meeting already marked as finishing; transcription and notes
+  // continue in the background and arrive as meeting-status events. `?wait=1` waits for the end.
   app.post('/meetings/:id/stop', async (c) => {
+    const id = c.req.param('id');
+    if (!meetingService.getMeeting(id)) {
+      return c.json(apiError('meeting_not_found', 'Meeting not found.'), 404);
+    }
+    const done = meetingService.stopMeeting(id);
+    if (c.req.query('wait')) {
+      try {
+        return c.json(await done);
+      } catch (err) {
+        const e = handleError(err);
+        return c.json(e.body, e.status);
+      }
+    }
+    done.catch(() => undefined); // failures end up in the meeting's status/error
+    return c.json(meetingService.getMeeting(id), 202);
+  });
+
+  app.post('/meetings/:id/pause', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = z.object({ paused: z.boolean() }).safeParse(body);
+    if (!parsed.success) {
+      return c.json(apiError('invalid_pause', 'Provide { paused: boolean }.'), 400);
+    }
     try {
-      const result = await meetingService.stopMeeting(c.req.param('id'));
-      return c.json(result);
+      return c.json(meetingService.setPaused(c.req.param('id'), parsed.data.paused));
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
+  app.post('/meetings/:id/discard', async (c) => {
+    try {
+      await meetingService.discardMeeting(c.req.param('id'));
+      return c.json({ ok: true });
     } catch (err) {
       const e = handleError(err);
       return c.json(e.body, e.status);

@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import { FloatingComposer } from './components/FloatingComposer';
 import { MeetingAppPrompt } from './components/MeetingAppPrompt';
+import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingRecordingPill } from './components/MeetingRecordingPill';
 import { PatternBackground } from './components/PatternBackground';
 import { LeftRail } from './components/LeftRail';
@@ -824,7 +825,11 @@ export function App() {
                   zIndex: 25,
                 }}
               >
-                <MeetingRecordingPill event={activeMeeting} />
+                {activeMeeting.meeting.status === 'recording' ? (
+                  <MeetingRecorder event={activeMeeting} />
+                ) : (
+                  <MeetingRecordingPill event={activeMeeting} />
+                )}
               </div>
             )}
 

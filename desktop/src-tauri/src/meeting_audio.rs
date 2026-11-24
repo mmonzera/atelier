@@ -273,6 +273,8 @@ fn open_source(
 pub struct Recorder {
     pub meeting_id: String,
     stop: Arc<AtomicBool>,
+    /// While set, audio is read from the devices (so nothing piles up) but thrown away.
+    paused: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -282,17 +284,19 @@ impl Recorder {
     pub fn start(meeting_id: String, dir: PathBuf, out: Out) -> Result<(Self, Vec<String>), String> {
         fs::create_dir_all(&dir).map_err(|e| format!("Folder rekaman tidak bisa dibuat: {e}"))?;
         let stop = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Vec<String>, String>>();
         let thread = {
             let stop = stop.clone();
+            let paused = paused.clone();
             let id = meeting_id.clone();
             std::thread::Builder::new()
                 .name("meeting-audio".into())
-                .spawn(move || run(id, dir, out, stop, ready_tx))
+                .spawn(move || run(id, dir, out, stop, paused, ready_tx))
                 .map_err(|e| e.to_string())?
         };
         match ready_rx.recv_timeout(Duration::from_secs(6)) {
-            Ok(Ok(warnings)) => Ok((Self { meeting_id, stop, thread: Some(thread) }, warnings)),
+            Ok(Ok(warnings)) => Ok((Self { meeting_id, stop, paused, thread: Some(thread) }, warnings)),
             Ok(Err(err)) => {
                 let _ = thread.join();
                 Err(err)
@@ -302,6 +306,11 @@ impl Recorder {
                 Err("Perangkat audio tidak merespons.".into())
             }
         }
+    }
+
+    /// Pauses or resumes recording without closing the devices.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::SeqCst);
     }
 
     /// Stops recording; the audio since the last pause is written as a final chunk first.
@@ -318,6 +327,7 @@ fn run(
     dir: PathBuf,
     out: Out,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     ready: mpsc::Sender<Result<Vec<String>, String>>,
 ) {
     let host = cpal::default_host();
@@ -422,8 +432,18 @@ fn run(
                 *v = v.clamp(-1.0, 1.0);
             }
             produced += n as u64;
-            for chunk in segmenter.push(&mix) {
-                emit(chunk);
+            if !paused.load(Ordering::SeqCst) {
+                // Loudness per 100 ms for the live waveform in the UI (a few numbers, 5× a second).
+                if !stopping {
+                    let levels: Vec<f32> = mix
+                        .chunks(RATE_USIZE / 10)
+                        .map(|c| ((c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).sqrt() * 1000.0).round() / 1000.0)
+                        .collect();
+                    out(format!("audio-level {}", json!({ "meetingId": meeting_id, "levels": levels })));
+                }
+                for chunk in segmenter.push(&mix) {
+                    emit(chunk);
+                }
             }
         }
 

@@ -143,6 +143,28 @@ a {
   animation: atelier-pulse 1.2s ease-in-out 900ms infinite;
 }
 
+/* Meeting recorder: pulsing "recording" dot and a small spinner. */
+.atelier-rec-pulse {
+  animation: atelier-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes atelier-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.atelier-spin {
+  animation: atelier-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atelier-rec-pulse,
+  .atelier-spin {
+    animation: none;
+  }
+}
+
 .message-group .message-actions {
   opacity: 0.45;
   transition: opacity 120ms var(--ease-atelier);
