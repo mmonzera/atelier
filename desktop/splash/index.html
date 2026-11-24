@@ -18,12 +18,12 @@
   @keyframes slide{0%{left:-40%}100%{left:102%}}
 
   /* Bots lowered on gold cables, then swaying. */
-  .hang{position:absolute;top:0;display:flex;flex-direction:column;align-items:center;transform-origin:50% 0;
+  .hang{position:absolute;top:0;animation:lower 1.1s cubic-bezier(.3,.7,.4,1) var(--delay) both}
+  .swing{display:flex;flex-direction:column;align-items:center;transform-origin:50% 0;
     animation:sway var(--sway,3s) ease-in-out calc(var(--delay) + 1.1s) infinite alternate}
-  .rope{width:2px;height:0;background:linear-gradient(to bottom,rgba(216,190,146,.15),#d8be92 40%,#c9a86a);box-shadow:0 0 6px rgba(216,190,146,.25);
-    animation:lower 1.1s cubic-bezier(.3,.7,.4,1) var(--delay) both}
+  .rope{display:block;width:2px;height:var(--len);background:linear-gradient(to bottom,rgba(216,190,146,.15),#d8be92 40%,#c9a86a);box-shadow:0 0 6px rgba(216,190,146,.25)}
   .knot{width:7px;height:7px;margin:-2px 0 -3px;border-radius:9999px;background:#d8be92;box-shadow:0 0 8px rgba(216,190,146,.45)}
-  @keyframes lower{0%{height:0}62%{height:calc(var(--len)*1.09)}78%{height:calc(var(--len)*.96)}90%{height:calc(var(--len)*1.02)}100%{height:var(--len)}}
+  @keyframes lower{0%{transform:translateY(-108%)}62%{transform:translateY(2.2%)}78%{transform:translateY(-1.4%)}90%{transform:translateY(.6%)}100%{transform:translateY(0)}}
   @keyframes sway{from{transform:rotate(-3.2deg)}to{transform:rotate(3.2deg)}}
 
   /* A simple bot: soft coloured body with two eyes (the app shows the full 3D ones). */
@@ -44,16 +44,16 @@
     92%{transform:translateY(-12px) rotate(var(--tilt));animation-timing-function:cubic-bezier(.55,0,1,.45)}
     100%{transform:translateY(0) rotate(var(--tilt))}}
 
-  @media (prefers-reduced-motion:reduce){.hang,.rope,.logo,.bar span,.fall{animation:none}.rope{height:var(--len)}.bar span{left:0;width:60%}.fall{transform:rotate(var(--tilt))}}
+  @media (prefers-reduced-motion:reduce){.hang,.swing,.logo,.bar span,.fall{animation:none}.bar span{left:0;width:60%}.fall{transform:rotate(var(--tilt))}}
 </style>
 </head>
 <body>
-  <div class="hang" style="left:9%;--len:30vh;--delay:.05s;--sway:2.6s"><span class="rope"></span><span class="knot"></span><span class="bot" style="--s:64px;--c:#9b67f7"></span></div>
-  <div class="hang" style="left:22%;--len:14vh;--delay:.45s;--sway:3.1s"><span class="rope"></span><span class="knot"></span><span class="bot hex" style="--s:52px;--c:#f4bc2e"></span></div>
-  <div class="hang" style="left:34%;--len:6vh;--delay:.9s;--sway:3.6s"><span class="rope"></span><span class="knot"></span><span class="bot pill" style="--s:44px;--c:#27b998"></span></div>
-  <div class="hang" style="left:64%;--len:9vh;--delay:.7s;--sway:2.9s"><span class="rope"></span><span class="knot"></span><span class="bot" style="--s:46px;--c:#dc4fa8"></span></div>
-  <div class="hang" style="left:77%;--len:24vh;--delay:.25s;--sway:3.4s"><span class="rope"></span><span class="knot"></span><span class="bot hex" style="--s:60px;--c:#f28c28"></span></div>
-  <div class="hang" style="left:90%;--len:12vh;--delay:.6s;--sway:2.7s"><span class="rope"></span><span class="knot"></span><span class="bot" style="--s:50px;--c:#38c976"></span></div>
+  <div class="hang" style="left:9%;--len:30vh;--delay:.05s;--sway:2.6s"><div class="swing"><span class="rope"></span><span class="knot"></span><span class="bot" style="--s:64px;--c:#9b67f7"></span></div></div>
+  <div class="hang" style="left:22%;--len:14vh;--delay:.45s;--sway:3.1s"><div class="swing"><span class="rope"></span><span class="knot"></span><span class="bot hex" style="--s:52px;--c:#f4bc2e"></span></div></div>
+  <div class="hang" style="left:34%;--len:6vh;--delay:.9s;--sway:3.6s"><div class="swing"><span class="rope"></span><span class="knot"></span><span class="bot pill" style="--s:44px;--c:#27b998"></span></div></div>
+  <div class="hang" style="left:64%;--len:9vh;--delay:.7s;--sway:2.9s"><div class="swing"><span class="rope"></span><span class="knot"></span><span class="bot" style="--s:46px;--c:#dc4fa8"></span></div></div>
+  <div class="hang" style="left:77%;--len:24vh;--delay:.25s;--sway:3.4s"><div class="swing"><span class="rope"></span><span class="knot"></span><span class="bot hex" style="--s:60px;--c:#f28c28"></span></div></div>
+  <div class="hang" style="left:90%;--len:12vh;--delay:.6s;--sway:2.7s"><div class="swing"><span class="rope"></span><span class="knot"></span><span class="bot" style="--s:50px;--c:#38c976"></span></div></div>
 
   <div class="fall" style="left:3%;bottom:-24px;--delay:1s;--tilt:-6deg"><span class="bot pill" style="--s:110px;--c:#ef4d42"></span></div>
   <div class="fall" style="left:15%;bottom:-18px;--delay:1.35s;--tilt:8deg"><span class="bot hex" style="--s:92px;--c:#38c976"></span></div>

@@ -155,9 +155,11 @@ export function BootLoader() {
             } as React.CSSProperties
           }
         >
-          <span className="boot-rope" />
-          <span className="boot-knot" />
-          <BotMascot size={b.size} color={b.color} shape={b.shape} seed={`boot-h${i}`} interactive />
+          <div className="boot-swing">
+            <span className="boot-rope" />
+            <span className="boot-knot" />
+            <BotMascot size={b.size} color={b.color} shape={b.shape} seed={`boot-h${i}`} interactive />
+          </div>
         </div>
       ))}
 

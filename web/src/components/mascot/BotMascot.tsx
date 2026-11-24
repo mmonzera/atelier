@@ -74,6 +74,17 @@ export function BotMascot({
     animRef.current.phase = hashSeed(seed) * Math.PI * 2;
   }, [seed]);
 
+  // The 3D shader compiles in the background (a 2D stand-in is drawn meanwhile): draw again when ready.
+  const [readyTick, setReadyTick] = useState(0);
+  useEffect(
+    () =>
+      mascotEngine.onReady(() => {
+        animRef.current.drawn = null;
+        setReadyTick((n) => n + 1);
+      }),
+    [],
+  );
+
   const shouldAnimate = interactive || (hoverAnimate && hovered);
 
   // Static initial/prop render when idle (or before first rAF tick)
@@ -95,7 +106,7 @@ export function BotMascot({
       working: status === 'working' ? 0.5 : 0,
       error: status === 'error' ? 1 : 0,
     });
-  }, [size, color, shape, seed, status, interactive, active, shouldAnimate]);
+  }, [size, color, shape, seed, status, interactive, active, shouldAnimate, readyTick]);
 
   // Animated frame subscription (shared global rAF + single global pointer listener)
   useEffect(() => {
@@ -186,7 +197,8 @@ export function BotMascot({
 
     renderNow(nowInit, 1 / 60);
     return subscribeMascotFrame(renderNow);
-  }, [shouldAnimate, seed]);
+    // readyTick: draw again at once when the 3D shader finishes compiling (do not wait for a frame)
+  }, [shouldAnimate, seed, readyTick]);
 
   const handleClick = clickable
     ? () => {

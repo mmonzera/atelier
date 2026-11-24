@@ -27,6 +27,8 @@ uniform float uBreath;
 uniform float uHover;
 uniform float uWorking;
 uniform float uError;
+// Step counts of the three raymarch loops (eyes, fur shell, fur strands). Uniform on purpose: see above.
+uniform ivec3 uSteps;
 
 out vec4 fragColor;
 
@@ -204,23 +206,22 @@ float findFrontZ(vec2 xy, int shape) {
   return z;
 }
 
-float sdOneEye(vec3 p, vec2 centerXY, float halfH) {
-  float zFront = findFrontZ(centerXY, uShape);
+float sdOneEye(vec3 p, vec2 centerXY, float zFront, float halfH) {
   vec3 q = p - vec3(centerXY, zFront + 0.042);
   q.z *= 1.35;
   return sdCapsule(q, vec3(0.0, -halfH, 0.0), vec3(0.0, halfH, 0.0), 0.048);
 }
 
-float sdEyes(vec3 p, vec2 leftXY, vec2 rightXY, float halfH) {
-  return min(sdOneEye(p, leftXY, halfH), sdOneEye(p, rightXY, halfH));
+float sdEyes(vec3 p, vec2 leftXY, vec2 rightXY, vec2 eyeZ, float halfH) {
+  return min(sdOneEye(p, leftXY, eyeZ.x, halfH), sdOneEye(p, rightXY, eyeZ.y, halfH));
 }
 
-vec3 calcEyeNormal(vec3 p, vec2 leftXY, vec2 rightXY, float halfH) {
+vec3 calcEyeNormal(vec3 p, vec2 leftXY, vec2 rightXY, vec2 eyeZ, float halfH) {
   const float e = 0.002;
   return normalize(vec3(
-    sdEyes(p + vec3(e, 0.0, 0.0), leftXY, rightXY, halfH) - sdEyes(p - vec3(e, 0.0, 0.0), leftXY, rightXY, halfH),
-    sdEyes(p + vec3(0.0, e, 0.0), leftXY, rightXY, halfH) - sdEyes(p - vec3(0.0, e, 0.0), leftXY, rightXY, halfH),
-    sdEyes(p + vec3(0.0, 0.0, e), leftXY, rightXY, halfH) - sdEyes(p - vec3(0.0, 0.0, e), leftXY, rightXY, halfH)
+    sdEyes(p + vec3(e, 0.0, 0.0), leftXY, rightXY, eyeZ, halfH) - sdEyes(p - vec3(e, 0.0, 0.0), leftXY, rightXY, eyeZ, halfH),
+    sdEyes(p + vec3(0.0, e, 0.0), leftXY, rightXY, eyeZ, halfH) - sdEyes(p - vec3(0.0, e, 0.0), leftXY, rightXY, eyeZ, halfH),
+    sdEyes(p + vec3(0.0, 0.0, e), leftXY, rightXY, eyeZ, halfH) - sdEyes(p - vec3(0.0, 0.0, e), leftXY, rightXY, eyeZ, halfH)
   ));
 }
 
@@ -262,12 +263,14 @@ void main() {
   vec2 leftXY = vec2(-uEyeLayout.x, uEyeLayout.y) + gaze;
   vec2 rightXY = vec2(uEyeLayout.x, uEyeLayout.y) + gaze;
   float halfH = 0.068 * (1.0 - 0.88 * uBlink) * (1.0 - 0.28 * uError);
+  // Where the eyes sit on the front of the body: the same for every step of the trace.
+  vec2 eyeZ = vec2(findFrontZ(leftXY, uShape), findFrontZ(rightXY, uShape));
 
   // 1) Quick trace for 3D capsule eyes
   float tEye = -1.0;
   float te = 1.25;
-  for (int i = 0; i < 30; i++) {
-    float de = sdEyes(ro + rd * te, leftXY, rightXY, halfH);
+  for (int i = 0; i < uSteps.x; i++) {
+    float de = sdEyes(ro + rd * te, leftXY, rightXY, eyeZ, halfH);
     if (de < 0.0015) {
       tEye = te;
       break;
@@ -282,7 +285,7 @@ void main() {
 
   float t = 1.15;
   bool enteredShell = false;
-  for (int i = 0; i < 36; i++) {
+  for (int i = 0; i < uSteps.y; i++) {
     float dOuter = sdBody(ro + rd * t, uShape) - furLen;
     if (dOuter < 0.002) {
       enteredShell = true;
@@ -297,7 +300,7 @@ void main() {
   bool hitEyeFront = false;
 
   if (enteredShell) {
-    for (int stepIdx = 0; stepIdx < 16; stepIdx++) {
+    for (int stepIdx = 0; stepIdx < uSteps.z; stepIdx++) {
       if (tEye > 0.0 && t >= tEye) {
         hitEyeFront = true;
         break;
@@ -318,7 +321,7 @@ void main() {
       float fillDiff = clamp(dot(N, fillLight) * 0.5 + 0.5, 0.0, 1.0);
 
       // Soft cast AO directly around the eyes so they nestle naturally in fur
-      float dE = sdEyes(p, leftXY, rightXY, halfH);
+      float dE = sdEyes(p, leftXY, rightXY, eyeZ, halfH);
       float eyeAo = mix(0.42, 1.0, smoothstep(0.0, 0.095, dE));
 
       if (dBody <= 0.002) {
@@ -370,7 +373,7 @@ void main() {
   // 3) Composite glossy 3D cream capsule eyes in front of fur/core
   if (tEye > 0.0 && (hitEyeFront || !enteredShell)) {
     vec3 pe = ro + rd * tEye;
-    vec3 Ne = calcEyeNormal(pe, leftXY, rightXY, halfH);
+    vec3 Ne = calcEyeNormal(pe, leftXY, rightXY, eyeZ, halfH);
     vec3 Ve = -rd;
     vec3 He = normalize(keyLight + Ve);
 

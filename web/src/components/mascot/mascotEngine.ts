@@ -18,6 +18,9 @@ export interface MascotRenderParams {
 
 const OFFSCREEN_SIZE = 256;
 
+/** Loop lengths of the shader's raymarching: eyes, fur shell, fur strands (see mascotShader.ts). */
+const RAYMARCH_STEPS = [30, 36, 16] as const;
+
 interface Uniforms {
   uResolution: WebGLUniformLocation | null;
   uPixelSize: WebGLUniformLocation | null;
@@ -32,19 +35,7 @@ interface Uniforms {
   uHover: WebGLUniformLocation | null;
   uWorking: WebGLUniformLocation | null;
   uError: WebGLUniformLocation | null;
-}
-
-function compileShader(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader | null {
-  const shader = gl.createShader(type);
-  if (!shader) return null;
-  gl.shaderSource(shader, src);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    console.warn('[MascotEngine] shader compile failed:', gl.getShaderInfoLog(shader));
-    gl.deleteShader(shader);
-    return null;
-  }
-  return shader;
+  uSteps: WebGLUniformLocation | null;
 }
 
 class MascotEngine {
@@ -55,10 +46,21 @@ class MascotEngine {
   private uniforms: Uniforms | null = null;
   private contextLost = false;
   private glFailed = false;
+  /** Shader compiling in the background. */
+  private pending: {
+    vs: WebGLShader;
+    fs: WebGLShader;
+    prog: WebGLProgram;
+    vao: WebGLVertexArrayObject;
+    /** KHR_parallel_shader_compile (lets us ask whether compiling has finished without waiting). */
+    ext: { COMPLETION_STATUS_KHR: number } | null;
+  } | null = null;
+  private readonly readyListeners = new Set<() => void>();
 
   private ensureWebGL(): boolean {
     if (this.glFailed || this.contextLost) return false;
     if (this.gl && this.program && this.vao && this.uniforms) return true;
+    if (this.pending) return this.finishCompile(false);
     if (typeof document === 'undefined') return false;
 
     const canvas = document.createElement('canvas');
@@ -83,6 +85,7 @@ class MascotEngine {
     canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       this.contextLost = true;
+      this.pending = null;
     });
     canvas.addEventListener('webglcontextrestored', () => {
       this.contextLost = false;
@@ -91,56 +94,98 @@ class MascotEngine {
       this.uniforms = null;
     });
 
-    const vs = compileShader(gl, gl.VERTEX_SHADER, MASCOT_VERT_SRC);
-    const fs = compileShader(gl, gl.FRAGMENT_SHADER, MASCOT_FRAG_SRC);
-    if (!vs || !fs) {
-      this.glFailed = true;
-      return false;
-    }
-
+    // Start compiling but do not wait: on a cold GPU shader cache (the first start after an
+    // install) the Windows compiler needs seconds, and waiting here froze the whole page.
+    const vs = gl.createShader(gl.VERTEX_SHADER);
+    const fs = gl.createShader(gl.FRAGMENT_SHADER);
     const prog = gl.createProgram();
-    if (!prog) {
+    const vao = gl.createVertexArray();
+    if (!vs || !fs || !prog || !vao) {
       this.glFailed = true;
       return false;
     }
+    gl.shaderSource(vs, MASCOT_VERT_SRC);
+    gl.compileShader(vs);
+    gl.shaderSource(fs, MASCOT_FRAG_SRC);
+    gl.compileShader(fs);
     gl.attachShader(prog, vs);
     gl.attachShader(prog, fs);
     gl.linkProgram(prog);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      console.warn('[MascotEngine] program link failed:', gl.getProgramInfoLog(prog));
-      gl.deleteProgram(prog);
-      this.glFailed = true;
-      return false;
-    }
-
-    const vao = gl.createVertexArray();
-    if (!vao) {
-      gl.deleteProgram(prog);
-      this.glFailed = true;
-      return false;
-    }
 
     this.glCanvas = canvas;
     this.gl = gl;
-    this.program = prog;
-    this.vao = vao;
+    const ext = gl.getExtension('KHR_parallel_shader_compile') as { COMPLETION_STATUS_KHR: number } | null;
+    this.pending = { vs, fs, prog, vao, ext };
+    if (!ext) return this.finishCompile(true); // no parallel compile available: wait right here
+    this.pollCompile();
+    return false; // the 2D stand-in is drawn until the shader is ready
+  }
+
+  /** Called when the shader has finished compiling in the background. */
+  public onReady(listener: () => void): () => void {
+    this.readyListeners.add(listener);
+    return () => {
+      this.readyListeners.delete(listener);
+    };
+  }
+
+  private pollCompile(): void {
+    const tick = () => {
+      if (!this.pending) return;
+      if (this.finishCompile(false)) {
+        for (const listener of this.readyListeners) listener();
+        return;
+      }
+      if (this.pending) window.setTimeout(tick, 40);
+    };
+    window.setTimeout(tick, 40);
+  }
+
+  /** Checks the compile result (waiting for it when `wait`) and sets the renderer up. */
+  private finishCompile(wait: boolean): boolean {
+    const p = this.pending;
+    const gl = this.gl;
+    if (!p || !gl) return false;
+    if (!wait && p.ext && !gl.getProgramParameter(p.prog, p.ext.COMPLETION_STATUS_KHR)) return false;
+    this.pending = null;
+
+    const ok =
+      gl.getShaderParameter(p.vs, gl.COMPILE_STATUS) &&
+      gl.getShaderParameter(p.fs, gl.COMPILE_STATUS) &&
+      gl.getProgramParameter(p.prog, gl.LINK_STATUS);
+    if (!ok) {
+      console.warn(
+        '[MascotEngine] shader failed:',
+        gl.getShaderInfoLog(p.vs),
+        gl.getShaderInfoLog(p.fs),
+        gl.getProgramInfoLog(p.prog),
+      );
+      gl.deleteProgram(p.prog);
+      gl.deleteShader(p.vs);
+      gl.deleteShader(p.fs);
+      this.glFailed = true;
+      return false;
+    }
+    gl.deleteShader(p.vs);
+    gl.deleteShader(p.fs);
+
+    this.program = p.prog;
+    this.vao = p.vao;
     this.uniforms = {
-      uResolution: gl.getUniformLocation(prog, 'uResolution'),
-      uPixelSize: gl.getUniformLocation(prog, 'uPixelSize'),
-      uShape: gl.getUniformLocation(prog, 'uShape'),
-      uBaseColor: gl.getUniformLocation(prog, 'uBaseColor'),
-      uDeepColor: gl.getUniformLocation(prog, 'uDeepColor'),
-      uRimColor: gl.getUniformLocation(prog, 'uRimColor'),
-      uEyeLayout: gl.getUniformLocation(prog, 'uEyeLayout'),
-      uLook: gl.getUniformLocation(prog, 'uLook'),
-      uBlink: gl.getUniformLocation(prog, 'uBlink'),
-      uBreath: gl.getUniformLocation(prog, 'uBreath'),
-      uHover: gl.getUniformLocation(prog, 'uHover'),
-      uWorking: gl.getUniformLocation(prog, 'uWorking'),
-      uError: gl.getUniformLocation(prog, 'uError'),
+      uResolution: gl.getUniformLocation(p.prog, 'uResolution'),
+      uPixelSize: gl.getUniformLocation(p.prog, 'uPixelSize'),
+      uShape: gl.getUniformLocation(p.prog, 'uShape'),
+      uBaseColor: gl.getUniformLocation(p.prog, 'uBaseColor'),
+      uDeepColor: gl.getUniformLocation(p.prog, 'uDeepColor'),
+      uRimColor: gl.getUniformLocation(p.prog, 'uRimColor'),
+      uEyeLayout: gl.getUniformLocation(p.prog, 'uEyeLayout'),
+      uLook: gl.getUniformLocation(p.prog, 'uLook'),
+      uBlink: gl.getUniformLocation(p.prog, 'uBlink'),
+      uBreath: gl.getUniformLocation(p.prog, 'uBreath'),
+      uHover: gl.getUniformLocation(p.prog, 'uHover'),
+      uWorking: gl.getUniformLocation(p.prog, 'uWorking'),
+      uError: gl.getUniformLocation(p.prog, 'uError'),
+      uSteps: gl.getUniformLocation(p.prog, 'uSteps'),
     };
 
     gl.disable(gl.DEPTH_TEST);
@@ -194,6 +239,7 @@ class MascotEngine {
     gl.uniform1f(u.uHover, params.hover);
     gl.uniform1f(u.uWorking, params.working);
     gl.uniform1f(u.uError, params.error);
+    gl.uniform3i(u.uSteps, RAYMARCH_STEPS[0], RAYMARCH_STEPS[1], RAYMARCH_STEPS[2]);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 

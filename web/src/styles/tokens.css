@@ -144,11 +144,16 @@ a {
 }
 
 /* ───────────── Start-up screen (BootLoader) ───────────── */
-/* A bot hanging from the top on a gold cable: the cable grows (lowering the bot with a little
-   bounce at the end), then the whole thing sways around its top like a pendulum. */
+/* A bot hanging from the top on a gold cable. Everything here is `transform` only: it runs on the
+   compositor, so it stays smooth even while the page is busy starting up. The whole cable is lowered
+   in from above the window with a small bounce, then swings around its top like a pendulum. */
 .boot-hang {
   position: absolute;
   top: 0;
+  animation: boot-lower 1.1s cubic-bezier(0.3, 0.7, 0.4, 1) var(--delay, 0s) both;
+}
+
+.boot-swing {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -159,11 +164,10 @@ a {
 .boot-rope {
   display: block;
   width: 2px;
-  height: 0;
+  height: var(--len);
   /* Atelier's gold, like the cables in the background. */
   background: linear-gradient(to bottom, rgba(216, 190, 146, 0.15), #d8be92 40%, #c9a86a);
   box-shadow: 0 0 6px rgba(216, 190, 146, 0.25);
-  animation: boot-lower 1.1s cubic-bezier(0.3, 0.7, 0.4, 1) var(--delay, 0s) both;
 }
 
 .boot-knot {
@@ -176,11 +180,11 @@ a {
 }
 
 @keyframes boot-lower {
-  0% { height: 0; }
-  62% { height: calc(var(--len) * 1.09); }
-  78% { height: calc(var(--len) * 0.96); }
-  90% { height: calc(var(--len) * 1.02); }
-  100% { height: var(--len); }
+  0% { transform: translateY(-108%); }
+  62% { transform: translateY(2.2%); }
+  78% { transform: translateY(-1.4%); }
+  90% { transform: translateY(0.6%); }
+  100% { transform: translateY(0); }
 }
 
 @keyframes boot-sway {
@@ -239,6 +243,8 @@ a {
   overflow: hidden;
 }
 
+/* While the page is busy the bar's width cannot update: a slow gold glow keeps it alive. */
+
 /* A soft highlight running along the filled part so the bar never looks frozen. */
 .boot-bar-fill::after {
   content: '';
@@ -255,13 +261,12 @@ a {
 
 @media (prefers-reduced-motion: reduce) {
   .boot-hang,
-  .boot-rope,
+  .boot-swing,
   .boot-fall,
   .boot-logo,
   .boot-bar-fill::after {
     animation: none;
   }
-  .boot-rope { height: var(--len); }
   .boot-fall { transform: rotate(var(--tilt)); }
 }
 
