@@ -33,6 +33,9 @@ import { detectLocalBrowser, resolveQaArtifactPath, runBrowserQa } from './qa/br
 import type { AtelierStore } from './store.js';
 import { lockGate } from './security/routes.js';
 import type { LocalVault } from './security/vault.js';
+import { ATTACHMENT_ONLY_TEXT } from '@atelier/contracts';
+import { AttachmentError, AttachmentStore } from './attachments.js';
+import { createAttachmentRoutes } from './attachments-routes.js';
 
 function apiError(code: string, message: string): ApiErrorResponse {
   return { error: { code, message } };
@@ -91,6 +94,7 @@ export function createHttpRouter(deps: {
 
   if (deps.vault) api.use('*', lockGate(deps.vault));
   if (deps.securityRoutes) api.route('/', deps.securityRoutes);
+  api.route('/', createAttachmentRoutes({ store, config }));
 
   api.get('/health', (c) => {
     const settings = store.getSettings();
@@ -454,13 +458,22 @@ export function createHttpRouter(deps: {
     const body = await c.req.json().catch(() => null);
     const parsed = z
       .object({
-        text: z.string().trim().min(1),
+        text: z.string().trim().default(''),
         projectId: z.string().trim().min(1).nullable().optional(),
+        attachmentIds: z.array(z.string()).max(8).optional(),
       })
       .safeParse(body);
 
-    if (!parsed.success) {
+    if (!parsed.success || (!parsed.data.text && !parsed.data.attachmentIds?.length)) {
       return c.json(apiError('invalid_message', 'Message text is required.'), 400);
+    }
+
+    let attachments: ReturnType<AttachmentStore['resolve']> = [];
+    try {
+      attachments = new AttachmentStore(config.dataDir).resolve(parsed.data.attachmentIds ?? []);
+    } catch (err) {
+      if (err instanceof AttachmentError) return c.json(apiError(err.code, err.message), err.status);
+      throw err;
     }
 
     if (parsed.data.projectId && !store.getProject(parsed.data.projectId)) {
@@ -475,7 +488,8 @@ export function createHttpRouter(deps: {
         agentId,
         projectId: parsed.data.projectId ?? null,
         kind: 'user',
-        prompt: parsed.data.text,
+        prompt: parsed.data.text || ATTACHMENT_ONLY_TEXT,
+        attachments,
       });
       return c.json({ ok: true, agentId: agent.id, queueItemId: item.id }, 202);
     } catch (err) {

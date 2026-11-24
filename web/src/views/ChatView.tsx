@@ -1,5 +1,6 @@
 import {
   BUILT_IN_MODELS,
+  parseMessageSegments,
   type Activity,
   type Agent,
   type Message,
@@ -30,6 +31,8 @@ import {
   TaskStatusIcon,
   getColorVar,
 } from '../components/Atoms';
+import { MessageAttachments, isAttachmentOnlyText } from '../components/AttachmentViews';
+import { DesignOptionsCard, DesignPendingCard } from '../components/DesignOptionsCard';
 import { BotMascot } from '../components/mascot/BotMascot';
 import { QaReportCard } from '../components/QaReportCard';
 import { Select } from '../components/Select';
@@ -367,20 +370,27 @@ export function ChatView({
                   }}
                   style={{ display: 'flex', justifyContent: 'flex-end' }}
                 >
-                  <div
-                    className="glass glass-user msg-enter"
-                    style={{
-                      maxWidth: '75%',
-                      borderRadius: 16,
-                      padding: '12px 16px',
-                      fontSize: 13.5,
-                      lineHeight: '21px',
-                      color: 'var(--text-primary)',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    {msg.text}
+                  <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+                    {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
+                      <MessageAttachments attachments={msg.metadata.attachments} />
+                    )}
+                    {!(msg.metadata?.attachments?.length && isAttachmentOnlyText(msg.text)) && (
+                      <div
+                        className="glass glass-user msg-enter"
+                        style={{
+                          maxWidth: '100%',
+                          borderRadius: 16,
+                          padding: '12px 16px',
+                          fontSize: 13.5,
+                          lineHeight: '21px',
+                          color: 'var(--text-primary)',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {msg.text}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -674,23 +684,40 @@ export function ChatView({
                   </div>
                 )}
 
-                {msg.text && (
-                  <div
-                    className="glass glass-agent msg-enter"
-                    style={{
-                      alignSelf: 'flex-start',
-                      maxWidth: '100%',
-                      padding: '12px 16px',
-                      borderRadius: 16,
-                      fontSize: 13.5,
-                      lineHeight: '21px',
-                      color: 'var(--text-primary)',
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    <FormattedText text={msg.text} />
-                  </div>
-                )}
+                {msg.text &&
+                  parseMessageSegments(msg.text).map((seg, i) => {
+                    if (seg.type === 'design') {
+                      return (
+                        <DesignOptionsCard
+                          key={`${msg.id}-d${i}`}
+                          block={seg.block}
+                          onChoose={(o) => void onQuickSend(`Saya pilih opsi ${o.id} — ${o.label}. Lanjutkan dengan opsi ini.`)}
+                        />
+                      );
+                    }
+                    if (seg.type === 'design-pending') {
+                      return <DesignPendingCard key={`${msg.id}-p${i}`} title={seg.title} />;
+                    }
+                    if (!seg.text.trim()) return null;
+                    return (
+                      <div
+                        key={`${msg.id}-t${i}`}
+                        className="glass glass-agent msg-enter"
+                        style={{
+                          alignSelf: 'flex-start',
+                          maxWidth: '100%',
+                          padding: '12px 16px',
+                          borderRadius: 16,
+                          fontSize: 13.5,
+                          lineHeight: '21px',
+                          color: 'var(--text-primary)',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        <FormattedText text={seg.text} />
+                      </div>
+                    );
+                  })}
 
                 {msg.metadata?.cancelled && (
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>

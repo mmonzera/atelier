@@ -9,6 +9,7 @@ import {
 import { toLaunchSpec } from '../mcp/config.js';
 import type { AtelierStore } from '../store.js';
 import { resolveMcpAuth } from '../mcp/oauth.js';
+import { AttachmentStore } from '../attachments.js';
 import { formatUncompactedConversation, getScopeKey } from './compactor.js';
 import { buildAgentSystemPrompt } from './prompts.js';
 import type { AgentRunner, Turn, TurnCallbacks } from './runner.js';
@@ -88,6 +89,7 @@ export class ClaudeAgentRunner implements AgentRunner {
       agentProjects,
       compaction,
     );
+    const attachmentStore = new AttachmentStore(this.config.dataDir);
     const promptText = turn.resumeSessionId
       ? turn.prompt
       : formatUncompactedConversation(
@@ -95,6 +97,7 @@ export class ClaudeAgentRunner implements AgentRunner {
           compaction,
           turn.prompt,
           12,
+          (m) => attachmentStore.describe(m.metadata?.attachments),
         );
 
     const tools = createStudioTools({
@@ -160,6 +163,7 @@ export class ClaudeAgentRunner implements AgentRunner {
               ? 'bypassPermissions'
               : 'acceptEdits',
           allowedTools,
+          additionalDirectories: [attachmentStore.directory],
           canUseTool: async (toolName: string, input: Record<string, unknown>) => {
             if (!turn.agent.allowShell && toolName === 'Bash') {
               return { behavior: 'deny', message: 'Shell execution is disabled for this agent.' };
@@ -168,7 +172,10 @@ export class ClaudeAgentRunner implements AgentRunner {
               (typeof input.file_path === 'string' && input.file_path) ||
               (typeof input.path === 'string' && input.path) ||
               null;
-            if (fileCandidate && !isPathInside(fileCandidate, cwd)) {
+            // User attachments live outside the workspace; reading them is fine, writing is not.
+            const isRead = ['Read', 'Glob', 'Grep'].includes(toolName);
+            const insideAttachments = isRead && fileCandidate && isPathInside(fileCandidate, attachmentStore.directory);
+            if (fileCandidate && !insideAttachments && !isPathInside(fileCandidate, cwd)) {
               return {
                 behavior: 'deny',
                 message: `Access denied outside project workspace: ${cwd}`,

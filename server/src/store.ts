@@ -1064,6 +1064,21 @@ export class AtelierStore {
   }
 
   // Messages
+  public getMessage(id: string): Message | null {
+    const row = this.db.sqlite.prepare(`SELECT data FROM messages WHERE id = ?`).get(id) as
+      | { data: string }
+      | undefined;
+    return row ? (JSON.parse(row.data) as Message) : null;
+  }
+
+  /** True when any message references this attachment (used to sweep abandoned uploads). */
+  public isAttachmentReferenced(attachmentId: string): boolean {
+    const row = this.db.sqlite
+      .prepare(`SELECT 1 AS x FROM messages WHERE data LIKE ? LIMIT 1`)
+      .get(`%"${attachmentId}"%`);
+    return Boolean(row);
+  }
+
   public listAgentMessages(agentId: string, projectId?: string | null): Message[] {
     const rows = (
       this.db.sqlite

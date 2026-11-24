@@ -6,6 +6,7 @@ import type {
   BackupImportResult,
   CloudFolderCandidate,
   ExportBackupInput,
+  MessageAttachment,
   RecoveryKeyResponse,
   RelinkCandidate,
   ApiErrorResponse,
@@ -87,6 +88,12 @@ export function getDesktopBridge(): AtelierDesktopBridge | null {
   const bridge = (window as unknown as { atelierDesktop?: AtelierDesktopBridge }).atelierDesktop;
   return bridge?.isDesktop ? bridge : null;
 }
+
+export const attachmentUrl = (a: Pick<MessageAttachment, 'id' | 'name'>) =>
+  `/api/attachments/${a.id}/${encodeURIComponent(a.name)}`;
+
+/** Image files an agent saved in a workspace (design-option cards). */
+export const workspaceImageUrl = (path: string) => `/api/workspace-image?path=${encodeURIComponent(path)}`;
 
 export const authApi = {
   status: () => request<AuthStatus>('/api/auth/status'),
@@ -231,11 +238,25 @@ export const api = {
       },
     ),
 
-  sendMessage: (agentId: string, text: string, projectId?: string | null) =>
+  sendMessage: (agentId: string, text: string, projectId?: string | null, attachmentIds?: string[]) =>
     request<{ ok: boolean }>(`/api/agents/${agentId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ text, projectId: projectId ?? null }),
+      body: JSON.stringify({
+        text,
+        projectId: projectId ?? null,
+        ...(attachmentIds?.length ? { attachmentIds } : {}),
+      }),
     }),
+
+  uploadAttachments: async (files: File[]): Promise<{ attachments: MessageAttachment[] }> => {
+    const form = new FormData();
+    for (const f of files) form.append('files', f, f.name);
+    // no JSON content-type: the browser sets the multipart boundary
+    const res = await fetch('/api/attachments', { method: 'POST', credentials: 'same-origin', body: form });
+    return parseResponse<{ attachments: MessageAttachment[] }>(res);
+  },
+
+  deleteAttachment: (id: string) => request<{ ok: boolean }>(`/api/attachments/${id}`, { method: 'DELETE' }),
 
   stopAgent: (agentId: string) =>
     request<{ ok: boolean; stopped: boolean }>(`/api/agents/${agentId}/stop`, {

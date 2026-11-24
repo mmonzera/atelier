@@ -1,6 +1,8 @@
 import {
+  ATTACHMENT_LIMITS,
   BUILT_IN_MODELS,
   type Agent,
+  type MessageAttachment,
   type ModelEntry,
   type Project,
   type ProviderUsageSummary,
@@ -20,6 +22,8 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import { type PendingUpload, PendingAttachments } from './AttachmentViews';
+import { toast } from './Toast';
 import { TokenRing } from './Atoms';
 import { ProviderIcon } from './ProviderIcon';
 
@@ -32,7 +36,7 @@ interface FloatingComposerProps {
   replyTo?: string | null;
   onClearReply?: () => void;
   onChangeDraft: (val: string) => void;
-  onSend: (text: string) => Promise<void>;
+  onSend: (text: string, attachments?: MessageAttachment[]) => Promise<void>;
   onStop: () => Promise<void>;
   onUpdateReasoning: (effort: ReasoningEffort) => Promise<void>;
   onSelectModel: (entry: ModelEntry) => Promise<void>;
@@ -203,6 +207,64 @@ export function FloatingComposer({
   const plusRef = useRef<HTMLDivElement | null>(null);
   const effortRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [pending, setPending] = useState<PendingUpload[]>([]);
+  const [dragging, setDragging] = useState(false);
+
+  const addFiles = async (incoming: File[]) => {
+    if (!agent || incoming.length === 0) return;
+    const room = ATTACHMENT_LIMITS.maxFiles - pending.length;
+    if (room <= 0) {
+      toast.error(`Maksimal ${ATTACHMENT_LIMITS.maxFiles} lampiran per pesan.`);
+      return;
+    }
+    const accepted: File[] = [];
+    for (const f of incoming.slice(0, room)) {
+      if (f.size > ATTACHMENT_LIMITS.maxFileBytes) {
+        toast.error(`"${f.name}" lebih dari ${ATTACHMENT_LIMITS.maxFileBytes / 1048576} MB.`);
+      } else if (f.size === 0) {
+        toast.error(`"${f.name}" kosong.`);
+      } else {
+        accepted.push(f);
+      }
+    }
+    if (incoming.length > room) toast.error(`Hanya ${room} file lagi yang muat; sisanya dilewati.`);
+    if (accepted.length === 0) return;
+
+    const entries: PendingUpload[] = accepted.map((f, i) => ({
+      key: `${Date.now()}-${i}-${f.name}`,
+      name: f.name || 'pasted-image.png',
+      size: f.size,
+      isImage: f.type.startsWith('image/'),
+      previewUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
+      status: 'uploading',
+    }));
+    setPending((prev) => [...prev, ...entries]);
+    try {
+      const { attachments } = await api.uploadAttachments(accepted);
+      setPending((prev) =>
+        prev.map((p) => {
+          const idx = entries.findIndex((e) => e.key === p.key);
+          return idx >= 0 ? { ...p, status: 'done', attachment: attachments[idx] } : p;
+        }),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Upload gagal';
+      toast.error(message);
+      setPending((prev) => prev.map((p) => (entries.some((e) => e.key === p.key) ? { ...p, status: 'error', error: message } : p)));
+    }
+  };
+
+  const removePending = (key: string) => {
+    setPending((prev) => {
+      const item = prev.find((p) => p.key === key);
+      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      if (item?.attachment) void api.deleteAttachment(item.attachment.id).catch(() => undefined);
+      return prev.filter((p) => p.key !== key);
+    });
+  };
+
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
 
   useEffect(() => {
     if (!effortMenuOpen) return;
@@ -243,17 +305,26 @@ export function FloatingComposer({
   }, []);
 
   const isWorking = agent?.status === 'working';
-  const canSubmit = Boolean(agent && draftText.trim() && !sending);
+  const doneAttachments = pending.filter((p) => p.status === 'done' && p.attachment);
+  const uploading = pending.some((p) => p.status === 'uploading');
+  const canSubmit = Boolean(agent && (draftText.trim() || doneAttachments.length > 0) && !uploading && !sending);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!agent) return;
     const text = draftText.trim();
-    if (!text) return;
+    if (!text && doneAttachments.length === 0) return;
+    if (uploading) return;
     setSending(true);
     try {
       onChangeDraft('');
-      await onSend(text);
+      const sent = doneAttachments.map((p) => p.attachment!);
+      // composer is cleared; the sent files now belong to the message
+      setPending((prev) => {
+        for (const p of prev) if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+        return [];
+      });
+      await onSend(text, sent.length > 0 ? sent : undefined);
     } finally {
       setSending(false);
       inputRef.current?.focus();
@@ -294,7 +365,32 @@ export function FloatingComposer({
         zIndex: 15,
         position: 'relative',
       }}
+      onDragOver={(e) => {
+        if (!agent || !hasFiles(e)) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        setDragging(false);
+        void addFiles(Array.from(e.dataTransfer.files));
+      }}
     >
+      <PendingAttachments items={pending} onRemove={removePending} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          void addFiles(Array.from(e.target.files ?? []));
+          e.target.value = '';
+        }}
+      />
       {replyTo && (
         <div
           style={{
@@ -329,7 +425,7 @@ export function FloatingComposer({
           height: 52,
           borderRadius: 'var(--radius-full)',
           background: 'var(--surface-1)',
-          border: '1px solid var(--border-subtle)',
+          border: dragging ? '1px dashed var(--text-secondary)' : '1px solid var(--border-subtle)',
           padding: '4px 4px 4px 12px',
           display: 'flex',
           alignItems: 'center',
@@ -386,6 +482,7 @@ export function FloatingComposer({
               }}
             >
               {[
+                ...(agent ? [{ label: 'Attach file or image…', action: () => fileInputRef.current?.click() }] : []),
                 ...(project ? [{ label: 'New task', action: onNewTask }] : []),
                 { label: 'Add custom agent', action: onAddAgent },
                 ...(agent ? [{ label: 'Edit agent & skills', action: onEditAgent }] : []),
@@ -439,6 +536,13 @@ export function FloatingComposer({
           value={draftText}
           disabled={!agent}
           onChange={(e) => onChangeDraft(e.target.value)}
+          onPaste={(e) => {
+            const files = Array.from(e.clipboardData?.files ?? []);
+            if (files.length > 0) {
+              e.preventDefault();
+              void addFiles(files);
+            }
+          }}
           placeholder={
             agent
               ? project

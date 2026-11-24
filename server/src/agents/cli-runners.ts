@@ -16,6 +16,7 @@ import {
 import type { AtelierStore } from '../store.js';
 import { ClaudeAgentRunner } from './claude-runner.js';
 import { resolveCliBinary, spawnCli } from './cli-spawn.js';
+import { AttachmentStore } from '../attachments.js';
 import { formatUncompactedConversation, getScopeKey, getUncompactedMessages } from './compactor.js';
 import { resolveMcpAuth } from '../mcp/oauth.js';
 import { buildAgentSystemPrompt } from './prompts.js';
@@ -155,12 +156,19 @@ export class CliAgentRunner implements AgentRunner {
     this.sdkFallback = new ClaudeAgentRunner(store, config, getEnqueue);
   }
 
+  private get attachmentStore(): AttachmentStore {
+    return new AttachmentStore(this.config.dataDir);
+  }
+
   private buildConversationContext(turn: Turn, hasNativeResume: boolean): string {
     if (hasNativeResume) return turn.prompt;
     const scopeKey = getScopeKey(turn.project?.id ?? null);
     const compaction = turn.agent.contextCompactions?.[scopeKey];
     const history = this.store.listAgentMessages(turn.agent.id, turn.project?.id ?? null);
-    return formatUncompactedConversation(history, compaction, turn.prompt, 12);
+    const files = this.attachmentStore;
+    return formatUncompactedConversation(history, compaction, turn.prompt, 12, (m) =>
+      files.describe(m.metadata?.attachments),
+    );
   }
 
   async run(turn: Turn, cb: TurnCallbacks): Promise<{ finalText: string }> {
@@ -307,6 +315,8 @@ export class CliAgentRunner implements AgentRunner {
     if (!turn.agent.allowShell) {
       args.push('--disallowedTools', 'Bash');
     }
+    // "=" form: --add-dir is variadic and would otherwise swallow the next flag.
+    args.push(`--add-dir=${this.attachmentStore.directory}`);
     if (nativeResumeId) {
       args.push('--resume', nativeResumeId);
     }
@@ -391,9 +401,13 @@ export class CliAgentRunner implements AgentRunner {
         ? 'danger-full-access'
         : 'workspace-write';
 
+    const imageArgs = this.attachmentStore
+      .imagePaths(turn.attachments)
+      .flatMap((p) => ['--image', p]);
     const args = [
       'exec',
       ...buildCodexMcpArgs(opts.mcpServers),
+      ...imageArgs,
       '--json',
       '--skip-git-repo-check',
       '-C',

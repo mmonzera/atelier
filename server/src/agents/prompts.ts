@@ -9,6 +9,29 @@ import {
   type ThreadCompaction,
 } from '@atelier/contracts';
 
+/**
+ * How agents present visual options. The web UI turns this block into clickable preview cards;
+ * everything else in the reply stays normal markdown.
+ */
+const DESIGN_OPTIONS_GUIDE = [
+  '',
+  'Design options (visual previews in chat):',
+  '- When the user asks for design directions, UI/layout options, mockups, logos or "show me options", present 2-4 alternatives as ONE block in your reply. Atelier renders it as preview cards the user can enlarge and pick from. Do not use it for trivial choices.',
+  '- Format (not inside a markdown code fence):',
+  '  <atelier-design title="Pick a direction" ask="Which one should I build?">',
+  '  <atelier-option id="A" label="Scope chip" summary="One line what it is" pros="Short benefit" cons="Short trade-off" width="900" height="560">',
+  '  <!doctype html><html>...complete page with inline <style>...</html>',
+  '  </atelier-option>',
+  '  <atelier-option id="B" label="Filter tabs" kind="svg"><svg viewBox="0 0 400 300">...</svg></atelier-option>',
+  '  </atelier-design>',
+  '- Each option must be fully self-contained: inline CSS (inline JS allowed), NO external URLs, fonts, CDNs or images (network is blocked in previews). Use realistic placeholder content, not lorem ipsum. Keep each option under ~150 lines.',
+  '- kind="html" (default) for UI mockups, kind="svg" for logos/icons/illustrations, kind="image" src="<absolute path>" only for a PNG/JPG/WEBP file that you actually created inside the workspace with a tool (you cannot synthesize raster images yourself; if no image tool exists, use SVG or HTML/CSS instead).',
+  '- Attribute values use double quotes and must not contain double quotes. Labels max 5 words; pros/cons one short sentence each.',
+  '- After the block, add one short line asking which option to continue with. When the user replies with their choice, proceed with that option only.',
+  '',
+  'Attached files: user messages may list files under "[Attached files ...]". Open them with your file-reading tool (images can be viewed that way) before answering questions about them.',
+].join('\n');
+
 const ATELIER_HARNESS_PROTOCOL = [
   '',
   'Atelier Harness Coordination Protocol:',
@@ -187,6 +210,7 @@ export function buildAgentSystemPrompt(
     ...(compaction?.summary?.trim()
       ? ['', 'Compacted Conversation Memory (earlier turns):', compaction.summary.trim()]
       : []),
+    DESIGN_OPTIONS_GUIDE,
     ATELIER_HARNESS_PROTOCOL,
   ];
 

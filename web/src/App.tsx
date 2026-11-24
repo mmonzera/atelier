@@ -1,5 +1,6 @@
 import type {
   AgentViewTab,
+  MessageAttachment,
   ModelEntry,
   ModelProvider,
   PortEntry,
@@ -169,12 +170,17 @@ export function App() {
     setAgentTab('chat');
   };
 
-  const handleSend = async (text: string) => {
+  const handleSend = async (text: string, attachments?: MessageAttachment[]) => {
     if (!activeAgent) return;
     const quoted = replyTo?.replace(/\s+/g, ' ').trim().slice(0, 400);
     setReplyTo(null);
-    const payload = quoted ? `Replying to: "${quoted}"\n\n${text}` : text;
-    await api.sendMessage(activeAgent.id, payload, scopedProject?.id ?? null);
+    const payload = quoted && text ? `Replying to: "${quoted}"\n\n${text}` : text;
+    await api.sendMessage(
+      activeAgent.id,
+      payload,
+      scopedProject?.id ?? null,
+      attachments?.map((a) => a.id),
+    );
   };
 
   const handleStop = async () => {

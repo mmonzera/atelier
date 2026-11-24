@@ -357,3 +357,31 @@ npm run desktop:build    # installer NSIS di desktop/src-tauri/target/release/bu
 npm --workspace @atelier/desktop run build:release   # + artefak update bertanda tangan (set TAURI_SIGNING_PRIVATE_KEY)
 npm run lock:reset       # matikan app lock (versi source); installer: Atelier.exe --reset-lock
 ```
+
+## 16. Lampiran chat & kartu opsi desain
+
+### Lampiran file / gambar
+- **Composer**: menu "+" -> *Attach file or image…*, tempel gambar (Ctrl+V), atau seret file ke area composer. Maks 8 file/pesan, 25 MB/file, 60 MB total. Chip/thumbnail muncul di atas composer; × menghapus file yang belum terkirim.
+- **Penyimpanan**: `<data>/attachments/<att_id>/{meta.json,<nama aman>}` (`server/src/attachments.ts`). Jenis ditentukan dari isi file (magic bytes), bukan MIME/ekstensi dari browser. Hanya png/jpeg/gif/webp yang ditampilkan inline; semua lainnya dipaksa download dengan `nosniff` + CSP `sandbox`. Unggahan yang tidak pernah dikirim dibersihkan setelah 24 jam. **File lampiran tidak ikut `.atelier-backup`** (hanya metadata di DB).
+- **Ke agent**: teks bubble tetap kata-kata user; `metadata.attachments` menyimpan daftar file. Prompt model = teks + daftar path absolut (+ isi file teks kecil, maks 24 KB/file, 60 KB total, untuk provider yang tak bisa membaca file). Codex menerima gambar lewat `--image`; Claude CLI/SDK diberi akses baca ke folder lampiran (`--add-dir` / `additionalDirectories`), tulis tetap dibatasi workspace. Riwayat turn berikutnya memuat daftar file yang sama.
+- **API**: `POST /api/attachments` (multipart `files`), `GET /api/attachments/:id/:nama`, `DELETE /api/attachments/:id` (409 jika sudah dipakai pesan), `POST /api/agents/:id/messages` menerima `attachmentIds`.
+- **Tauri**: `dragDropEnabled: false` di `tauri.conf.json` supaya drag & drop HTML5 sampai ke halaman (WebView2 menelannya secara default).
+
+### Kartu opsi desain
+Agent menulis blok ini di balasannya (diajarkan lewat system prompt, jalan di semua provider):
+
+```text
+<atelier-design title="Pilih arah" ask="Mau yang mana?">
+  <atelier-option id="A" label="Scope chip" summary="…" pros="…" cons="…" width="900" height="560">
+    <!doctype html>…halaman lengkap, CSS inline…
+  </atelier-option>
+  <atelier-option id="B" label="Logo" kind="svg"><svg …/></atelier-option>
+  <atelier-option id="C" label="Render" kind="image" src="C:\\path\\render.png"></atelier-option>
+</atelier-design>
+```
+
+- **Parser** bersama server+web: `parseMessageSegments` di `packages/contracts`. Blok yang belum selesai (streaming) tampil sebagai kartu "Menyiapkan opsi desain…", HTML setengah jadi tidak pernah dirender. Tag `<atelier-option>` dipilih agar HTML mockup boleh berisi `<option>` biasa.
+- **Render** (`web/src/components/DesignOptionsCard.tsx`): thumbnail diskalakan, tombol *Perbesar* (modal via portal) dan *Pilih opsi X* yang mengirim "Saya pilih opsi X — label" ke agent.
+- **Keamanan preview**: `<iframe sandbox="allow-scripts">` tanpa `allow-same-origin` (origin opaque, tak bisa menyentuh Atelier), CSP `default-src 'none'` (tidak ada request jaringan, font/gambar eksternal, form, atau navigasi link). SVG dirender tanpa script.
+- **Gambar**: agent tidak bisa membuat gambar raster sendiri; opsi `kind="image"` hanya untuk file PNG/JPG/WEBP yang benar-benar dibuat agent (mis. lewat tool/MCP image-generation atau skrip) di workspace. `GET /api/workspace-image?path=` menyajikannya, dibatasi ke folder workspaces, repo yang tertaut, dan lampiran; hanya file gambar valid <= 20 MB.
+- **Konteks hemat**: di riwayat model, blok desain diringkas jadi satu baris (`summarizeDesignBlocks`), termasuk saat kompaksi.

@@ -1,6 +1,7 @@
 import type {
   Agent,
   MessageActivitySummary,
+  MessageAttachment,
   MessageMetadata,
   ModelProvider,
   ModelRef,
@@ -9,6 +10,7 @@ import type {
   QueueKind,
   Task,
 } from '@atelier/contracts';
+import { AttachmentStore } from '../attachments.js';
 import type { AppConfig } from '../config.js';
 import type { AtelierStore } from '../store.js';
 import { CliAgentRunner } from './cli-runners.js';
@@ -37,6 +39,7 @@ export class AgentRuntime {
   private readonly cooldowns = new ProviderCooldownTracker();
   private shuttingDown = false;
   private readonly runner: AgentRunner;
+  private readonly attachmentStore: AttachmentStore;
 
   constructor(
     private readonly store: AtelierStore,
@@ -44,6 +47,7 @@ export class AgentRuntime {
     customRunner?: AgentRunner,
     customRunnerFactory?: (deps: { store: AtelierStore; enqueue: EnqueueTaskFn }) => AgentRunner,
   ) {
+    this.attachmentStore = new AttachmentStore(config.dataDir);
     const getEnqueue = () => this.enqueue.bind(this);
     this.runner =
       customRunner ??
@@ -107,6 +111,7 @@ export class AgentRuntime {
     refId?: string | null;
     replyToAgentId?: string | null;
     metadata?: MessageMetadata;
+    attachments?: MessageAttachment[];
   }): { agent: Agent; item: QueueItem } {
     const agent = this.store.getAgent(input.agentId);
     if (!agent) {
@@ -123,6 +128,7 @@ export class AgentRuntime {
       streaming: false,
       metadata: {
         ...input.metadata,
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         taskId: input.kind === 'task' ? (input.refId ?? undefined) : input.metadata?.taskId,
       },
     });
@@ -131,7 +137,8 @@ export class AgentRuntime {
       agentId: agent.id,
       projectId,
       kind: input.kind,
-      prompt: input.prompt,
+      // The chat bubble shows the plain text; the model also gets the file list (+ small text files).
+      prompt: this.promptWithAttachments(input.prompt, input.attachments),
       refId: input.refId ?? msg.id,
       replyToAgentId: input.replyToAgentId ?? null,
     });
@@ -146,6 +153,12 @@ export class AgentRuntime {
       agent: updatedAgent ?? agent,
       item,
     };
+  }
+
+  /** Message text + attached-file list (+ inlined small text files) as the model should see it. */
+  private promptWithAttachments(text: string, attachments?: MessageAttachment[]): string {
+    if (!attachments?.length) return text;
+    return `${text}${this.attachmentStore.describe(attachments)}${this.attachmentStore.excerpts(attachments)}`;
   }
 
   public async stop(agentId: string): Promise<{ stopped: boolean; agent: Agent | null }> {
@@ -223,7 +236,7 @@ export class AgentRuntime {
             agentId: agent.id,
             projectId: lastUser.projectId ?? null,
             kind: 'user',
-            prompt: lastUser.text,
+            prompt: this.promptWithAttachments(lastUser.text, lastUser.metadata?.attachments),
             refId: lastUser.id,
             modelOverride: opts?.modelOverride ?? null,
           });
@@ -393,6 +406,7 @@ export class AgentRuntime {
           agent,
           project,
           prompt: item.prompt,
+          attachments: item.refId ? this.store.getMessage(item.refId)?.metadata?.attachments : undefined,
           resumeSessionId: initialResumeId,
           providerOverride: item.modelOverride?.provider,
           modelOverride: item.modelOverride?.model,

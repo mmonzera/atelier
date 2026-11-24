@@ -1,9 +1,11 @@
-import type { Agent, ModelProvider, Project } from '@atelier/contracts';
+import type { Agent, MessageAttachment, ModelProvider, Project } from '@atelier/contracts';
 
 export interface Turn {
   agent: Agent;
   project: Project | null;
   prompt: string;
+  /** Files the user attached to this turn's message (already listed in `prompt`). */
+  attachments?: MessageAttachment[];
   resumeSessionId: string | null;
   providerOverride?: ModelProvider;
   modelOverride?: string;

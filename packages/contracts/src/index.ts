@@ -618,6 +618,7 @@ export interface MessageMetadata {
   };
   fallbackTo?: ModelRef;
   qaRun?: QaRun;
+  attachments?: MessageAttachment[];
 }
 
 export type QaStepAction =
@@ -920,6 +921,8 @@ export interface SendMessageInput {
   text: string;
   projectId?: string | null;
   metadata?: MessageMetadata;
+  /** Ids returned by POST /api/attachments. */
+  attachmentIds?: string[];
 }
 
 export interface CreateTaskInput {
@@ -1072,4 +1075,174 @@ export interface CloudFolderCandidate {
   label: string;
   root: string;
   suggestedPath: string;
+}
+
+// ---------------------------------------------------------------------------
+// Chat attachments & design-option cards
+// ---------------------------------------------------------------------------
+
+export type AttachmentKind = 'image' | 'text' | 'file';
+
+export interface MessageAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  kind: AttachmentKind;
+}
+
+export const ATTACHMENT_LIMITS = {
+  maxFiles: 8,
+  maxFileBytes: 25 * 1024 * 1024,
+  maxTotalBytes: 60 * 1024 * 1024,
+} as const;
+
+/** Message text used when the user sends attachments without typing anything. */
+export const ATTACHMENT_ONLY_TEXT = 'Please look at the attached file(s).';
+
+export type DesignOptionKind = 'html' | 'svg' | 'image';
+
+export interface DesignOption {
+  id: string;
+  label: string;
+  kind: DesignOptionKind;
+  /** Self-contained HTML document / SVG markup (empty for kind "image"). */
+  content: string;
+  /** kind "image": absolute path to an image file in a workspace, or a data:image URI. */
+  src?: string;
+  summary?: string;
+  pros?: string;
+  cons?: string;
+  width: number;
+  height: number;
+}
+
+export interface DesignBlock {
+  title: string;
+  ask?: string;
+  options: DesignOption[];
+}
+
+export type MessageSegment =
+  | { type: 'text'; text: string }
+  | { type: 'design'; block: DesignBlock }
+  /** A <atelier-design> block that is still streaming in (not closed yet). */
+  | { type: 'design-pending'; title?: string };
+
+const DESIGN_OPEN = '<atelier-design';
+const DESIGN_CLOSE = '</atelier-design>';
+const OPTION_OPEN = '<atelier-option';
+const OPTION_CLOSE = '</atelier-option>';
+
+/** Reads one tag starting at `start` ("<name ...>"), honouring quotes so `>` inside values is fine. */
+function readTag(text: string, start: number): { attrs: Record<string, string>; end: number } | null {
+  let i = start;
+  let quote: string | null = null;
+  while (i < text.length) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '>') {
+      const raw = text.slice(start, i);
+      const attrs: Record<string, string> = {};
+      const re = /([a-zA-Z_][\w-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+      for (let m = re.exec(raw); m; m = re.exec(raw)) {
+        attrs[m[1].toLowerCase()] = (m[2] ?? m[3] ?? '').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+      }
+      return { attrs, end: i + 1 };
+    }
+    i += 1;
+  }
+  return null;
+}
+
+function clampInt(value: string | undefined, min: number, max: number, fallback: number): number {
+  const n = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
+function stripFence(content: string): string {
+  const m = content.trim().match(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/);
+  return (m ? m[1] : content).trim();
+}
+
+function parseDesignBlock(attrs: Record<string, string>, inner: string): DesignBlock | null {
+  const options: DesignOption[] = [];
+  let pos = 0;
+  while (options.length < 6) {
+    const open = inner.indexOf(OPTION_OPEN, pos);
+    if (open < 0) break;
+    const tag = readTag(inner, open);
+    if (!tag) break;
+    const close = inner.indexOf(OPTION_CLOSE, tag.end);
+    const body = close < 0 ? inner.slice(tag.end) : inner.slice(tag.end, close);
+    pos = close < 0 ? inner.length : close + OPTION_CLOSE.length;
+
+    const a = tag.attrs;
+    const content = stripFence(body);
+    let kind: DesignOptionKind = a.kind === 'svg' || a.kind === 'image' || a.kind === 'html' ? a.kind : 'html';
+    if (!a.kind && /^<svg[\s>]/i.test(content)) kind = 'svg';
+    if (kind === 'image' && !a.src) continue;
+    if (kind !== 'image' && !content) continue;
+    options.push({
+      id: (a.id || String.fromCharCode(65 + options.length)).slice(0, 12),
+      label: (a.label || `Option ${String.fromCharCode(65 + options.length)}`).slice(0, 80),
+      kind,
+      content: kind === 'image' ? '' : content,
+      src: kind === 'image' ? a.src : undefined,
+      summary: a.summary?.slice(0, 400),
+      pros: a.pros?.slice(0, 300),
+      cons: a.cons?.slice(0, 300),
+      width: clampInt(a.width, 320, 1920, 1000),
+      height: clampInt(a.height, 200, 1400, 640),
+    });
+  }
+  if (options.length === 0) return null;
+  return { title: (attrs.title || 'Design options').slice(0, 120), ask: attrs.ask?.slice(0, 200), options };
+}
+
+/**
+ * Splits an agent reply into plain text and design-option cards. An unterminated block (still
+ * streaming) becomes a "design-pending" placeholder so half-written HTML never reaches the UI.
+ */
+export function parseMessageSegments(text: string): MessageSegment[] {
+  if (!text.includes(DESIGN_OPEN)) return [{ type: 'text', text }];
+  const segments: MessageSegment[] = [];
+  let pos = 0;
+  const pushText = (t: string) => {
+    if (t.trim()) segments.push({ type: 'text', text: t.replace(/^\n+|\n+$/g, '') });
+  };
+  while (pos < text.length) {
+    const open = text.indexOf(DESIGN_OPEN, pos);
+    if (open < 0) {
+      pushText(text.slice(pos));
+      break;
+    }
+    pushText(text.slice(pos, open));
+    const tag = readTag(text, open);
+    const close = tag ? text.indexOf(DESIGN_CLOSE, tag.end) : -1;
+    if (!tag || close < 0) {
+      segments.push({ type: 'design-pending', title: tag?.attrs.title });
+      break;
+    }
+    const block = parseDesignBlock(tag.attrs, text.slice(tag.end, close));
+    if (block) segments.push({ type: 'design', block });
+    pos = close + DESIGN_CLOSE.length;
+  }
+  return segments.length > 0 ? segments : [{ type: 'text', text: '' }];
+}
+
+/** Replaces design blocks with a one-line summary so heavy HTML never re-enters model context. */
+export function summarizeDesignBlocks(text: string): string {
+  if (!text.includes(DESIGN_OPEN)) return text;
+  return parseMessageSegments(text)
+    .map((s) => {
+      if (s.type === 'text') return s.text;
+      if (s.type === 'design-pending') return '[Design options block (incomplete)]';
+      const list = s.block.options.map((o) => `${o.id} "${o.label}"`).join(', ');
+      return `[Design options shown to the user — ${list}. They can pick one.]`;
+    })
+    .join('\n\n');
 }

@@ -4,6 +4,7 @@ import type {
   Message,
   ThreadCompaction,
 } from '@atelier/contracts';
+import { summarizeDesignBlocks } from '@atelier/contracts';
 import type { AtelierStore } from '../store.js';
 
 const MAX_SUMMARY_CHARS = 2400;
@@ -44,21 +45,30 @@ export function getUncompactedMessages(
  * Formats recent uncompacted messages into a compact conversational tail for turns
  * running without a native provider resume session.
  */
+/** Message text as the model should see it in history: no bulky design HTML, attachments listed. */
+function historyText(m: Message, attachmentNote?: (m: Message) => string): string {
+  return `${summarizeDesignBlocks(m.text)}${attachmentNote?.(m) ?? ''}`;
+}
+
 export function formatUncompactedConversation(
   messages: Message[],
   compaction: ThreadCompaction | null | undefined,
   currentPrompt: string,
   maxRecent = 12,
+  /** Appends the attached-file list for messages that had attachments. */
+  attachmentNote?: (m: Message) => string,
 ): string {
   const history = getUncompactedMessages(messages, compaction).slice(-maxRecent);
+  const last = history[history.length - 1];
+  // The current message is already in history; its prompt may carry extra attachment text.
   const prior =
-    history.length > 0 && history[history.length - 1]!.text === currentPrompt
+    last && currentPrompt.startsWith(`${last.text}${attachmentNote?.(last) ?? ''}`)
       ? history.slice(0, -1)
       : history;
 
   if (prior.length === 0) return currentPrompt;
 
-  const lines = prior.map((m) => `${m.author.toUpperCase()}: ${m.text}`);
+  const lines = prior.map((m) => `${m.author.toUpperCase()}: ${historyText(m, attachmentNote)}`);
   return ['Recent conversation context:', ...lines, '', `CURRENT MESSAGE: ${currentPrompt}`].join(
     '\n',
   );
@@ -71,7 +81,7 @@ export function estimateActiveContextTokens(
 ): number {
   const uncompacted = getUncompactedMessages(messages, compaction);
   const summaryTokens = estimateTokens(compaction?.summary ?? '');
-  const messageTokens = uncompacted.reduce((acc, m) => acc + estimateTokens(m.text), 0);
+  const messageTokens = uncompacted.reduce((acc, m) => acc + estimateTokens(summarizeDesignBlocks(m.text)), 0);
   const estimated = summaryTokens + messageTokens;
   return Math.max(estimated, reportedScopeTokens ?? 0);
 }
@@ -97,7 +107,7 @@ export function shouldAutoCompact(
 }
 
 function summarizeLine(msg: Message): string {
-  const compactText = msg.text.replace(/\s+/g, ' ').trim();
+  const compactText = summarizeDesignBlocks(msg.text).replace(/\s+/g, ' ').trim();
   const clipped =
     compactText.length > MAX_LINE_CHARS
       ? `${compactText.slice(0, MAX_LINE_CHARS - 1)}…`
@@ -215,7 +225,7 @@ export function compactAgentScope(
   );
   const summary = buildDeterministicSummary(prevCompaction?.summary, toCompact);
   const estimatedTokensAfter =
-    estimateTokens(summary) + kept.reduce((acc, m) => acc + estimateTokens(m.text), 0);
+    estimateTokens(summary) + kept.reduce((acc, m) => acc + estimateTokens(summarizeDesignBlocks(m.text)), 0);
 
   const compaction: ThreadCompaction = {
     summary,
