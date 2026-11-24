@@ -118,23 +118,40 @@ export function SpeakerNamingDialog({
     <ModalShell
       title={t('Name your speakers')}
       subtitle={t('Play the sample, then type a name for each voice.')}
-      width={600}
+      width={640}
       onClose={onClose}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-secondary)' }}>
-            <Users size={14} strokeWidth={1.6} />
-            {t('Participants')}
-          </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        {/* How many people: the speaker engine does better when it is told. */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 16,
+            padding: '10px 12px',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border-subtle)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <Users size={15} strokeWidth={1.6} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{t('Participants')}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 1, lineHeight: 1.4 }}>
+                {t('How many people were in the meeting, including you. Press Re-run to find the voices again.')}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <span
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 borderRadius: 'var(--radius-md)',
                 border: '1px solid var(--border-default)',
-                background: 'var(--surface-2)',
+                background: 'var(--surface-1)',
               }}
             >
               <button
@@ -163,21 +180,37 @@ export function SpeakerNamingDialog({
               type="button"
               disabled={busy !== null}
               onClick={() => void rerun()}
-              style={{ ...primaryBtnStyle, height: 30, padding: '0 12px', fontSize: 12 }}
+              style={{ ...primaryBtnStyle, height: 30, padding: '0 14px', fontSize: 12 }}
             >
               {busy === 'rerun' ? t('Finding…') : t('Re-run')}
             </button>
-          </span>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--border-subtle)' }}>
-          {speakers.map((sp) => (
-            <div
-              key={sp.id}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--border-subtle)' }}
-            >
-              <span aria-hidden style={{ width: 9, height: 9, borderRadius: 9999, background: speakerColor(sp.color), flexShrink: 0 }} />
-              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {/* One row per voice. A fixed grid keeps the dot, name, count and buttons on the same lines in every row. */}
+        <div
+          style={{
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-subtle)',
+            overflow: 'hidden',
+            background: 'var(--surface-1)',
+          }}
+        >
+          {speakers.map((sp, i) => {
+            const canMerge = sp.id !== 'me' && others(sp.id).length > 0;
+            return (
+              <div
+                key={sp.id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '10px minmax(0, 1fr) 64px 132px 108px',
+                  alignItems: 'center',
+                  columnGap: 12,
+                  padding: '10px 12px',
+                  borderTop: i === 0 ? 'none' : '1px solid var(--border-subtle)',
+                }}
+              >
+                <span aria-hidden style={{ width: 10, height: 10, borderRadius: 9999, background: speakerColor(sp.color) }} />
                 <input
                   type="text"
                   value={drafts[sp.id] ?? sp.name ?? ''}
@@ -185,47 +218,55 @@ export function SpeakerNamingDialog({
                   placeholder={automaticSpeakerName(t, sp.id)}
                   aria-label={t('Name of {name}', { name: speakerName(t, sp) })}
                   maxLength={60}
-                  style={{ ...inputStyle, minWidth: 0 }}
+                  style={{ ...inputStyle, minWidth: 0, height: 34, padding: '0 11px' }}
                 />
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {t('{count} sentences', { count: sp.segmentCount })}
                 </span>
-              </div>
-              {sp.id !== 'me' && others(sp.id).length > 0 && (
-                <div style={{ width: 150, flexShrink: 0 }}>
+                {canMerge ? (
                   <Select
                     ariaLabel={t('Same person as…')}
                     value=""
                     onChange={(into) => void merge(sp.id, into)}
                     options={[
-                      { value: '', label: t('Same as…') },
+                      { value: '', label: t('Merge into…') },
                       ...others(sp.id).map((o) => ({ value: o.id, label: speakerName(t, o) })),
                     ]}
                   />
-                </div>
-              )}
-              <button
-                type="button"
-                disabled={!sp.hasSample}
-                onClick={() => play(sp.id)}
-                style={{ ...secondaryBtnStyle, height: 30, padding: '0 10px', fontSize: 12, gap: 5, opacity: sp.hasSample ? 1 : 0.4, flexShrink: 0 }}
-              >
-                {playing === sp.id ? <Square size={10} fill="currentColor" strokeWidth={1.5} /> : <Play size={11} strokeWidth={1.7} />}
-                {playing === sp.id ? t('Stop') : t('Listen')}
-              </button>
-            </div>
-          ))}
+                ) : (
+                  <span aria-hidden />
+                )}
+                <button
+                  type="button"
+                  disabled={!sp.hasSample}
+                  onClick={() => play(sp.id)}
+                  style={{
+                    ...secondaryBtnStyle,
+                    width: '100%',
+                    height: 34,
+                    padding: '0 10px',
+                    fontSize: 12,
+                    gap: 6,
+                    opacity: sp.hasSample ? 1 : 0.4,
+                  }}
+                >
+                  {playing === sp.id ? <Square size={10} fill="currentColor" strokeWidth={1.5} /> : <Play size={11} strokeWidth={1.7} />}
+                  {playing === sp.id ? t('Stop') : t('Listen')}
+                </button>
+              </div>
+            );
+          })}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.45, maxWidth: 300 }}>
-            {t('Saving writes the notes again with these names and deletes the audio kept for this step.')}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+          <span style={{ flex: 1, fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.45 }}>
+            {t('Saving rewrites the notes with these names and deletes the temporary audio.')}
           </span>
           <button
             type="button"
             disabled={busy !== null}
             onClick={() => void done()}
-            style={{ ...primaryBtnStyle, gap: 6 }}
+            style={{ ...primaryBtnStyle, gap: 6, flexShrink: 0 }}
           >
             <Check size={13} strokeWidth={1.8} />
             {busy === 'done' ? t('Saving…') : t('Done')}

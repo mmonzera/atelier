@@ -1099,4 +1099,7 @@ export const id: Record<string, string> = {
   "who speaks when": "siapa bicara kapan",
   "{count} sentences": "{count} kalimat",
   "{name} (not connected)": "{name} (tidak terhubung)",
+  "How many people were in the meeting, including you. Press Re-run to find the voices again.": "Jumlah orang di meeting, termasuk kamu. Tekan Ulangi untuk mengenali suara lagi.",
+  "Merge into…": "Gabung ke…",
+  "Saving rewrites the notes with these names and deletes the temporary audio.": "Catatan ditulis ulang dengan nama-nama ini, lalu audio sementara dihapus.",
 };
