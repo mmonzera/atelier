@@ -36,23 +36,24 @@ import { SettingsView, type SettingsTab } from './views/SettingsView';
 import { TasksView } from './views/TasksView';
 
 /**
- * Soft band behind the chat column. The opacity follows an eased (smoothstep-like) curve so the
- * background fades in without a visible edge, and it stays a little translucent in the middle so
- * the cables still show faintly behind the text instead of a flat black slab.
+ * Band behind the chat column: fully solid across the column itself (so cables never run behind
+ * message text), then an eased (smoothstep) fade to nothing on both sides so there is no visible edge.
  */
 const CHAT_BAND_GRADIENT = (() => {
-  const peak = 0.84;
-  const steps = 14;
-  const stops: string[] = [];
+  const solidHalf = 350; // px from the centre that stay fully solid (chat column is 650px wide + padding)
+  const fade = 340; // px over which the band melts away on each side
+  const steps = 16;
+  const left: string[] = [];
+  const right: string[] = [];
   for (let i = 0; i <= steps; i += 1) {
-    const t = i / steps; // 0 → 1 across the left half
-    const eased = t * t * (3 - 2 * t);
-    stops.push(`rgba(13, 13, 17, ${(peak * eased).toFixed(3)}) ${(t * 50).toFixed(1)}%`);
+    const t = i / steps; // 0 = solid edge, 1 = fully transparent
+    const alpha = 1 - t * t * (3 - 2 * t);
+    const color = `rgba(13, 13, 17, ${alpha.toFixed(3)})`;
+    const d = solidHalf + t * fade;
+    left.unshift(`${color} calc(50% - ${d.toFixed(0)}px)`);
+    right.push(`${color} calc(50% + ${d.toFixed(0)}px)`);
   }
-  const mirrored = [...stops]
-    .reverse()
-    .map((s) => s.replace(/([\d.]+)%$/, (_, p: string) => `${(100 - Number(p)).toFixed(1)}%`));
-  return `linear-gradient(to right, ${[...stops, ...mirrored.slice(1)].join(', ')})`;
+  return `linear-gradient(to right, ${[...left, ...right].join(', ')})`;
 })();
 
 type ActiveModal =
@@ -409,7 +410,7 @@ export function App() {
               top: -12,
               bottom: -12,
               left: '50%',
-              width: 'min(100%, 1200px)',
+              width: '100%',
               transform: 'translateX(-50%)',
               zIndex: -1,
               pointerEvents: 'none',
