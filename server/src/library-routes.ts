@@ -27,10 +27,14 @@ export function createLibraryRoutes(deps: { store: AtelierStore; config: AppConf
       return c.json(apiError('not_found', 'Project tidak ditemukan.'), 404);
     }
 
+    // Optional per-agent view (direct chats): only that agent's uploads and artifacts it produced.
+    const agentId = c.req.query('agentId') || undefined;
+    if (agentId && !store.getAgent(agentId)) return c.json(apiError('not_found', 'Agent tidak ditemukan.'), 404);
+
     const images: LibraryImage[] = [];
     const seen = new Set<string>();
 
-    for (const message of store.listMessagesWithAttachments(projectId)) {
+    for (const message of store.listMessagesWithAttachments(projectId, agentId)) {
       for (const attachment of (message as Message).metadata?.attachments ?? []) {
         if (attachment.kind !== 'image' || seen.has(attachment.id)) continue;
         const found = files.get(attachment.id);
@@ -51,6 +55,7 @@ export function createLibraryRoutes(deps: { store: AtelierStore; config: AppConf
 
     for (const artifact of store.listArtifacts(projectId)) {
       if (!IMAGE_ARTIFACT_KINDS.has(artifact.kind)) continue;
+      if (agentId && (!artifact.sourceMessageId || store.getMessage(artifact.sourceMessageId)?.agentId !== agentId)) continue;
       images.push({
         id: artifact.id,
         source: 'artifact',

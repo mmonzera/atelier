@@ -329,7 +329,7 @@ export function App() {
 
   const dimmedBackground =
     (viewMode === 'project' && (activeTab === 'tasks' || activeTab === 'preview' || activeTab === 'library')) ||
-    (viewMode === 'agent' && agentTab === 'reports');
+    (viewMode === 'agent' && (agentTab === 'reports' || agentTab === 'library'));
 
   return (
     <div
@@ -427,7 +427,9 @@ export function App() {
 
             {viewMode === 'agent' ? (
               activeAgent ? (
-                agentTab === 'reports' ? (
+                agentTab === 'library' ? (
+                  <LibraryView projectId={null} agentId={activeAgent.id} refreshKey={state.messages.length} />
+                ) : agentTab === 'reports' ? (
                   <AgentReportsView
                     agent={activeAgent}
                     projects={state.projects}
@@ -605,7 +607,7 @@ export function App() {
                 onJumpToAgent={handleSelectProjectAgent}
               />
             ) : activeTab === 'library' ? (
-              <LibraryView project={activeProject} refreshKey={state.messages.length} />
+              <LibraryView projectId={activeProject.id} refreshKey={state.messages.length} />
             ) : activeTab === 'preview' ? (
               <PreviewView
                 project={activeProject}
@@ -711,14 +713,7 @@ export function App() {
               onUpdateReasoning={handleUpdateReasoning}
               onSelectModel={handleSelectModel}
               onNewTask={() => setModal({ type: 'new-task' })}
-              onAddAgent={() =>
-                setModal({ type: viewMode === 'project' ? 'new-agent' : 'new-global-agent' })
-              }
-              onEditAgent={() => {
-                if (activeAgent) setModal({ type: 'edit-agent', agentId: activeAgent.id });
-              }}
               onCompactContext={() => void handleCompactContext()}
-              onOpenMcp={() => setModal({ type: 'mcp' })}
               onOpenLinkRepo={() => setModal({ type: 'link-repo' })}
               onOpenModels={() => setModal({ type: 'settings', initialTab: 'providers' })}
               onOpenUsage={() => setModal({ type: 'usage' })}

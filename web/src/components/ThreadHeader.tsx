@@ -30,6 +30,7 @@ const PROJECT_TABS: Array<{ id: WorkspaceTab; label: string }> = [
 const AGENT_TABS: Array<{ id: AgentViewTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'reports', label: 'Reports' },
+  { id: 'library', label: 'Library' },
 ];
 
 export function ThreadHeader({

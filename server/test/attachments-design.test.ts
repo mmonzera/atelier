@@ -313,4 +313,26 @@ describe('project image library', () => {
     expect((await fetch(`${base}/api/projects/nope/library`)).status).toBe(404);
     expect((await list('direct')).images).toEqual([]);
   });
+  it('limits a direct-chat library to the requested agent', async () => {
+    const runner: AgentRunner = { async run(_t, cb) { cb.onText('ok'); return { finalText: 'ok' }; } };
+    const { handle, base } = await boot(runner);
+    const a = handle.store.createAgent(null, { name: 'A', role: 'Eng' })!;
+    const b = handle.store.createAgent(null, { name: 'B', role: 'Eng' })!;
+    const sendTo = async (agentId: string, name: string) => {
+      const up = (await (await upload(base, [{ name, bytes: PNG }])).json()) as { attachments: MessageAttachment[] };
+      await fetch(`${base}/api/agents/${agentId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'hi', projectId: null, attachmentIds: [up.attachments[0]!.id] }),
+      });
+    };
+    await sendTo(a.id, 'a.png');
+    await sendTo(b.id, 'b.png');
+    const names = async (q = '') =>
+      ((await (await fetch(`${base}/api/projects/direct/library${q}`)).json()) as { images: LibraryImage[] }).images.map((i) => i.name).sort();
+    expect(await names()).toEqual(['a.png', 'b.png']);
+    expect(await names(`?agentId=${a.id}`)).toEqual(['a.png']);
+    expect(await names(`?agentId=${b.id}`)).toEqual(['b.png']);
+    expect((await fetch(`${base}/api/projects/direct/library?agentId=agt_missing`)).status).toBe(404);
+  });
 });

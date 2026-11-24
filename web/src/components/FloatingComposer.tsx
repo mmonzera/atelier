@@ -16,7 +16,10 @@ import {
   ChevronDown,
   Folder,
   GitBranch,
+  ListPlus,
   Mic,
+  Minimize2,
+  Paperclip,
   Plus,
   Square,
 } from 'lucide-react';
@@ -41,10 +44,7 @@ interface FloatingComposerProps {
   onUpdateReasoning: (effort: ReasoningEffort) => Promise<void>;
   onSelectModel: (entry: ModelEntry) => Promise<void>;
   onNewTask: () => void;
-  onAddAgent: () => void;
-  onEditAgent: () => void;
   onCompactContext?: () => void;
-  onOpenMcp: () => void;
   onOpenLinkRepo: () => void;
   onOpenModels: () => void;
   onOpenUsage: () => void;
@@ -190,10 +190,7 @@ export function FloatingComposer({
   onUpdateReasoning,
   onSelectModel,
   onNewTask,
-  onAddAgent,
-  onEditAgent,
   onCompactContext,
-  onOpenMcp,
   onOpenLinkRepo,
   onOpenModels,
   onOpenUsage,
@@ -481,16 +478,15 @@ export function FloatingComposer({
                 gap: 2,
               }}
             >
+              {/* Chat-only actions; agent, MCP and repo settings live in the header menu. */}
               {[
-                ...(agent ? [{ label: 'Attach file or image…', action: () => fileInputRef.current?.click() }] : []),
-                ...(project ? [{ label: 'New task', action: onNewTask }] : []),
-                { label: 'Add custom agent', action: onAddAgent },
-                ...(agent ? [{ label: 'Edit agent & skills', action: onEditAgent }] : []),
-                ...(agent && onCompactContext && !isWorking
-                  ? [{ label: 'Compact context now', action: onCompactContext }]
+                ...(agent
+                  ? [{ label: 'Attach file or image', icon: Paperclip, action: () => fileInputRef.current?.click() }]
                   : []),
-                { label: 'Connect MCP server', action: onOpenMcp },
-                ...(project ? [{ label: 'Link repository', action: onOpenLinkRepo }] : []),
+                ...(project ? [{ label: 'New task', icon: ListPlus, action: onNewTask }] : []),
+                ...(agent && onCompactContext && !isWorking
+                  ? [{ label: 'Compact context now', icon: Minimize2, action: onCompactContext }]
+                  : []),
               ].map((item) => (
                 <button
                   key={item.label}
@@ -501,6 +497,9 @@ export function FloatingComposer({
                   }}
                   className="transition-atelier"
                   style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
                     textAlign: 'left',
                     padding: '7px 10px',
                     borderRadius: 'var(--radius-sm)',
@@ -514,6 +513,7 @@ export function FloatingComposer({
                     e.currentTarget.style.background = 'transparent';
                   }}
                 >
+                  <item.icon size={15} strokeWidth={1.5} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
                   {item.label}
                 </button>
               ))}

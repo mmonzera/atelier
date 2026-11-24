@@ -43,7 +43,7 @@ export type MessageAuthor = 'user' | 'agent' | 'teammate' | 'system';
 export type ActivityKind = 'tool' | 'status' | 'task' | 'pr' | 'error';
 export type ReasoningEffort = 'Low' | 'Medium' | 'High';
 export type WorkspaceTab = 'chat' | 'tasks' | 'preview' | 'library';
-export type AgentViewTab = 'chat' | 'reports';
+export type AgentViewTab = 'chat' | 'reports' | 'library';
 export type ModelProvider = 'claude' | 'openai' | 'antigravity' | 'deepseek' | 'opencode';
 export type RealProvider = ModelProvider;
 

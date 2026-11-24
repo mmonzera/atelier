@@ -240,8 +240,10 @@ export const api = {
       },
     ),
 
-  libraryImages: (scope: string | null) =>
-    request<{ images: LibraryImage[] }>(`/api/projects/${encodeURIComponent(scope ?? 'direct')}/library`),
+  libraryImages: (scope: string | null, agentId?: string) =>
+    request<{ images: LibraryImage[] }>(
+      `/api/projects/${encodeURIComponent(scope ?? 'direct')}/library${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`,
+    ),
 
   pickDesign: (scope: string | null, messageId: string, optionId: string, segmentIndex: number) =>
     request<{ entry: CanonEntry }>(`/api/projects/${encodeURIComponent(scope ?? 'direct')}/canon/pick`, {

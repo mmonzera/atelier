@@ -1,10 +1,13 @@
-import type { LibraryImage, Project } from '@atelier/contracts';
+import type { LibraryImage } from '@atelier/contracts';
 import { ChevronLeft, ChevronRight, Download, ImageIcon, RefreshCw, Search, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api } from '../api';
 
 interface LibraryViewProps {
-  project: Project;
+  /** Project id, or null for a direct chat. */
+  projectId: string | null;
+  /** Limit to one agent's images (direct chats). */
+  agentId?: string;
   /** Changes when chat activity may have added images (e.g. the message count). */
   refreshKey: number;
 }
@@ -48,7 +51,7 @@ const iconButton: CSSProperties = {
   cursor: 'pointer',
 };
 
-export function LibraryView({ project, refreshKey }: LibraryViewProps) {
+export function LibraryView({ projectId, agentId, refreshKey }: LibraryViewProps) {
   const [images, setImages] = useState<LibraryImage[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -58,10 +61,10 @@ export function LibraryView({ project, refreshKey }: LibraryViewProps) {
   const load = useCallback(() => {
     setError(null);
     api
-      .libraryImages(project.id)
+      .libraryImages(projectId, agentId)
       .then((res) => setImages(res.images))
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Gagal memuat library.'));
-  }, [project.id]);
+  }, [projectId, agentId]);
 
   useEffect(() => {
     setImages(null);

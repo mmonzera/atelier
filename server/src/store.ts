@@ -1375,10 +1375,10 @@ export class AtelierStore {
   }
 
   /** Messages in a scope that carry attachments (used by the image library). */
-  public listMessagesWithAttachments(projectId: string | null): Message[] {
+  public listMessagesWithAttachments(projectId: string | null, agentId?: string): Message[] {
     const rows = this.db.sqlite
-      .prepare(`SELECT data FROM messages WHERE project_id IS ? AND data LIKE '%"attachments"%' ORDER BY created_at DESC, rowid DESC`)
-      .all(projectId) as { data: string }[];
+      .prepare(`SELECT data FROM messages WHERE project_id IS ? AND (? IS NULL OR agent_id = ?) AND data LIKE '%"attachments"%' ORDER BY created_at DESC, rowid DESC`)
+      .all(projectId, agentId ?? null, agentId ?? null) as { data: string }[];
     return rows.map((row) => JSON.parse(row.data) as Message);
   }
 
