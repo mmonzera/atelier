@@ -33,6 +33,13 @@ import { Switch } from '../components/Switch';
 import { toast } from '../components/Toast';
 import { useLang, useT } from '../i18n';
 import {
+  MeetingDevicesCard,
+  MeetingNotesWriterCard,
+  SpeakerEngineCard,
+  cardStyle,
+  eyebrowStyle,
+} from './MeetingSettingsCards';
+import {
   DEFAULT_NOTICE_EN,
   DEFAULT_NOTICE_ID,
   PROVIDER_DISPLAY_NAMES,
@@ -40,23 +47,6 @@ import {
 } from '../meetingNotice';
 
 
-const cardStyle: React.CSSProperties = {
-  padding: 14,
-  borderRadius: 'var(--radius-md)',
-  background: 'var(--surface-2)',
-  border: '1px solid var(--border-subtle)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-};
-
-const eyebrowStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 500,
-  letterSpacing: '0.06em',
-  textTransform: 'uppercase',
-  color: 'var(--text-muted)',
-};
 
 function formatMb(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 MB';
@@ -246,6 +236,32 @@ export function MeetingSettingsPanel({
     }
   };
 
+  const handleInstallSpeakers = async () => {
+    setBusyAction('speakers');
+    try {
+      const res = await sttApi.installSpeakers();
+      setStatus(res.status);
+      toast.success(t('Speaker engine installed'));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('Failed to install the speaker engine'));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleRemoveSpeakers = async () => {
+    setBusyAction('speakers');
+    try {
+      const res = await sttApi.deleteSpeakers();
+      setStatus(res.status);
+      toast.info(t('Speaker engine removed'));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('Failed to remove the speaker engine'));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const handleClearAll = async () => {
     setBusyAction('clear-all');
     try {
@@ -406,6 +422,19 @@ export function MeetingSettingsPanel({
         </div>
       </div>
 
+      <MeetingDevicesCard
+        meeting={meeting}
+        captureAvailable={captureAvailable}
+        recording={recording}
+        onChange={(patch) => void updateMeeting(patch)}
+      />
+
+      <MeetingNotesWriterCard
+        meeting={meeting}
+        settings={settings}
+        onChange={(patch) => void updateMeeting(patch)}
+      />
+
       {/* Automatic meeting detection */}
       <div style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
@@ -451,6 +480,17 @@ export function MeetingSettingsPanel({
           </div>
         )}
       </div>
+
+      <SpeakerEngineCard
+        status={status}
+        meeting={meeting}
+        download={activeDownload}
+        busy={busyAction !== null}
+        onChange={(patch) => void updateMeeting(patch)}
+        onInstall={() => void handleInstallSpeakers()}
+        onRemove={() => void handleRemoveSpeakers()}
+        onCancel={() => void handleCancelDownload()}
+      />
 
       {/* §6.2 Whisper Engine */}
       <div style={cardStyle}>

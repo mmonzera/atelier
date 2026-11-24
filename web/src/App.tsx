@@ -119,17 +119,17 @@ export function App() {
   const [modal, setModal] = useState<ActiveModal>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   /** Meeting notes page; `meetingId` null shows the list. */
-  const [meetingsPage, setMeetingsPage] = useState<{ meetingId: string | null } | null>(null);
+  const [meetingsPage, setMeetingsPage] = useState<{ meetingId: string | null; naming?: boolean } | null>(null);
   const pageOpen = pluginsOpen || meetingsPage !== null;
   const openPlugins = () => {
     setModal(null);
     setMeetingsPage(null);
     setPluginsOpen(true);
   };
-  const openMeetings = (meetingId: string | null = null) => {
+  const openMeetings = (meetingId: string | null = null, naming = false) => {
     setModal(null);
     setPluginsOpen(false);
-    setMeetingsPage({ meetingId });
+    setMeetingsPage({ meetingId, naming });
   };
   const [discoveredModels, setDiscoveredModels] = useState<ModelEntry[]>([]);
   const [hostname, setHostname] = useState('Local Workstation');
@@ -824,7 +824,11 @@ export function App() {
             {/* While recording: the recorder floats at the bottom centre of the window, above every
                 page; on the chat it sits just above the composer so typing stays possible. */}
             {activeMeeting?.meeting.status === 'recording' && (
-              <MeetingRecorder event={activeMeeting} bottomOffset={pageOpen ? 24 : 112} />
+              <MeetingRecorder
+                event={activeMeeting}
+                bottomOffset={pageOpen ? 24 : 112}
+                onOpenSettings={() => setModal({ type: 'settings', initialTab: 'meeting' })}
+              />
             )}
 
             {/* After Stop: a small status pill at the top, also above full pages. */}
@@ -855,6 +859,7 @@ export function App() {
               <MeetingReadyCard
                 meeting={meetingReady}
                 onOpen={() => openMeetings(meetingReady.id)}
+                onNameSpeakers={() => openMeetings(meetingReady.id, true)}
                 onDismiss={dismissMeetingReady}
               />
             )}
@@ -877,6 +882,7 @@ export function App() {
                     settings={state.settings}
                     activeMeeting={activeMeeting}
                     selectedId={meetingsPage.meetingId}
+                    naming={meetingsPage.naming}
                     onSelect={(meetingId) => setMeetingsPage({ meetingId })}
                     onBack={() => setMeetingsPage(null)}
                     onOpenSettings={() => setModal({ type: 'settings', initialTab: 'meeting' })}

@@ -32,7 +32,15 @@ function levelToHeight(rms: number): number {
  * being captured, and three round buttons (discard · pause/resume · finish). Collapses to a
  * small pill so it never hides the chat.
  */
-export function MeetingRecorder({ event, bottomOffset = 24 }: { event: MeetingStatusEvent; bottomOffset?: number }) {
+export function MeetingRecorder({
+  event,
+  bottomOffset = 24,
+  onOpenSettings,
+}: {
+  event: MeetingStatusEvent;
+  bottomOffset?: number;
+  onOpenSettings?: () => void;
+}) {
   // Bottom centre of the main column (lined up with the composer). Its z-index is above full
   // pages (Meeting notes, Plugins, z-index 30), which used to cover it.
   return (
@@ -46,12 +54,12 @@ export function MeetingRecorder({ event, bottomOffset = 24 }: { event: MeetingSt
         transition: 'bottom 200ms ease',
       }}
     >
-      <RecorderPanel event={event} />
+      <RecorderPanel event={event} onOpenSettings={onOpenSettings} />
     </div>
   );
 }
 
-function RecorderPanel({ event }: { event: MeetingStatusEvent }) {
+function RecorderPanel({ event, onOpenSettings }: { event: MeetingStatusEvent; onOpenSettings?: () => void }) {
   const t = useT();
   const { meeting, canSwitchSmallerModel, smallerModelId, warning } = event;
   const [now, setNow] = useState(() => Date.now());
@@ -217,6 +225,17 @@ function RecorderPanel({ event }: { event: MeetingStatusEvent }) {
         <span style={{ fontSize: 11.5, color: isLagging ? 'var(--agent-amber)' : 'var(--text-tertiary)' }}>
           {busy === 'finish' ? t('Finishing: saving the last audio…') : statusLine}
         </span>
+        {warning && event.warningCode === 'mic_silent' && onOpenSettings && (
+          <button type="button" onClick={onOpenSettings} style={pillBtn}>
+            <Mic size={11} strokeWidth={1.7} />
+            {t('Choose another microphone')}
+          </button>
+        )}
+        {warning && event.warningCode === 'mic_silent' && (
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center' }}>
+            {t('A new choice applies to the next recording: finish this one, then start again.')}
+          </span>
+        )}
         {warning && (
           <span
             title={warning}

@@ -30,6 +30,9 @@ export function MeetingRecordingPill({ event }: { event: MeetingStatusEvent }) {
   } else if (meeting.status === 'transcribing') {
     dotColor = 'var(--agent-blue)';
     label = t('Transcribing {pct}%', { pct: meeting.transcribeProgress });
+  } else if (meeting.status === 'identifying') {
+    dotColor = 'var(--agent-blue)';
+    label = t('Finding the speakers…');
   } else if (meeting.status === 'summarizing') {
     dotColor = 'var(--agent-blue)';
     label = t('Writing meeting notes…');

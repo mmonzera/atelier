@@ -1,4 +1,6 @@
 import type {
+  AudioDevicesInfo,
+  ModelProvider as MeetingNotesProvider,
   Agent,
   BrowserApprovalRequest,
   BrowserProfile,
@@ -588,6 +590,10 @@ export const sttApi = {
       method: 'POST',
       body: JSON.stringify(modelId ? { modelId } : {}),
     }),
+  installSpeakers: () =>
+    request<{ ok: boolean; status: SttLocalStatus }>('/api/stt/local/speakers/install', { method: 'POST' }),
+  deleteSpeakers: () =>
+    request<{ ok: boolean; status: SttLocalStatus }>('/api/stt/local/speakers', { method: 'DELETE' }),
 };
 
 export const meetingsApi = {
@@ -633,6 +639,40 @@ export const meetingsApi = {
   discard: (id: string) =>
     request<{ ok: boolean }>(`/api/meetings/${encodeURIComponent(id)}/discard`, {
       method: 'POST',
+    }),
+  audioDevices: () => request<AudioDevicesInfo>('/api/meetings/audio-devices'),
+  /** Level meter for the pickers in Settings; `micDevice`/`speakerDevice` preview an unsaved choice. */
+  audioMeter: (enabled: boolean, devices?: { micDevice?: string | null; speakerDevice?: string | null }) =>
+    request<{ ok: boolean }>('/api/meetings/audio-meter', {
+      method: 'POST',
+      body: JSON.stringify({ enabled, ...devices }),
+    }),
+  regenerateNotes: (id: string, override?: { provider: MeetingNotesProvider | null; model: string | null }) =>
+    request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/regenerate-notes`, {
+      method: 'POST',
+      body: JSON.stringify(override ?? {}),
+    }),
+  renameSpeaker: (id: string, speakerId: string, name: string | null) =>
+    request<MeetingStatusEvent>(
+      `/api/meetings/${encodeURIComponent(id)}/speakers/${encodeURIComponent(speakerId)}`,
+      { method: 'PATCH', body: JSON.stringify({ name }) },
+    ),
+  mergeSpeaker: (id: string, speakerId: string, into: string) =>
+    request<MeetingStatusEvent>(
+      `/api/meetings/${encodeURIComponent(id)}/speakers/${encodeURIComponent(speakerId)}/merge`,
+      { method: 'POST', body: JSON.stringify({ into }) },
+    ),
+  speakerSampleUrl: (id: string, speakerId: string) =>
+    `/api/meetings/${encodeURIComponent(id)}/speakers/${encodeURIComponent(speakerId)}/sample.wav`,
+  diarize: (id: string, participants: number | null) =>
+    request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/diarize`, {
+      method: 'POST',
+      body: JSON.stringify({ participants }),
+    }),
+  speakersDone: (id: string, regenerate: boolean) =>
+    request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/speakers-done`, {
+      method: 'POST',
+      body: JSON.stringify({ regenerate }),
     }),
   rename: (id: string, title: string) =>
     request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}`, {

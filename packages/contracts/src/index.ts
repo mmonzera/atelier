@@ -1153,6 +1153,11 @@ export interface AudioDevicesInfo {
 export interface MeetingMeterEvent {
   mic: number;
   speaker: number;
+  /** Sent with the first reading: which devices were opened, or why one could not be. */
+  micName?: string | null;
+  speakerName?: string | null;
+  micError?: string | null;
+  speakerError?: string | null;
 }
 
 export interface SpeakerEngineStatus {

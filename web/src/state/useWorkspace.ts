@@ -15,6 +15,8 @@ import { INITIAL_WORKSPACE_STATE, workspaceReducer } from './reducer';
 
 /** Window event carrying a MeetingLevelEvent (live recording loudness). */
 export const MEETING_LEVEL_EVENT = 'atelier:meeting-level';
+/** Window event carrying a MeetingMeterEvent (the Settings level meter). */
+export const MEETING_METER_EVENT = 'atelier:meeting-meter';
 
 export function useWorkspace() {
   const [state, dispatch] = useReducer(workspaceReducer, INITIAL_WORKSPACE_STATE);
@@ -181,6 +183,10 @@ export function useWorkspace() {
             // Several times a second: handed straight to the recorder's waveform, so the rest of
             // the app does not re-render on every update.
             window.dispatchEvent(new CustomEvent(MEETING_LEVEL_EVENT, { detail: parsed.payload }));
+            return;
+          }
+          if (parsed.type === 'meeting-meter') {
+            window.dispatchEvent(new CustomEvent(MEETING_METER_EVENT, { detail: parsed.payload }));
             return;
           }
           if (parsed.type === 'meeting-removed') {

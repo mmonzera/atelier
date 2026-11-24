@@ -9,19 +9,23 @@ import {
   NotebookPen,
   Pencil,
   Play,
+  RefreshCw,
   Search,
   Settings as SettingsIcon,
   Trash2,
+  Users,
   X,
 } from 'lucide-react';
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { meetingsApi } from '../api';
 import { Markdown } from '../components/Markdown';
+import { SpeakerNamingDialog } from '../components/SpeakerNamingDialog';
 import { inputStyle, primaryBtnStyle, secondaryBtnStyle } from '../components/modals/ModalShell';
 import { toast } from '../components/Toast';
 import { useLang, useT } from '../i18n';
 import { buildMeetingNotice } from '../meetingNotice';
+import { formatTimestamp, speakerColor, speakerName } from '../speakerLabels';
 
 type TFn = ReturnType<typeof useT>;
 
@@ -80,6 +84,8 @@ function statusMeta(t: TFn, m: MeetingSession): { label: string; color: string }
       return { label: t('Recording'), color: 'var(--agent-red)' };
     case 'transcribing':
       return { label: t('Transcribing {pct}%', { pct: m.transcribeProgress }), color: 'var(--agent-blue)' };
+    case 'identifying':
+      return { label: t('Finding the speakers…'), color: 'var(--agent-blue)' };
     case 'summarizing':
       return { label: t('Writing notes…'), color: 'var(--agent-blue)' };
     case 'pending':
@@ -107,8 +113,15 @@ export function meetingToMarkdown(m: MeetingSession, t: TFn, lang: 'en' | 'id'):
   const parts = [`# ${m.title}`, '', `${formatDate(m.createdAt, lang)} · ${m.modelId}`, ''];
   parts.push(`## ${t('Notes')}`, '', m.summary?.trim() || t('No notes yet.'), '');
   parts.push(`## ${t('Transcript')}`, '');
-  const text = m.transcript.map((s) => s.text.trim()).filter(Boolean);
-  parts.push(text.length ? text.join('\n\n') : t('No transcript yet.'), '');
+  const names = new Map(m.speakers.map((sp) => [sp.id, speakerName(t, sp)]));
+  const rows = m.transcript
+    .filter((s) => s.text.trim())
+    .map((s) => {
+      const when = s.startMs !== null ? `[${formatTimestamp(s.startMs)}] ` : '';
+      const who = s.speakerId ? `${names.get(s.speakerId) ?? s.speakerId}: ` : '';
+      return when || who ? `**${when}${who}**`.replace(/ \*\*$/, '**') + ` ${s.text.trim()}` : s.text.trim();
+    });
+  parts.push(rows.length ? rows.join('\n\n') : t('No transcript yet.'), '');
   return parts.join('\n');
 }
 
@@ -120,6 +133,7 @@ export function MeetingsView({
   settings,
   activeMeeting,
   selectedId,
+  naming,
   onSelect,
   onBack,
   onOpenSettings,
@@ -127,6 +141,8 @@ export function MeetingsView({
   settings: Settings;
   activeMeeting: MeetingStatusEvent | null;
   selectedId: string | null;
+  /** Open the speaker naming dialog right away. */
+  naming?: boolean;
   onSelect: (meetingId: string | null) => void;
   onBack: () => void;
   onOpenSettings: () => void;
@@ -204,6 +220,7 @@ export function MeetingsView({
             {selected ? (
               <MeetingDetail
                 meeting={selected}
+                openNaming={Boolean(naming)}
                 onChanged={load}
                 onDeleted={() => {
                   onSelect(null);
@@ -439,15 +456,19 @@ function EmptyState({ captureAvailable, onOpenSettings }: { captureAvailable: bo
 
 function MeetingDetail({
   meeting,
+  openNaming,
   onChanged,
   onDeleted,
 }: {
   meeting: MeetingSession;
+  openNaming: boolean;
   onChanged: () => Promise<void> | void;
   onDeleted: () => void;
 }) {
   const t = useT();
   const lang = useLang();
+  const [namingOpen, setNamingOpen] = useState(openNaming && meeting.speakers.length > 0);
+  const [rewriting, setRewriting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(meeting.title);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -508,6 +529,19 @@ function MeetingDetail({
       toast.error(err instanceof Error ? err.message : t('Failed to delete meeting'));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const rewriteNotes = async () => {
+    setRewriting(true);
+    try {
+      await meetingsApi.regenerateNotes(meeting.id);
+      await onChanged();
+      toast.success(t('Notes written again'));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('Could not write the notes again'));
+    } finally {
+      setRewriting(false);
     }
   };
 
@@ -574,6 +608,24 @@ function MeetingDetail({
           <Download size={13} strokeWidth={1.6} />
           {t('Save as .md')}
         </button>
+        {meeting.status === 'completed' && (
+          <button
+            type="button"
+            disabled={rewriting}
+            onClick={() => void rewriteNotes()}
+            title={t('Uses the provider chosen in Settings → Meeting')}
+            style={{ ...secondaryBtnStyle, ...smallBtn }}
+          >
+            <RefreshCw size={13} strokeWidth={1.6} />
+            {rewriting ? t('Writing…') : t('Write notes again')}
+          </button>
+        )}
+        {meeting.speakers.length > 1 && meeting.status === 'completed' && !meeting.speakersPending && (
+          <button type="button" onClick={() => setNamingOpen(true)} style={{ ...secondaryBtnStyle, ...smallBtn }}>
+            <Users size={13} strokeWidth={1.6} />
+            {t('Name speakers')}
+          </button>
+        )}
         <span style={{ flex: 1 }} />
         {finished &&
           (confirmDelete ? (
@@ -636,6 +688,30 @@ function MeetingDetail({
         </div>
       )}
 
+      {meeting.speakersPending && meeting.status === 'completed' && (
+        <div
+          style={{
+            ...cardStyle,
+            borderColor: 'rgba(59, 141, 247, 0.4)',
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+          }}
+        >
+          <div style={{ fontSize: 12.5, lineHeight: '18px', color: 'var(--text-secondary)' }}>
+            {t('Atelier found {count} other voices. Name them and the notes will use their names.', {
+              count: meeting.speakers.filter((s) => !s.isMe).length,
+            })}
+          </div>
+          <button type="button" onClick={() => setNamingOpen(true)} style={{ ...primaryBtnStyle, ...smallBtn }}>
+            <Users size={13} strokeWidth={1.6} />
+            {t('Name speakers')}
+          </button>
+        </div>
+      )}
+
       {/* Notes */}
       <section style={cardStyle}>
         <div style={eyebrowStyle}>{t('Notes')}</div>
@@ -669,18 +745,77 @@ function MeetingDetail({
               : t('No speech was transcribed.')}
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {transcript.map((s) => (
-              <p
-                key={s.seq}
-                style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}
-              >
-                {s.text.trim()}
-              </p>
-            ))}
-          </div>
+          <TranscriptList meeting={meeting} sentences={transcript} follow={meeting.status === 'recording'} />
         )}
       </section>
+
+      {namingOpen && (
+        <SpeakerNamingDialog meeting={meeting} onClose={() => setNamingOpen(false)} onChanged={onChanged} />
+      )}
+    </div>
+  );
+}
+
+/** Time, speaker chip and sentence; the chip shows once per run of one speaker. Follows live text. */
+function TranscriptList({
+  meeting,
+  sentences,
+  follow,
+}: {
+  meeting: MeetingSession;
+  sentences: MeetingSession['transcript'];
+  follow: boolean;
+}) {
+  const t = useT();
+  const end = useRef<HTMLDivElement | null>(null);
+  const names = useMemo(() => new Map(meeting.speakers.map((sp) => [sp.id, sp])), [meeting.speakers]);
+
+  // While recording, keep the newest sentence in view, unless the user scrolled up to read.
+  useEffect(() => {
+    if (!follow || !end.current) return;
+    const rect = end.current.getBoundingClientRect();
+    if (rect.top < window.innerHeight + 240) end.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [follow, sentences.length]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {sentences.map((s, i) => {
+        const sp = s.speakerId ? names.get(s.speakerId) : undefined;
+        const prev = sentences[i - 1];
+        const newRun = !prev || prev.speakerId !== s.speakerId;
+        return (
+          <div
+            key={`${s.seq}-${s.idx}`}
+            style={{ display: 'grid', gridTemplateColumns: '44px 1fr', gap: 10, paddingTop: newRun && i > 0 ? 8 : 0 }}
+          >
+            <span className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)', paddingTop: 3 }}>
+              {s.startMs !== null ? formatTimestamp(s.startMs) : ''}
+            </span>
+            <div style={{ minWidth: 0 }}>
+              {newRun && sp && (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: 11.5,
+                    fontWeight: 500,
+                    color: 'var(--text-primary)',
+                    marginBottom: 2,
+                  }}
+                >
+                  <span aria-hidden style={{ width: 7, height: 7, borderRadius: 9999, background: speakerColor(sp.color) }} />
+                  {speakerName(t, sp)}
+                </span>
+              )}
+              <p style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+                {s.text.trim()}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+      <div ref={end} />
     </div>
   );
 }
@@ -689,10 +824,12 @@ function MeetingDetail({
 export function MeetingReadyCard({
   meeting,
   onOpen,
+  onNameSpeakers,
   onDismiss,
 }: {
   meeting: MeetingSession;
   onOpen: () => void;
+  onNameSpeakers: () => void;
   onDismiss: () => void;
 }) {
   const t = useT();
@@ -745,7 +882,7 @@ export function MeetingReadyCard({
           <X size={14} strokeWidth={1.7} />
         </button>
       </div>
-      <div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button
           type="button"
           onClick={() => {
@@ -757,6 +894,19 @@ export function MeetingReadyCard({
           <FileText size={13} strokeWidth={1.6} />
           {t('Open notes')}
         </button>
+        {meeting.speakersPending && (
+          <button
+            type="button"
+            onClick={() => {
+              onDismiss();
+              onNameSpeakers();
+            }}
+            style={{ ...secondaryBtnStyle, ...smallBtn }}
+          >
+            <Users size={13} strokeWidth={1.6} />
+            {t('Name speakers')}
+          </button>
+        )}
       </div>
     </div>,
     document.body,
