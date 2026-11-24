@@ -33,9 +33,10 @@ import {
 import { ModelsProvidersPanel } from '../components/modals/ModelsModal';
 import { Select } from '../components/Select';
 import { toast } from '../components/Toast';
+import { BrowserSettingsPanel } from './BrowserSettingsPanel';
 import { SecurityBackupPanel } from './SecurityBackupPanel';
 
-export type SettingsTab = 'general' | 'providers' | 'security';
+export type SettingsTab = 'general' | 'providers' | 'browser' | 'security';
 
 export function SettingsView({
   settings,
@@ -65,6 +66,12 @@ export function SettingsView({
     String(initialCompact.keepRecentMessages),
   );
   const [maxContextTokens, setMaxContextTokens] = useState(String(initialCompact.maxContextTokens));
+  const [minCompactMessages, setMinCompactMessages] = useState(
+    String(initialCompact.minCompactMessages ?? DEFAULT_AUTO_COMPACT_SETTINGS.minCompactMessages ?? 10),
+  );
+  const [providerContextLimit, setProviderContextLimit] = useState(
+    String(initialCompact.providerContextLimit ?? DEFAULT_AUTO_COMPACT_SETTINGS.providerContextLimit ?? 100000),
+  );
   const [tailTokens, setTailTokens] = useState(String(initialCompact.tailTokens ?? 6000));
   const [summarizerModel, setSummarizerModel] = useState(initialCompact.summarizerModel ?? '');
   const [fallbackMode, setFallbackMode] = useState<FallbackMode>(settings.fallbackMode ?? 'ask');
@@ -125,6 +132,29 @@ export function SettingsView({
           Math.round(Number(maxContextTokens) || DEFAULT_AUTO_COMPACT_SETTINGS.maxContextTokens),
         ),
       );
+      const maxBatchUpper = Math.max(2, Math.min(50, parsedMaxMsgs - parsedKeep));
+      const parsedMinCompact = Math.min(
+        maxBatchUpper,
+        Math.max(
+          2,
+          Math.round(
+            Number(minCompactMessages) ||
+              DEFAULT_AUTO_COMPACT_SETTINGS.minCompactMessages ||
+              10,
+          ),
+        ),
+      );
+      const parsedProviderLimit = Math.min(
+        2_000_000,
+        Math.max(
+          8_000,
+          Math.round(
+            Number(providerContextLimit) ||
+              DEFAULT_AUTO_COMPACT_SETTINGS.providerContextLimit ||
+              100_000,
+          ),
+        ),
+      );
 
       await api.updateSettings({
         model: model.trim(),
@@ -134,6 +164,8 @@ export function SettingsView({
           maxMessages: parsedMaxMsgs,
           keepRecentMessages: parsedKeep,
           maxContextTokens: parsedTokens,
+          minCompactMessages: parsedMinCompact,
+          providerContextLimit: parsedProviderLimit,
           tailTokens: Math.min(6000, Math.max(1000, Math.round(Number(tailTokens) || 6000))),
           summarizerModel: summarizerModel.trim(),
         },
@@ -192,6 +224,7 @@ export function SettingsView({
             [
               { id: 'general' as SettingsTab, label: t('General') },
               { id: 'providers' as SettingsTab, label: t('Models & Providers') },
+              { id: 'browser' as SettingsTab, label: t('Browser & Login') },
               { id: 'security' as SettingsTab, label: t('Security & Backup') },
             ]
           ).map((item) => {
@@ -220,6 +253,8 @@ export function SettingsView({
 
         {activeTab === 'security' ? (
           <SecurityBackupPanel />
+        ) : activeTab === 'browser' ? (
+          <BrowserSettingsPanel settings={settings} />
         ) : activeTab === 'providers' ? (
           <ModelsProvidersPanel settings={settings} discoveredModels={discoveredModels} />
         ) : (
@@ -366,67 +401,106 @@ export function SettingsView({
             </div>
 
             {autoCompactEnabled && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, paddingLeft: 22 }}>
-                <div>
-                  <label style={labelStyle}>{t('Trigger msgs')}</label>
-                  <input
-                    type="number"
-                    min={4}
-                    max={200}
-                    value={maxMessages}
-                    onChange={(e) => setMaxMessages(e.target.value)}
-                    className="mono-num"
-                    style={inputStyle}
-                  />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingLeft: 22 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                  <div>
+                    <label style={labelStyle}>{t('Trigger msgs')}</label>
+                    <input
+                      type="number"
+                      min={4}
+                      max={200}
+                      value={maxMessages}
+                      onChange={(e) => setMaxMessages(e.target.value)}
+                      className="mono-num"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>{t('Keep recent')}</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={199}
+                      value={keepRecentMessages}
+                      onChange={(e) => setKeepRecentMessages(e.target.value)}
+                      className="mono-num"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="min-compact-messages" style={labelStyle}>{t('Min. messages per compaction')}</label>
+                    <input
+                      id="min-compact-messages"
+                      type="number"
+                      min={2}
+                      max={50}
+                      value={minCompactMessages}
+                      onChange={(e) => setMinCompactMessages(e.target.value)}
+                      className="mono-num"
+                      style={inputStyle}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label style={labelStyle}>{t('Keep recent')}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={199}
-                    value={keepRecentMessages}
-                    onChange={(e) => setKeepRecentMessages(e.target.value)}
-                    className="mono-num"
-                    style={inputStyle}
-                  />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div>
+                    <label style={labelStyle}>{t('Conversation limit')}</label>
+                    <input
+                      type="number"
+                      min={4000}
+                      max={500000}
+                      step={1000}
+                      value={maxContextTokens}
+                      onChange={(e) => setMaxContextTokens(e.target.value)}
+                      className="mono-num"
+                      style={inputStyle}
+                    />
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                      {t('Estimated chat content tokens (excluding system prompt & tools)')}
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="provider-context-limit" style={labelStyle}>{t('Provider context limit')}</label>
+                    <input
+                      id="provider-context-limit"
+                      type="number"
+                      min={8000}
+                      max={2000000}
+                      step={5000}
+                      value={providerContextLimit}
+                      onChange={(e) => setProviderContextLimit(e.target.value)}
+                      className="mono-num"
+                      style={inputStyle}
+                    />
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                      {t('Safeguard. Compacts & resets session if provider prompt exceeds this')}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label style={labelStyle}>{t('Context limit')}</label>
-                  <input
-                    type="number"
-                    min={4000}
-                    max={500000}
-                    step={1000}
-                    value={maxContextTokens}
-                    onChange={(e) => setMaxContextTokens(e.target.value)}
-                    className="mono-num"
-                    style={inputStyle}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="memory-tail-tokens" style={labelStyle}>{t('History tail tokens')}</label>
-                  <input
-                    id="memory-tail-tokens"
-                    type="number"
-                    min={1000}
-                    max={6000}
-                    step={500}
-                    value={tailTokens}
-                    onChange={(e) => setTailTokens(e.target.value)}
-                    style={inputStyle}
-                  />
-                </div>
-                <div style={{ gridColumn: 'span 2' }}>
-                  <label htmlFor="memory-model" style={labelStyle}>{t('Summarizer model')}</label>
-                  <input
-                    id="memory-model"
-                    value={summarizerModel}
-                    placeholder={t('Automatic for provider')}
-                    maxLength={120}
-                    onChange={(e) => setSummarizerModel(e.target.value)}
-                    style={inputStyle}
-                  />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 8 }}>
+                  <div>
+                    <label htmlFor="memory-tail-tokens" style={labelStyle}>{t('History tail tokens')}</label>
+                    <input
+                      id="memory-tail-tokens"
+                      type="number"
+                      min={1000}
+                      max={6000}
+                      step={500}
+                      value={tailTokens}
+                      onChange={(e) => setTailTokens(e.target.value)}
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="memory-model" style={labelStyle}>{t('Summarizer model')}</label>
+                    <input
+                      id="memory-model"
+                      value={summarizerModel}
+                      placeholder={t('Automatic for provider')}
+                      maxLength={120}
+                      onChange={(e) => setSummarizerModel(e.target.value)}
+                      style={inputStyle}
+                    />
+                  </div>
                 </div>
               </div>
             )}

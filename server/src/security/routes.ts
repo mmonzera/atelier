@@ -66,8 +66,9 @@ export function createSecurityRoutes(deps: {
   vault: LocalVault;
   backup: BackupService;
   bus: EventBus;
+  onLock?: () => void;
 }): Hono {
-  const { vault, backup, bus } = deps;
+  const { vault, backup, bus, onLock } = deps;
   const api = new Hono();
   const token = (c: Context) => getCookie(c, SESSION_COOKIE) ?? null;
   const password = z.string().min(1).max(256);
@@ -120,6 +121,7 @@ export function createSecurityRoutes(deps: {
       const out = await vault.enable(parsed.data.password, parsed.data.idleMinutes);
       // Every other open tab/window must now authenticate.
       bus.disconnectAll();
+      onLock?.();
       setSessionCookie(c, out.token);
       return c.json({ ok: true, recoveryKey: out.recoveryKey });
     } catch (err) {
@@ -177,6 +179,7 @@ export function createSecurityRoutes(deps: {
 
   api.post('/auth/lock-now', (c) => {
     vault.lockNow();
+    onLock?.();
     deleteCookie(c, SESSION_COOKIE, { path: '/' });
     return c.json({ ok: true });
   });

@@ -4,6 +4,10 @@ import {
   parseMessageSegments,
   type Activity,
   type Agent,
+  type BrowserApprovalRequest,
+  type BrowserScreenshotSummary,
+  type BrowserSessionInfo,
+  type BrowserTakeoverEvent,
   type Message,
   type ModelEntry,
   type ModelProvider,
@@ -18,17 +22,21 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Globe,
+  Hand,
   LayoutGrid,
   Minimize2,
   RefreshCw,
   Reply,
   RotateCcw,
+  ShieldAlert,
   SlidersHorizontal,
   Sparkles,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { shownModels } from '../state/models';
-import { api } from '../api';
+import { api, browserApi } from '../api';
 import {
   DotMatrixGrid,
   FormattedText,
@@ -62,6 +70,10 @@ interface ChatViewProps {
   onCreateTaskFromReply?: (description: string) => void;
   onOpenTask: (task: Task) => void;
   onOpenEditAgent: () => void;
+  browserApprovals?: BrowserApprovalRequest[];
+  browserTakeovers?: Record<string, BrowserTakeoverEvent>;
+  browserSessions?: BrowserSessionInfo[];
+  onOpenBrowserTab?: () => void;
 }
 
 function formatDuration(ms: number | null): string {
@@ -107,6 +119,10 @@ export function ChatView({
   onCreateTaskFromReply,
   onOpenTask,
   onOpenEditAgent,
+  browserApprovals = [],
+  browserTakeovers = {},
+  browserSessions = [],
+  onOpenBrowserTab,
 }: ChatViewProps) {
   const tr = useT();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -116,6 +132,8 @@ export function ChatView({
   const [activeTickId, setActiveTickId] = useState<string | null>(null);
   const [pickedFallback, setPickedFallback] = useState('');
   const [makeDefaultOnRetry, setMakeDefaultOnRetry] = useState(false);
+  const [enlargedShot, setEnlargedShot] = useState<BrowserScreenshotSummary | null>(null);
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
 
   const allModels = useMemo(() => {
     const merged: ModelEntry[] = [];
@@ -748,6 +766,68 @@ export function ChatView({
                     );
                   })}
 
+                {msg.metadata?.browserScreenshots && msg.metadata.browserScreenshots.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                    {msg.metadata.browserScreenshots.map((shot) => (
+                      <button
+                        key={shot.artifactId}
+                        type="button"
+                        onClick={() => setEnlargedShot(shot)}
+                        style={{
+                          width: 210,
+                          borderRadius: 12,
+                          overflow: 'hidden',
+                          background: 'var(--surface-2)',
+                          border: '1px solid var(--border-subtle)',
+                          textAlign: 'left',
+                          display: 'flex',
+                          flexDirection: 'column',
+                        }}
+                      >
+                        <img
+                          src={shot.url}
+                          alt={shot.label}
+                          style={{
+                            width: '100%',
+                            height: 126,
+                            objectFit: 'cover',
+                            display: 'block',
+                            background: '#0a0a0e',
+                          }}
+                        />
+                        <div style={{ padding: '7px 10px' }}>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 500,
+                              color: 'var(--text-primary)',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                          >
+                            {shot.label}
+                          </div>
+                          {shot.pageUrl && (
+                            <div
+                              className="mono-num"
+                              style={{
+                                fontSize: 10.5,
+                                color: 'var(--text-muted)',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                              }}
+                            >
+                              {shot.pageUrl}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {msg.metadata?.cancelled && (
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{tr('Stopped by user.')}
                   </div>
@@ -868,6 +948,171 @@ export function ChatView({
             );
           })
         )}
+
+        {browserApprovals
+          .filter((req) => req.agentId === agent.id)
+          .map((req) => (
+            <div
+              key={req.id}
+              className="msg-enter"
+              style={{
+                padding: '13px 15px',
+                borderRadius: 'var(--radius-md)',
+                background: 'rgba(244, 188, 46, 0.08)',
+                border: '1px solid rgba(244, 188, 46, 0.3)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                fontSize: 12.5,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
+                  <ShieldAlert size={16} style={{ color: 'var(--agent-amber)', flexShrink: 0, marginTop: 1 }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                      {tr('Confirm browser action')}
+                    </div>
+                    <div style={{ color: 'var(--text-secondary)', marginTop: 2 }}>{req.action}</div>
+                    <div className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, wordBreak: 'break-all' }}>
+                      {req.url}
+                    </div>
+                  </div>
+                </div>
+                {req.screenshotUrl && (
+                  <img
+                    src={req.screenshotUrl}
+                    alt={req.action}
+                    style={{
+                      width: 120,
+                      height: 75,
+                      objectFit: 'cover',
+                      borderRadius: 6,
+                      border: '1px solid var(--border-subtle)',
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  disabled={resolvingApprovalId === req.id}
+                  onClick={async () => {
+                    setResolvingApprovalId(req.id);
+                    try {
+                      await browserApi.resolveApproval(req.id, true);
+                    } finally {
+                      setResolvingApprovalId(null);
+                    }
+                  }}
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--agent-green)',
+                    color: '#0d0d11',
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  {tr('Allow')}
+                </button>
+                <button
+                  type="button"
+                  disabled={resolvingApprovalId === req.id}
+                  onClick={async () => {
+                    setResolvingApprovalId(req.id);
+                    try {
+                      await browserApi.resolveApproval(req.id, false);
+                    } finally {
+                      setResolvingApprovalId(null);
+                    }
+                  }}
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border-default)',
+                    color: 'var(--agent-red)',
+                    fontSize: 12,
+                  }}
+                >
+                  {tr('Deny')}
+                </button>
+              </div>
+            </div>
+          ))}
+
+        {browserSessions
+          .filter((s) => s.agentId === agent.id && s.status === 'takeover')
+          .map((s) => {
+            const reason = browserTakeovers[s.id]?.reason || s.takeoverReason || tr('Manual verification requested');
+            return (
+              <div
+                key={`takeover-${s.id}`}
+                className="msg-enter"
+                style={{
+                  padding: '13px 15px',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'rgba(56, 189, 248, 0.08)',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  fontSize: 12.5,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <Hand size={16} style={{ color: '#38bdf8', flexShrink: 0, marginTop: 1 }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                      {tr('Browser needs your help')}
+                    </div>
+                    <div style={{ color: 'var(--text-secondary)', marginTop: 2 }}>{reason}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => void browserApi.releaseSession(s.id)}
+                    style={{
+                      height: 28,
+                      padding: '0 12px',
+                      borderRadius: 'var(--radius-full)',
+                      background: 'var(--agent-green)',
+                      color: '#0d0d11',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {tr('Done, resume agent')}
+                  </button>
+                  {onOpenBrowserTab && (
+                    <button
+                      type="button"
+                      onClick={onOpenBrowserTab}
+                      style={{
+                        height: 28,
+                        padding: '0 12px',
+                        borderRadius: 'var(--radius-full)',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--border-default)',
+                        color: 'var(--text-primary)',
+                        fontSize: 12,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                      }}
+                    >
+                      <Globe size={12} /> {tr('Open Browser tab')}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
 
         {agent.status === 'error' && agent.lastError && (
           agent.pendingFallback ? (
@@ -1090,6 +1335,72 @@ export function ChatView({
           )
         )}
       </div>
+
+      {enlargedShot && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setEnlargedShot(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 80,
+            background: 'rgba(0,0,0,0.78)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '92vw',
+              maxHeight: '90vh',
+              background: 'var(--surface-1)',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border-default)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '10px 14px',
+                borderBottom: '1px solid var(--border-subtle)',
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>
+                  {enlargedShot.label}
+                </div>
+                {enlargedShot.pageUrl && (
+                  <div className="mono-num" style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                    {enlargedShot.pageUrl}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setEnlargedShot(null)}
+                style={{ color: 'var(--text-secondary)', padding: 4 }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <img
+              src={enlargedShot.url}
+              alt={enlargedShot.label}
+              style={{ maxWidth: '88vw', maxHeight: '80vh', objectFit: 'contain', display: 'block' }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

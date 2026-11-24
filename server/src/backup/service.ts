@@ -12,6 +12,14 @@ import type {
 } from '@atelier/contracts';
 import type { AppConfig } from '../config.js';
 import type { AtelierDb } from '../db.js';
+import {
+  decryptWithKey,
+  encryptWithKey,
+  openBuffer,
+  openString,
+  sealBuffer,
+  sealString,
+} from '../security/machine-key.js';
 import type { AtelierStore } from '../store.js';
 import {
   BACKUP_EXTENSION,
@@ -24,8 +32,13 @@ import {
 /** Tables that describe *this machine* (lock password, auto-backup target): never exported/imported. */
 const MACHINE_LOCAL_TABLES = new Set(['app_lock', 'backup_config']);
 /** Tables holding credentials: stripped unless the user opts in to an encrypted export. */
-const SECRET_TABLES = ['provider_secrets', 'mcp_oauth'];
+const SECRET_TABLES = ['provider_secrets', 'mcp_oauth', 'site_credentials'];
+const BACKUP_REKEY_PREFIX = Buffer.from('BK01', 'ascii');
 const SECRET_FIELD_RE = /auth|token|secret|password|passwd|key|cookie|bearer|credential/i;
+
+function deriveBackupSecretKey(passphrase: string): Buffer {
+  return crypto.scryptSync(passphrase.normalize('NFKC'), 'atelier-site-credentials-v1', 32);
+}
 
 const APP_VERSION = process.env.ATELIER_APP_VERSION || '0.1.0';
 const MIN_INTERVAL_HOURS = 1;
@@ -97,7 +110,6 @@ function scrubSecretValues(record: unknown): Record<string, string> | unknown {
 
 export class BackupService {
   private readonly tmpDir: string;
-  private readonly machineKeyPath: string;
   private timer: NodeJS.Timeout | null = null;
   private running: Promise<unknown> | null = null;
 
@@ -108,7 +120,6 @@ export class BackupService {
     private readonly hooks: { beforeImport?: () => Promise<void> } = {},
   ) {
     this.tmpDir = path.join(config.dataDir, 'tmp');
-    this.machineKeyPath = path.join(config.dataDir, '.atelier-machine.key');
   }
 
   // ------------------------------------------------------------------ snapshot
@@ -118,7 +129,10 @@ export class BackupService {
    * the WAL file is never copied by hand), then scrubbed and vacuumed again so deleted secrets
    * do not survive in free pages.
    */
-  public createSnapshotBytes(opts: { includeSecrets: boolean }): { bytes: Buffer; manifest: BackupManifest } {
+  public createSnapshotBytes(opts: { includeSecrets: boolean; rekeyPassphrase?: string }): {
+    bytes: Buffer;
+    manifest: BackupManifest;
+  } {
     fs.mkdirSync(this.tmpDir, { recursive: true });
     const tmp = path.join(this.tmpDir, `snapshot-${crypto.randomUUID()}.db`);
     try {
@@ -139,6 +153,23 @@ export class BackupService {
                 env: scrubSecretValues(s.env),
               }));
               snap.prepare(`UPDATE settings SET data = ? WHERE id = 1`).run(JSON.stringify(settings));
+            }
+          }
+        } else if (opts.rekeyPassphrase) {
+          const credRows = snap
+            .prepare(`SELECT id, secret FROM site_credentials`)
+            .all() as Array<{ id: string; secret: Uint8Array }>;
+          if (credRows.length > 0) {
+            const rekey = deriveBackupSecretKey(opts.rekeyPassphrase);
+            const updateStmt = snap.prepare(`UPDATE site_credentials SET secret = ? WHERE id = ?`);
+            for (const row of credRows) {
+              const raw = Buffer.from(row.secret);
+              if (raw.length === 0) continue;
+              const plain = openBuffer(this.config.dataDir, raw);
+              if (plain) {
+                const sealedForBackup = Buffer.concat([BACKUP_REKEY_PREFIX, encryptWithKey(rekey, plain)]);
+                updateStmt.run(sealedForBackup, row.id);
+              }
             }
           }
         }
@@ -195,7 +226,10 @@ export class BackupService {
         'API key & token OAuth hanya bisa ikut di-backup kalau file dienkripsi passphrase.',
       );
     }
-    const { bytes, manifest } = this.createSnapshotBytes({ includeSecrets: Boolean(opts.includeSecrets && passphrase) });
+    const { bytes, manifest } = this.createSnapshotBytes({
+      includeSecrets: Boolean(opts.includeSecrets && passphrase),
+      rekeyPassphrase: passphrase ?? undefined,
+    });
     return {
       filename: `atelier-${hostSlug()}-${stamp()}${BACKUP_EXTENSION}`,
       bytes: encodeBackup({ manifest, dbBytes: bytes, passphrase }),
@@ -235,6 +269,9 @@ export class BackupService {
       const safetyCopy = this.writeSafetyCopy();
       await this.hooks.beforeImport?.();
       this.replaceContentsFrom(tmp, { keepLocalSecrets: !manifest.includesSecrets });
+      if (manifest.includesSecrets) {
+        this.rekeyImportedSiteCredentials(passphrase);
+      }
       for (const scope of [null, ...this.store.listProjects().map((project) => project.id)]) {
         for (const artifact of this.store.listArtifacts(scope)) {
           try {
@@ -351,36 +388,55 @@ export class BackupService {
     return out;
   }
 
-  // ------------------------------------------------------------------ machine key
+  // ------------------------------------------------------------------ machine key helpers
 
-  private machineKey(): Buffer {
-    if (fs.existsSync(this.machineKeyPath)) {
-      const key = Buffer.from(fs.readFileSync(this.machineKeyPath, 'utf8').trim(), 'base64');
-      if (key.length === 32) return key;
+  private rekeyImportedSiteCredentials(passphrase: string | null): void {
+    const rows = this.db.sqlite
+      .prepare(`SELECT id, data, secret FROM site_credentials`)
+      .all() as Array<{ id: string; data: string; secret: Uint8Array }>;
+    if (rows.length === 0) return;
+
+    const rekey = passphrase ? deriveBackupSecretKey(passphrase) : null;
+    const updateStmt = this.db.sqlite.prepare(`UPDATE site_credentials SET data = ?, secret = ? WHERE id = ?`);
+
+    for (const row of rows) {
+      const raw = Buffer.from(row.secret);
+      let plain: Buffer | null = null;
+      if (raw.length > 0) {
+        if (raw.subarray(0, 4).equals(BACKUP_REKEY_PREFIX)) {
+          if (rekey) {
+            plain = decryptWithKey(rekey, raw.subarray(4));
+          }
+        } else {
+          plain = openBuffer(this.config.dataDir, raw);
+        }
+      }
+
+      if (plain) {
+        updateStmt.run(row.data, sealBuffer(this.config.dataDir, plain), row.id);
+      } else {
+        let parsed: Record<string, unknown> = {};
+        try {
+          parsed = JSON.parse(row.data) as Record<string, unknown>;
+        } catch {
+          parsed = {};
+        }
+        parsed.lastLogin = {
+          at: new Date().toISOString(),
+          status: 'error',
+          message: 'Isi ulang password (dipindahkan dari perangkat lain).',
+        };
+        updateStmt.run(JSON.stringify(parsed), Buffer.alloc(0), row.id);
+      }
     }
-    const key = crypto.randomBytes(32);
-    fs.mkdirSync(path.dirname(this.machineKeyPath), { recursive: true });
-    fs.writeFileSync(this.machineKeyPath, key.toString('base64'), { mode: 0o600 });
-    return key;
   }
 
   private sealLocal(plain: string): string {
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', this.machineKey(), iv);
-    const ct = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
-    return [iv, cipher.getAuthTag(), ct].map((b) => b.toString('base64')).join('.');
+    return sealString(this.config.dataDir, plain);
   }
 
   private openLocal(sealed: string | null): string | null {
-    if (!sealed) return null;
-    try {
-      const [iv, tag, ct] = sealed.split('.').map((s) => Buffer.from(s, 'base64'));
-      const decipher = crypto.createDecipheriv('aes-256-gcm', this.machineKey(), iv!);
-      decipher.setAuthTag(tag!);
-      return Buffer.concat([decipher.update(ct!), decipher.final()]).toString('utf8');
-    } catch {
-      return null; // machine key changed (e.g. DB copied to another PC) -> needs re-entry
-    }
+    return openString(this.config.dataDir, sealed);
   }
 
   // ------------------------------------------------------------------ auto-backup config
@@ -496,7 +552,10 @@ export class BackupService {
       const seq = this.currentSeq();
       try {
         fs.mkdirSync(cfg.folder, { recursive: true });
-        const { manifest, bytes } = this.createSnapshotBytes({ includeSecrets: cfg.includeSecrets });
+        const { manifest, bytes } = this.createSnapshotBytes({
+          includeSecrets: cfg.includeSecrets,
+          rekeyPassphrase: cfg.includeSecrets ? passphrase : undefined,
+        });
         const file = encodeBackup({ manifest, dbBytes: bytes, passphrase });
         const prefix = `atelier-auto-${hostSlug()}-`;
         const name = `${prefix}${stamp()}${BACKUP_EXTENSION}`;

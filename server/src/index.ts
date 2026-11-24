@@ -9,6 +9,10 @@ import { AgentRuntime } from './agents/runtime.js';
 import type { AgentRunner } from './agents/runner.js';
 import type { EnqueueTaskFn } from './agents/studio-tools.js';
 import { EventBus } from './bus.js';
+import { CredentialStore } from './browser/credentials.js';
+import { BrowserManager } from './browser/manager.js';
+import { createBrowserMcpRouter } from './browser/mcp-endpoint.js';
+import { createBrowserRoutes } from './browser/routes.js';
 import { type AppConfig, loadConfig } from './config.js';
 import { AtelierDb } from './db.js';
 import { createHttpRouter } from './http.js';
@@ -25,6 +29,8 @@ export interface AtelierServerHandle {
   runtime: AgentRuntime;
   vault: LocalVault;
   backup: BackupService;
+  browserManager: BrowserManager;
+  credentials: CredentialStore;
   server: Server;
   port: number;
   close: () => Promise<void>;
@@ -53,7 +59,21 @@ export async function startAtelierServer(opts?: {
   const bus = new EventBus(() => store.getSnapshot(), config.port);
   store.attachBus(bus);
 
-  const runtime = new AgentRuntime(store, config, opts?.customRunner, opts?.customRunnerFactory);
+  const credentials = new CredentialStore(db, config.dataDir);
+  const browserManager = new BrowserManager({ db, store, bus, config, credentials });
+  store.setSnapshotAugmenter((base) => ({
+    ...base,
+    browserSessions: browserManager.listSessions(),
+    browserApprovals: browserManager.listApprovals(),
+  }));
+
+  const runtime = new AgentRuntime(
+    store,
+    config,
+    opts?.customRunner,
+    opts?.customRunnerFactory,
+    browserManager,
+  );
   const authManager = new ProviderAuthManager();
 
   const vault = new LocalVault(db);
@@ -69,7 +89,10 @@ export async function startAtelierServer(opts?: {
       return token && vault.isAuthorized(token) ? token : false;
     },
   });
-  vault.onRevoke((token) => bus.revokeSessions(token));
+  vault.onRevoke((token) => {
+    bus.revokeSessions(token);
+    void browserManager.stopAllWatches();
+  });
 
   const app = new Hono();
   app.route(
@@ -80,9 +103,16 @@ export async function startAtelierServer(opts?: {
       config,
       authManager,
       vault,
-      securityRoutes: createSecurityRoutes({ vault, backup, bus }),
+      securityRoutes: createSecurityRoutes({
+        vault,
+        backup,
+        bus,
+        onLock: () => void browserManager.stopAllWatches(),
+      }),
+      browserRoutes: createBrowserRoutes({ browserManager, credentials }),
     }),
   );
+  app.route('/mcp/browser', createBrowserMcpRouter({ browserManager, config }));
 
   const currentDir = path.dirname(fileURLToPath(import.meta.url));
   // The desktop shell bundles the server into one file, so it passes the web build location explicitly.
@@ -148,11 +178,14 @@ export async function startAtelierServer(opts?: {
     runtime,
     vault,
     backup,
+    browserManager,
+    credentials,
     server,
     port: actualPort,
     close: async () => {
       authManager.shutdown();
       await runtime.shutdown();
+      await browserManager.shutdown();
       // "Backup on close": snapshot via VACUUM INTO before the DB handle goes away.
       await backup.runOnClose();
       vault.shutdown();

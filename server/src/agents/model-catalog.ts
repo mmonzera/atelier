@@ -26,7 +26,11 @@ function builtIn(provider: RealProvider): ModelEntry[] {
 
 /** Built-in entries win (they carry the nicer labels); the rest follow, sorted by label. */
 function mergeCatalog(provider: RealProvider, extra: ModelEntry[]): ModelEntry[] {
-  const base = builtIn(provider);
+  const byIdExtra = new Map(extra.map((m) => [m.id, m]));
+  const base = builtIn(provider).map((m) => {
+    const match = byIdExtra.get(m.id);
+    return match && match.supportsTools !== undefined ? { ...m, supportsTools: match.supportsTools } : m;
+  });
   const seen = new Set(base.map((m) => m.id));
   const rest = extra
     .filter((m) => MODEL_ID_RE.test(m.id) && !seen.has(m.id))
@@ -40,14 +44,20 @@ async function fetchOpenRouter(config: AppConfig): Promise<ModelEntry[]> {
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) throw new Error(`OpenRouter answered ${res.status}`);
-  const body = (await res.json()) as { data?: Array<{ id?: unknown; name?: unknown }> };
+  const body = (await res.json()) as {
+    data?: Array<{ id?: unknown; name?: unknown; supported_parameters?: unknown }>;
+  };
   const out: ModelEntry[] = [];
   for (const item of body.data ?? []) {
     if (typeof item.id !== 'string') continue;
+    const params = Array.isArray(item.supported_parameters)
+      ? item.supported_parameters.filter((p): p is string => typeof p === 'string')
+      : null;
     out.push({
       id: item.id,
       label: typeof item.name === 'string' && item.name ? item.name : item.id,
       provider: 'openrouter',
+      ...(params ? { supportsTools: params.includes('tools') } : {}),
     });
   }
   return out;

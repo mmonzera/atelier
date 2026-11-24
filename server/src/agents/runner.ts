@@ -8,6 +8,7 @@ export interface Turn {
   attachments?: MessageAttachment[];
   resumeSessionId: string | null;
   currentMessageId?: string | null;
+  replyMessageId?: string | null;
   canonText?: string;
   canonChanged?: boolean;
   memoryOnly?: boolean;

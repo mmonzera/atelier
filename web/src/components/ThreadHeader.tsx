@@ -10,6 +10,7 @@ interface ThreadHeaderProps {
   activeAgent: Agent | null;
   activeTab: WorkspaceTab;
   agentTab: AgentViewTab;
+  hasActiveBrowserSession?: boolean;
   onChangeTab: (tab: WorkspaceTab) => void;
   onChangeAgentTab: (tab: AgentViewTab) => void;
   onEditAgent: () => void;
@@ -25,12 +26,14 @@ const PROJECT_TABS: Array<{ id: WorkspaceTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'preview', label: 'Preview' },
+  { id: 'browser', label: 'Browser' },
   { id: 'library', label: 'Library' },
 ];
 
 const AGENT_TABS: Array<{ id: AgentViewTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'reports', label: 'Reports' },
+  { id: 'browser', label: 'Browser' },
   { id: 'library', label: 'Library' },
 ];
 
@@ -40,6 +43,7 @@ export function ThreadHeader({
   activeAgent,
   activeTab,
   agentTab,
+  hasActiveBrowserSession = false,
   onChangeTab,
   onChangeAgentTab,
   onEditAgent,
@@ -157,9 +161,22 @@ export function ThreadHeader({
                         fontWeight: active ? 500 : 400,
                         color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
                         background: active ? 'var(--surface-2)' : 'transparent',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
                       }}
                     >
                       {t(tab.label)}
+                      {tab.id === 'browser' && hasActiveBrowserSession && (
+                        <span
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: '9999px',
+                            background: 'var(--agent-green)',
+                          }}
+                        />
+                      )}
                     </button>
                   );
                 })
@@ -178,9 +195,22 @@ export function ThreadHeader({
                         fontWeight: active ? 500 : 400,
                         color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
                         background: active ? 'var(--surface-2)' : 'transparent',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
                       }}
                     >
                       {t(tab.label)}
+                      {tab.id === 'browser' && hasActiveBrowserSession && (
+                        <span
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: '9999px',
+                            background: 'var(--agent-green)',
+                          }}
+                        />
+                      )}
                     </button>
                   );
                 })}

@@ -13,18 +13,21 @@ import type {
   Task,
 } from '@atelier/contracts';
 import { AttachmentStore } from '../attachments.js';
+import type { BrowserManager } from '../browser/manager.js';
 import type { AppConfig } from '../config.js';
 import type { AtelierStore } from '../store.js';
 import { CliAgentRunner } from './cli-runners.js';
 import {
   type CompactScopeResult,
+  type CompactTrigger,
+  autoCompactTrigger,
   compactAgentScope,
   estimateActiveContextTokens,
+  estimateConversationTokens,
   estimateTokens,
   getScopeKey,
   mergeModelMemory,
   renderStructuredMemory,
-  shouldAutoCompact,
 } from './compactor.js';
 import {
   type CooldownEntry,
@@ -46,19 +49,22 @@ export class AgentRuntime {
   private shuttingDown = false;
   private readonly runner: AgentRunner;
   private readonly attachmentStore: AttachmentStore;
+  private readonly browserManager?: BrowserManager;
 
   constructor(
     private readonly store: AtelierStore,
     config: AppConfig,
     customRunner?: AgentRunner,
     customRunnerFactory?: (deps: { store: AtelierStore; enqueue: EnqueueTaskFn }) => AgentRunner,
+    browserManager?: BrowserManager,
   ) {
+    this.browserManager = browserManager;
     this.attachmentStore = new AttachmentStore(config.dataDir);
     const getEnqueue = () => this.enqueue.bind(this);
     this.runner =
       customRunner ??
       customRunnerFactory?.({ store, enqueue: this.enqueue.bind(this) }) ??
-      new CliAgentRunner(store, config, getEnqueue);
+      new CliAgentRunner(store, config, getEnqueue, browserManager);
   }
 
   public dispatchTask(taskId: string): { task: Task; agent: Agent } {
@@ -308,10 +314,17 @@ export class AgentRuntime {
     return this.compactScope(agent, projectId, 'manual');
   }
 
-  private compactScope(agent: Agent, projectId: string | null, reason: 'manual' | 'auto', providerOverride?: ModelProvider): CompactScopeResult {
+  private compactScope(
+    agent: Agent,
+    projectId: string | null,
+    reason: 'manual' | 'auto',
+    providerOverride?: ModelProvider,
+    trigger?: CompactTrigger,
+  ): CompactScopeResult {
     const result = compactAgentScope(this.store, agent.id, projectId, {
       force: reason === 'manual',
       reason,
+      trigger,
     });
     const { compaction, summarizerInput } = result;
     if (!compaction?.structured || !summarizerInput || !this.runner.summarize) return result;
@@ -409,15 +422,20 @@ export class AgentRuntime {
     const scopeKey = getScopeKey(projectId);
     const settings = this.store.getSettings();
     const preMessages = this.store.listAgentMessages(agent.id, projectId);
-    if (
-      shouldAutoCompact(
-        preMessages,
-        agent.contextCompactions?.[scopeKey],
-        agent.scopeTokens?.[scopeKey],
-        settings.autoCompact,
-      )
-    ) {
-      const compactRes = this.compactScope(agent, projectId, 'auto', item.modelOverride?.provider);
+    const preTrigger = autoCompactTrigger(
+      preMessages,
+      agent.contextCompactions?.[scopeKey],
+      agent.scopeTokens?.[scopeKey],
+      settings.autoCompact,
+    );
+    if (preTrigger === 'provider_limit') {
+      const compactRes = this.compactScope(
+        agent,
+        projectId,
+        'auto',
+        item.modelOverride?.provider,
+        preTrigger,
+      );
       if (compactRes.agent) {
         agent = compactRes.agent;
       }
@@ -500,6 +518,7 @@ export class AgentRuntime {
           attachments: item.refId ? this.store.getMessage(item.refId)?.metadata?.attachments : undefined,
           resumeSessionId: initialResumeId,
           currentMessageId: item.kind === 'user' ? item.refId : null,
+          replyMessageId: replyMsg.id,
           canonText: canon.text,
           canonChanged,
           providerOverride: item.modelOverride?.provider,
@@ -511,16 +530,17 @@ export class AgentRuntime {
             this.store.appendMessageDelta(replyMsg.id, delta);
           },
           onTool: (name, input) => {
-            const detail =
+            const rawDetail =
               input && typeof input === 'object'
                 ? JSON.stringify(input).slice(0, 120)
                 : String(input ?? '');
+            const detail = this.browserManager ? this.browserManager.redact(rawDetail) : rawDetail;
             const act = this.store.addActivity({
               projectId,
               agentId: agent.id,
               messageId: replyMsg.id,
               kind: 'tool',
-              label: name,
+              label: this.browserManager ? this.browserManager.redact(name) : name,
               detail,
             });
             turnActivities.push({
@@ -591,6 +611,11 @@ export class AgentRuntime {
         ...(latestAgent.scopeTokens ?? {}),
         [scopeKey]: activeScopeTokens,
       };
+      const activeConversationTokens = estimateConversationTokens(postMessages, activeCompaction);
+      const nextConversationTokens = {
+        ...(latestAgent.conversationTokens ?? {}),
+        [scopeKey]: activeConversationTokens,
+      };
 
       this.store.updateAgent(agent.id, {
         status: 'idle',
@@ -599,6 +624,7 @@ export class AgentRuntime {
         sessions: nextSessions,
         sessionCanon,
         scopeTokens: nextScopeTokens,
+        conversationTokens: nextConversationTokens,
         lastError: null,
         pendingFallback: null,
         tokenUsage: {
@@ -625,15 +651,14 @@ export class AgentRuntime {
         console.debug('Atelier memory tokens', { scopeKey, agentId: agent.id, ...memoryTokens });
       }
 
-      if (
-        shouldAutoCompact(
-          postMessages,
-          activeCompaction,
-          activeScopeTokens,
-          afterSettings.autoCompact,
-        )
-      ) {
-        this.compactScope(latestAgent, projectId, 'auto', effectiveProvider);
+      const postTrigger = autoCompactTrigger(
+        postMessages,
+        activeCompaction,
+        activeScopeTokens,
+        afterSettings.autoCompact,
+      );
+      if (postTrigger) {
+        this.compactScope(latestAgent, projectId, 'auto', effectiveProvider, postTrigger);
       }
 
       if (item.replyToAgentId && finalText) {

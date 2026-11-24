@@ -290,6 +290,11 @@ export function ModelBrowser({
                   }}
                 >
                   {m.label}
+                  {m.supportsTools === false && (
+                    <span style={{ marginLeft: 8, fontSize: 10.5, color: 'var(--agent-amber)', fontWeight: 400 }}>
+                      {t('no tool calling')}
+                    </span>
+                  )}
                   {active && (
                     <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--agent-green)', fontWeight: 400 }}>{t('in use')}
                     </span>

@@ -15,8 +15,10 @@ import {
   type ActivityKind,
   type Agent,
   type AgentAvatarShape,
+  type AgentBrowserAccess,
   type AgentColor,
   type AutoCompactSettings,
+  type BrowserScreenshotSummary,
   type CreateAgentInput,
   type CreateTaskInput,
   type FallbackErrorKind,
@@ -38,6 +40,7 @@ import {
   type ServerEvent,
   type Settings,
   type SettingsInput,
+  type SitePreset,
   type Task,
   type ThreadCompaction,
   type UpdateAgentInput,
@@ -66,6 +69,7 @@ export function nowIso(): string {
 export class AtelierStore {
   private bus: EventBus | null = null;
   private transactionEvents?: ServerEvent[];
+  private snapshotAugmenter?: (base: WorkspaceState) => WorkspaceState;
 
   constructor(
     private readonly db: AtelierDb,
@@ -76,6 +80,10 @@ export class AtelierStore {
 
   public attachBus(bus: EventBus): void {
     this.bus = bus;
+  }
+
+  public setSnapshotAugmenter(fn: (base: WorkspaceState) => WorkspaceState): void {
+    this.snapshotAugmenter = fn;
   }
 
   private broadcast(event: ServerEvent): void {
@@ -186,6 +194,27 @@ export class AtelierStore {
       skills: Array.isArray(raw.skills) ? (raw.skills as Agent['skills']) : [],
       mcpServerIds: Array.isArray(raw.mcpServerIds) ? raw.mcpServerIds.map(String) : [],
       allowShell: typeof raw.allowShell === 'boolean' ? raw.allowShell : !isLegacyDesign,
+      ...(raw.browser && typeof raw.browser === 'object'
+        ? {
+            browser: {
+              enabled: Boolean((raw.browser as AgentBrowserAccess).enabled),
+              allowedHosts: Array.isArray((raw.browser as AgentBrowserAccess).allowedHosts)
+                ? (raw.browser as AgentBrowserAccess).allowedHosts.map(String)
+                : [],
+              credentialIds: Array.isArray((raw.browser as AgentBrowserAccess).credentialIds)
+                ? (raw.browser as AgentBrowserAccess).credentialIds.map(String)
+                : [],
+              confirmSensitive:
+                typeof (raw.browser as AgentBrowserAccess).confirmSensitive === 'boolean'
+                  ? (raw.browser as AgentBrowserAccess).confirmSensitive
+                  : true,
+              defaultProfileId:
+                typeof (raw.browser as AgentBrowserAccess).defaultProfileId === 'string'
+                  ? (raw.browser as AgentBrowserAccess).defaultProfileId
+                  : null,
+            },
+          }
+        : {}),
       providerOverride:
         raw.providerOverride === 'claude' ||
         raw.providerOverride === 'openai' ||
@@ -220,6 +249,10 @@ export class AtelierStore {
       scopeTokens:
         raw.scopeTokens && typeof raw.scopeTokens === 'object'
           ? (raw.scopeTokens as Record<string, number>)
+          : {},
+      conversationTokens:
+        raw.conversationTokens && typeof raw.conversationTokens === 'object'
+          ? (raw.conversationTokens as Record<string, number>)
           : {},
       lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
       tokenUsage: (raw.tokenUsage as Agent['tokenUsage']) ?? { input: 0, output: 0 },
@@ -316,7 +349,7 @@ export class AtelierStore {
           .all() as Array<{ data: string }>
       ).map((r) => JSON.parse(r.data) as T);
 
-    return {
+    const base: WorkspaceState = {
       projects,
       agents,
       messages: parseRows<Message>('messages'),
@@ -326,6 +359,7 @@ export class AtelierStore {
       ports: parseRows<PortEntry>('ports', 'port ASC'),
       settings: this.getSettings(),
     };
+    return this.snapshotAugmenter ? this.snapshotAugmenter(base) : base;
   }
 
   private migrateLegacyModel(provider: Settings['provider'], model?: string): string {
@@ -351,10 +385,33 @@ export class AtelierStore {
 
   private normalizeAutoCompact(raw?: Partial<AutoCompactSettings>): AutoCompactSettings {
     const base = DEFAULT_AUTO_COMPACT_SETTINGS;
-    if (raw && raw.settingsVersion !== 2 &&
-        raw.maxMessages === 20 && raw.keepRecentMessages === 6 && raw.maxContextTokens === 40000) {
-      raw = { ...raw, maxMessages: base.maxMessages, keepRecentMessages: base.keepRecentMessages,
-        maxContextTokens: base.maxContextTokens };
+    if (
+      raw &&
+      raw.settingsVersion !== 2 &&
+      raw.settingsVersion !== 3 &&
+      raw.maxMessages === 20 &&
+      raw.keepRecentMessages === 6 &&
+      raw.maxContextTokens === 40000
+    ) {
+      raw = {
+        ...raw,
+        maxMessages: base.maxMessages,
+        keepRecentMessages: base.keepRecentMessages,
+        maxContextTokens: base.maxContextTokens,
+      };
+    } else if (
+      raw &&
+      raw.settingsVersion !== 3 &&
+      raw.maxMessages === 60 &&
+      raw.keepRecentMessages === 14 &&
+      raw.maxContextTokens === 24000
+    ) {
+      raw = {
+        ...raw,
+        maxMessages: base.maxMessages,
+        keepRecentMessages: base.keepRecentMessages,
+        maxContextTokens: base.maxContextTokens,
+      };
     }
     const rawMaxMsgs = Number(raw?.maxMessages ?? base.maxMessages);
     const maxMessages = Number.isFinite(rawMaxMsgs)
@@ -368,16 +425,34 @@ export class AtelierStore {
     const maxContextTokens = Number.isFinite(rawTokens)
       ? Math.min(500_000, Math.max(4_000, Math.round(rawTokens)))
       : base.maxContextTokens;
+    const maxBatchUpper = Math.max(1, Math.min(50, maxMessages - keepRecentMessages));
+    const minBatchLower = Math.min(2, maxBatchUpper);
+    const rawMinBatch = Number(raw?.minCompactMessages ?? base.minCompactMessages ?? 10);
+    const minCompactMessages = Number.isFinite(rawMinBatch)
+      ? Math.min(maxBatchUpper, Math.max(minBatchLower, Math.round(rawMinBatch)))
+      : Math.min(maxBatchUpper, Math.max(minBatchLower, base.minCompactMessages ?? 10));
+    const rawProviderLimit = Number(
+      raw?.providerContextLimit ?? base.providerContextLimit ?? 100_000,
+    );
+    const providerContextLimit = Number.isFinite(rawProviderLimit)
+      ? Math.min(2_000_000, Math.max(8_000, Math.round(rawProviderLimit)))
+      : (base.providerContextLimit ?? 100_000);
     return {
       enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : base.enabled,
-      settingsVersion: 2,
+      settingsVersion: 3,
       ...(typeof raw?.tailTokens === 'number' && Number.isFinite(raw.tailTokens)
-        ? { tailTokens: Math.max(1000, Math.min(6000, Math.round(raw.tailTokens))) } : {}),
+        ? { tailTokens: Math.max(1000, Math.min(6000, Math.round(raw.tailTokens))) }
+        : typeof base.tailTokens === 'number'
+          ? { tailTokens: base.tailTokens }
+          : {}),
       ...(typeof raw?.summarizerModel === 'string' && /^[a-zA-Z0-9._:/-]+$/.test(raw.summarizerModel)
-        ? { summarizerModel: raw.summarizerModel } : {}),
+        ? { summarizerModel: raw.summarizerModel }
+        : {}),
       maxMessages,
       keepRecentMessages,
       maxContextTokens,
+      minCompactMessages,
+      providerContextLimit,
     };
   }
 
@@ -413,6 +488,7 @@ export class AtelierStore {
         parsed.usageLimits && typeof parsed.usageLimits === 'object' ? parsed.usageLimits : {},
       fallbackMode: parsed.fallbackMode === 'auto' ? 'auto' : 'ask',
       fallbackChain: Array.isArray(parsed.fallbackChain) ? parsed.fallbackChain : [],
+      sitePresets: Array.isArray(parsed.sitePresets) ? (parsed.sitePresets as SitePreset[]) : [],
     };
   }
 
@@ -454,6 +530,7 @@ export class AtelierStore {
           : (current.usageLimits ?? {}),
         fallbackMode: input.fallbackMode ?? current.fallbackMode ?? 'ask',
         fallbackChain: input.fallbackChain ?? current.fallbackChain ?? [],
+        sitePresets: input.sitePresets !== undefined ? input.sitePresets : (current.sitePresets ?? []),
       };
       this.db.sqlite
         .prepare(`UPDATE settings SET data = ? WHERE id = 1`)
@@ -728,6 +805,7 @@ export class AtelierStore {
       skills: input.skills ?? [],
       mcpServerIds: input.mcpServerIds ?? [],
       allowShell: input.allowShell ?? true,
+      ...(input.browser ? { browser: input.browser } : {}),
       providerOverride: input.providerOverride ?? null,
       modelOverride: input.modelOverride ?? null,
       fallbackChain: input.fallbackChain ?? [],
@@ -739,6 +817,7 @@ export class AtelierStore {
       sessions: {},
       contextCompactions: {},
       scopeTokens: {},
+      conversationTokens: {},
       lastError: null,
       tokenUsage: { input: 0, output: 0 },
       updatedAt: now,
@@ -998,6 +1077,11 @@ export class AtelierStore {
         mcpServerIds:
           patch.mcpServerIds !== undefined ? patch.mcpServerIds : existing.mcpServerIds,
         allowShell: patch.allowShell !== undefined ? patch.allowShell : existing.allowShell,
+        ...(patch.browser !== undefined
+          ? { browser: patch.browser }
+          : existing.browser !== undefined
+            ? { browser: existing.browser }
+            : {}),
         providerOverride:
           patch.providerOverride !== undefined ? patch.providerOverride : existing.providerOverride,
         modelOverride:
@@ -1075,6 +1159,7 @@ export class AtelierStore {
         | 'sessionCanon'
         | 'contextCompactions'
         | 'scopeTokens'
+        | 'conversationTokens'
         | 'lastError'
         | 'pendingFallback'
         | 'tokenUsage'
@@ -1098,6 +1183,10 @@ export class AtelierStore {
             ? patch.contextCompactions
             : existing.contextCompactions,
         scopeTokens: patch.scopeTokens !== undefined ? patch.scopeTokens : existing.scopeTokens,
+        conversationTokens:
+          patch.conversationTokens !== undefined
+            ? patch.conversationTokens
+            : existing.conversationTokens,
         lastError: patch.lastError !== undefined ? patch.lastError : existing.lastError,
         pendingFallback:
           patch.pendingFallback !== undefined
@@ -1516,7 +1605,39 @@ export class AtelierStore {
         text: nextText,
         streaming: patch.streaming,
         durationMs: patch.durationMs !== undefined ? patch.durationMs : current.durationMs,
-        metadata: patch.metadata !== undefined ? patch.metadata : current.metadata,
+        metadata:
+          patch.metadata !== undefined
+            ? {
+                ...(current.metadata?.browserScreenshots
+                  ? { browserScreenshots: current.metadata.browserScreenshots }
+                  : {}),
+                ...patch.metadata,
+              }
+            : current.metadata,
+      };
+      this.db.sqlite
+        .prepare(`UPDATE messages SET data = ? WHERE id = ?`)
+        .run(JSON.stringify(updated), messageId);
+      return [{ type: 'message-upserted', payload: updated }];
+    });
+    return updated;
+  }
+
+  public addMessageBrowserScreenshot(messageId: string, shot: BrowserScreenshotSummary): Message | null {
+    let updated: Message | null = null;
+    this.runTx(() => {
+      const row = this.db.sqlite.prepare(`SELECT data FROM messages WHERE id = ?`).get(messageId) as
+        | { data: string }
+        | undefined;
+      if (!row) return [];
+      const current = JSON.parse(row.data) as Message;
+      const prevShots = current.metadata?.browserScreenshots ?? [];
+      updated = {
+        ...current,
+        metadata: {
+          ...current.metadata,
+          browserScreenshots: [...prevShots, shot],
+        },
       };
       this.db.sqlite
         .prepare(`UPDATE messages SET data = ? WHERE id = ?`)

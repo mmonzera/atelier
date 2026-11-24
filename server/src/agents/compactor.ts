@@ -1,6 +1,7 @@
 import type {
   Agent,
   AutoCompactSettings,
+  CompactTrigger,
   Message,
   StructuredMemory,
   ThreadCompaction,
@@ -8,6 +9,8 @@ import type {
 import { summarizeDesignBlocks } from '@atelier/contracts';
 import { z } from 'zod';
 import type { AtelierStore } from '../store.js';
+
+export type { CompactTrigger } from '@atelier/contracts';
 
 const MAX_SUMMARY_CHARS = 8000;
 export const DEFAULT_TAIL_TOKENS = 6000;
@@ -121,16 +124,50 @@ export function formatUncompactedConversation(
   return tail ? `${tail}\n\nCURRENT MESSAGE: ${currentPrompt}` : currentPrompt;
 }
 
+/** Perkiraan token yang dikendalikan Atelier: ringkasan + pesan yang belum dipadatkan. */
+export function estimateConversationTokens(
+  messages: Message[],
+  compaction?: ThreadCompaction | null,
+): number {
+  const uncompacted = getUncompactedMessages(messages, compaction);
+  const picks = designPicks(messages);
+  return (
+    estimateTokens(compaction?.summary ?? '') +
+    uncompacted.reduce((acc, m) => acc + estimateTokens(archiveText(m, picks.get(m.id))), 0)
+  );
+}
+
 export function estimateActiveContextTokens(
   messages: Message[],
   compaction?: ThreadCompaction | null,
   reportedScopeTokens?: number,
 ): number {
+  return Math.max(estimateConversationTokens(messages, compaction), reportedScopeTokens ?? 0);
+}
+
+export function autoCompactTrigger(
+  messages: Message[],
+  compaction: ThreadCompaction | undefined | null,
+  reportedProviderTokens: number | undefined,
+  config: AutoCompactSettings,
+): CompactTrigger | null {
+  if (!config.enabled) return null;
   const uncompacted = getUncompactedMessages(messages, compaction);
-  const summaryTokens = estimateTokens(compaction?.summary ?? '');
-  const messageTokens = uncompacted.reduce((acc, m) => acc + estimateTokens(archiveText(m)), 0);
-  const estimated = summaryTokens + messageTokens;
-  return Math.max(estimated, reportedScopeTokens ?? 0);
+  const compactable = uncompacted.length - config.keepRecentMessages;
+  const minBatch = config.minCompactMessages ?? 10;
+
+  // darurat: prompt provider hampir penuh → padatkan apa pun yang bisa (≥ 2 pesan)
+  const providerLimit = config.providerContextLimit ?? 100000;
+  if ((reportedProviderTokens ?? 0) >= providerLimit && uncompacted.length >= 3) {
+    return 'provider_limit';
+  }
+
+  if (compactable < minBatch) return null;
+  if (uncompacted.length >= config.maxMessages) return 'messages';
+  if (estimateConversationTokens(messages, compaction) >= config.maxContextTokens) {
+    return 'conversation_tokens';
+  }
+  return null;
 }
 
 export function shouldAutoCompact(
@@ -139,20 +176,7 @@ export function shouldAutoCompact(
   reportedScopeTokens: number | undefined,
   config: AutoCompactSettings,
 ): boolean {
-  if (!config.enabled) return false;
-  const uncompacted = getUncompactedMessages(messages, compaction);
-  if (uncompacted.length < 3) return false;
-  if ((reportedScopeTokens ?? 0) >= config.maxContextTokens) return true;
-  if (uncompacted.length <= config.keepRecentMessages) {
-    return false;
-  }
-  if (uncompacted.length >= config.maxMessages) {
-    return true;
-  }
-  return (
-    estimateActiveContextTokens(messages, compaction, reportedScopeTokens) >=
-    config.maxContextTokens
-  );
+  return autoCompactTrigger(messages, compaction, reportedScopeTokens, config) !== null;
 }
 
 const PATH_RE = /\b(?:[\w.@-]+\/)+[\w.@-]+\.[a-z0-9]+\b/gi;
@@ -271,7 +295,7 @@ export function compactAgentScope(
   store: AtelierStore,
   agentId: string,
   projectId: string | null,
-  opts?: { force?: boolean; reason?: 'auto' | 'manual'; keepRecentMessages?: number },
+  opts?: { force?: boolean; reason?: 'auto' | 'manual'; keepRecentMessages?: number; trigger?: CompactTrigger },
 ): CompactScopeResult {
   const agent = store.getAgent(agentId);
   if (!agent) {
@@ -288,12 +312,12 @@ export function compactAgentScope(
     return { compacted: false, compaction: prevCompaction, compactedCount: 0, agent };
   }
 
+  const keepBudget = opts?.keepRecentMessages ?? settings.autoCompact.keepRecentMessages;
   const targetKeep = opts?.force
     ? Math.min(2, Math.max(0, uncompacted.length - 1))
-    : Math.min(
-        opts?.keepRecentMessages ?? settings.autoCompact.keepRecentMessages,
-        Math.max(0, uncompacted.length - 1),
-      );
+    : opts?.trigger === 'provider_limit'
+      ? Math.min(keepBudget, Math.max(2, uncompacted.length - 2))
+      : Math.min(keepBudget, Math.max(0, uncompacted.length - 1));
 
   const splitIdx = uncompacted.length - targetKeep;
   const toCompact = uncompacted.slice(0, splitIdx);
@@ -322,20 +346,23 @@ export function compactAgentScope(
     compactedAt: new Date().toISOString(),
     estimatedTokensBefore,
     estimatedTokensAfter,
+    ...(opts?.trigger ? { trigger: opts.trigger } : {}),
   };
 
-  // Manual compaction explicitly resets the session. Automatic compaction only rotates near its budget.
+  // Manual compaction explicitly resets the session. Automatic compaction only rotates on provider limit.
   const prevScopeSession = agent.sessions?.[scopeKey];
   const reportedTokens = agent.scopeTokens?.[scopeKey] ?? 0;
-  const rotate = opts?.reason !== 'auto' || (
-    reportedTokens >= settings.autoCompact.maxContextTokens && reportedTokens - estimatedTokensAfter >= 2000
-  );
+  const rotate = opts?.reason !== 'auto' || opts?.trigger === 'provider_limit';
   const nextSessions = { ...(agent.sessions ?? {}) };
   if (rotate) delete nextSessions[scopeKey];
 
   const shouldClearLegacySession = rotate && (
     Boolean(prevScopeSession && agent.sessionId === prevScopeSession) ||
     (!prevScopeSession && projectId !== null && agent.projectId === projectId));
+
+  const conversationTokensAfter =
+    estimateTokens(summary) +
+    kept.reduce((acc, m) => acc + estimateTokens(archiveText(m, picks.get(m.id))), 0);
 
   const nextCompactions = {
     ...(agent.contextCompactions ?? {}),
@@ -345,12 +372,17 @@ export function compactAgentScope(
     ...(agent.scopeTokens ?? {}),
     [scopeKey]: rotate ? estimatedTokensAfter : reportedTokens,
   };
+  const nextConversationTokens = {
+    ...(agent.conversationTokens ?? {}),
+    [scopeKey]: conversationTokensAfter,
+  };
 
   const updatedAgent = store.updateAgent(agent.id, {
     sessionId: shouldClearLegacySession ? null : agent.sessionId,
     sessions: nextSessions,
     contextCompactions: nextCompactions,
     scopeTokens: nextScopeTokens,
+    conversationTokens: nextConversationTokens,
   });
 
   const reason = opts?.reason ?? 'manual';

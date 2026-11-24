@@ -134,6 +134,17 @@ export class AtelierDb {
       CREATE INDEX IF NOT EXISTS idx_qa_runs_project_created
         ON qa_runs(project_id, created_at DESC);
 
+      CREATE TABLE IF NOT EXISTS browser_profiles (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS site_credentials (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        secret BLOB NOT NULL
+      );
+
       -- Machine-local tables: never exported in backups, never overwritten on import.
       CREATE TABLE IF NOT EXISTS app_lock (
         id INTEGER PRIMARY KEY CHECK (id = 1),

@@ -79,6 +79,8 @@ export function createHttpRouter(deps: {
   vault?: LocalVault;
   /** Auth + backup routes, mounted behind the origin check (and the lock gate for non-public ones). */
   securityRoutes?: Hono;
+  /** Remote browser routes, mounted behind the origin check and lock gate. */
+  browserRoutes?: Hono;
 }): Hono {
   const { store, runtime, config } = deps;
   const authManager = deps.authManager ?? new ProviderAuthManager();
@@ -98,6 +100,7 @@ export function createHttpRouter(deps: {
 
   if (deps.vault) api.use('*', lockGate(deps.vault));
   if (deps.securityRoutes) api.route('/', deps.securityRoutes);
+  if (deps.browserRoutes) api.route('/', deps.browserRoutes);
   api.route('/', createAttachmentRoutes({ store, config }));
   api.route('/', createLibraryRoutes({ store, config }));
 
@@ -148,6 +151,14 @@ export function createHttpRouter(deps: {
     enabled: z.boolean().default(true),
   });
 
+  const browserAccessSchema = z.object({
+    enabled: z.boolean().default(false),
+    allowedHosts: z.array(z.string().trim().max(200)).max(50).default([]),
+    credentialIds: z.array(z.string().trim().max(80)).max(50).default([]),
+    confirmSensitive: z.boolean().default(true),
+    defaultProfileId: z.string().trim().max(80).nullable().optional(),
+  });
+
   const agentInputSchema = z.object({
     projectId: z.string().trim().min(1).nullable().optional(),
     name: z.string().trim().min(1).max(60),
@@ -158,6 +169,7 @@ export function createHttpRouter(deps: {
     skills: z.array(skillSchema).optional().default([]),
     mcpServerIds: z.array(z.string()).optional().default([]),
     allowShell: z.boolean().optional().default(true),
+    browser: browserAccessSchema.optional(),
     providerOverride: providerSchema.nullable().optional(),
     modelOverride: z
       .string()
@@ -783,12 +795,42 @@ export function createHttpRouter(deps: {
             maxMessages: z.number().int().min(4).max(200).optional(),
             keepRecentMessages: z.number().int().min(1).max(199).optional(),
             maxContextTokens: z.number().int().min(4000).max(500000).optional(),
+            minCompactMessages: z.number().int().min(2).max(50).optional(),
+            providerContextLimit: z.number().int().min(8000).max(2000000).optional(),
             tailTokens: z.number().int().min(1000).max(6000).optional(),
             summarizerModel: z.string().max(120).regex(/^[a-zA-Z0-9._:/-]*$/).optional(),
           })
           .optional(),
         fallbackMode: z.enum(['ask', 'auto']).optional(),
         fallbackChain: z.array(modelRefSchema).max(5).optional(),
+        sitePresets: z
+          .array(
+            z.object({
+              id: z.string().trim().min(1).max(80),
+              name: z.string().trim().min(1).max(80),
+              origin: z.string().trim().url(),
+              loginUrl: z.string().trim().url(),
+              flow: z.enum(['single', 'two_step']).default('single'),
+              selectors: z
+                .object({
+                  username: z.string().max(240).optional(),
+                  password: z.string().max(240).optional(),
+                  next: z.string().max(240).optional(),
+                  submit: z.string().max(240).optional(),
+                  emailStepButton: z.string().max(240).optional(),
+                })
+                .default({}),
+              successUrlIncludes: z.string().max(240).optional(),
+              successSelector: z.string().max(240).optional(),
+              verifySelector: z.string().max(240).optional(),
+              allowedHosts: z.array(z.string().trim().max(200)).max(20).optional(),
+              defaultProfileName: z.string().max(60).optional(),
+              description: z.string().max(240).optional(),
+              builtIn: z.boolean().default(false),
+            }),
+          )
+          .max(50)
+          .optional(),
       })
       .safeParse(body);
 

@@ -1,11 +1,17 @@
 import type {
   Agent,
+  BrowserApprovalRequest,
+  BrowserProfile,
+  BrowserSessionInfo,
+  BrowserStatusInfo,
   CanonEntry,
   AuthStatus,
   AutoBackupConfig,
   AutoBackupConfigInput,
   BackupImportResult,
   CloudFolderCandidate,
+  CreateSiteCredentialInput,
+  DetectedSitePreset,
   ExportBackupInput,
   LibraryImage,
   MessageAttachment,
@@ -33,10 +39,14 @@ import type {
   RunBrowserQaInput,
   Settings,
   SettingsInput,
+  SiteCredential,
+  SitePreset,
   Task,
   ThreadCompaction,
+  TestSiteCredentialResult,
   UpdateAgentInput,
   UpdateProjectInput,
+  UpdateSiteCredentialInput,
   UpdateTaskInput,
   UsageDashboardResponse,
   UsageRange,
@@ -458,5 +468,84 @@ export const api = {
   dismissOnboarding: () =>
     request<{ ok: boolean }>('/api/onboarding/dismiss', {
       method: 'POST',
+    }),
+};
+
+export const browserApi = {
+  status: () => request<BrowserStatusInfo>('/api/browser/status'),
+  presets: () => request<{ presets: SitePreset[] }>('/api/browser/presets'),
+  detectPreset: (loginUrl: string) =>
+    request<{ detected: DetectedSitePreset }>('/api/browser/presets/detect', {
+      method: 'POST',
+      body: JSON.stringify({ loginUrl }),
+    }),
+  listProfiles: () => request<{ profiles: BrowserProfile[] }>('/api/browser/profiles'),
+  createProfile: (name: string) =>
+    request<{ profile: BrowserProfile }>('/api/browser/profiles', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  updateProfile: (id: string, name: string) =>
+    request<{ profile: BrowserProfile }>(`/api/browser/profiles/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  deleteProfile: (id: string) =>
+    request<{ ok: boolean }>(`/api/browser/profiles/${id}`, { method: 'DELETE' }),
+  clearProfileCookies: (id: string) =>
+    request<{ ok: boolean }>(`/api/browser/profiles/${id}/clear-cookies`, { method: 'POST' }),
+  openProfileWindow: (id: string, url?: string) =>
+    request<{ ok: boolean }>(`/api/browser/profiles/${id}/open`, {
+      method: 'POST',
+      body: JSON.stringify(url ? { url } : {}),
+    }),
+  listCredentials: () => request<{ credentials: SiteCredential[] }>('/api/browser/credentials'),
+  createCredential: (body: CreateSiteCredentialInput) =>
+    request<{ credential: SiteCredential }>('/api/browser/credentials', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateCredential: (id: string, body: UpdateSiteCredentialInput) =>
+    request<{ credential: SiteCredential }>(`/api/browser/credentials/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteCredential: (id: string) =>
+    request<{ ok: boolean }>(`/api/browser/credentials/${id}`, { method: 'DELETE' }),
+  testCredential: (id: string) =>
+    request<TestSiteCredentialResult>(`/api/browser/credentials/${id}/test`, {
+      method: 'POST',
+    }),
+  listSessions: () => request<{ sessions: BrowserSessionInfo[] }>('/api/browser/sessions'),
+  watchSession: (id: string) =>
+    request<{ session: BrowserSessionInfo }>(`/api/browser/sessions/${id}/watch`, { method: 'POST' }),
+  unwatchSession: (id: string) =>
+    request<{ session: BrowserSessionInfo }>(`/api/browser/sessions/${id}/unwatch`, {
+      method: 'POST',
+    }),
+  takeoverSession: (id: string, reason?: string) =>
+    request<{ session: BrowserSessionInfo }>(`/api/browser/sessions/${id}/takeover`, {
+      method: 'POST',
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+  releaseSession: (id: string) =>
+    request<{ session: BrowserSessionInfo }>(`/api/browser/sessions/${id}/release`, {
+      method: 'POST',
+    }),
+  pauseSession: (id: string) =>
+    request<{ session: BrowserSessionInfo }>(`/api/browser/sessions/${id}/pause`, {
+      method: 'POST',
+    }),
+  resumeSession: (id: string) =>
+    request<{ session: BrowserSessionInfo }>(`/api/browser/sessions/${id}/resume`, {
+      method: 'POST',
+    }),
+  closeSession: (id: string) =>
+    request<{ ok: boolean }>(`/api/browser/sessions/${id}/close`, { method: 'POST' }),
+  listApprovals: () => request<{ approvals: BrowserApprovalRequest[] }>('/api/browser/approvals'),
+  resolveApproval: (id: string, allow: boolean) =>
+    request<{ ok: boolean }>(`/api/browser/approvals/${id}`, {
+      method: 'POST',
+      body: JSON.stringify({ allow }),
     }),
 };

@@ -111,3 +111,45 @@ export function writeAgentMcpConfigFile(
 export function claudeAllowedMcpTools(servers: McpServerConfig[]): string[] {
   return servers.map((s) => `mcp__${s.name}`);
 }
+
+export function buildOpenCodeMcpConfig(
+  servers: McpServerConfig[],
+  majorVersion = 2,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, unknown> {
+  const entries: Record<string, Record<string, unknown>> = {};
+  for (const s of servers) {
+    if (s.transport === 'stdio') {
+      const spec = toLaunchSpec(s, platform);
+      entries[s.name] = {
+        type: 'local',
+        command: [spec.command, ...spec.args].filter(Boolean),
+        ...(s.env && Object.keys(s.env).length > 0 ? { environment: s.env } : {}),
+        ...(majorVersion >= 2 ? { disabled: false } : { enabled: true }),
+      };
+    } else {
+      entries[s.name] = {
+        type: 'remote',
+        url: s.url ?? '',
+        ...(s.headers && Object.keys(s.headers).length > 0 ? { headers: s.headers } : {}),
+        ...(majorVersion >= 2 ? { disabled: false } : { enabled: true }),
+      };
+    }
+  }
+  return majorVersion >= 2
+    ? { $schema: 'https://opencode.ai/config.json', mcp: { servers: entries } }
+    : { $schema: 'https://opencode.ai/config.json', mcp: entries };
+}
+
+export function writeOpenCodeConfigFile(
+  dataDir: string,
+  turnKey: string,
+  configObj: Record<string, unknown>,
+): string {
+  const dir = path.join(dataDir, 'mcp');
+  fs.mkdirSync(dir, { recursive: true });
+  const safeKey = turnKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const filePath = path.join(dir, `opencode-${safeKey}.json`);
+  fs.writeFileSync(filePath, JSON.stringify(configObj, null, 2), { encoding: 'utf8', mode: 0o600 });
+  return filePath;
+}

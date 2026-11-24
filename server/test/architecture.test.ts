@@ -1243,11 +1243,13 @@ describe('Auto-Compacting Context & Session Rotation', () => {
       };
       expect(settingsJson.settings.autoCompact).toEqual({
         enabled: true,
-        settingsVersion: 2,
+        settingsVersion: 3,
         tailTokens: 6000,
         maxMessages: 16,
         keepRecentMessages: 4,
         maxContextTokens: 32000,
+        minCompactMessages: 10,
+        providerContextLimit: 100000,
       });
 
       const projRes = await fetch(`${baseUrl}/api/projects`, {

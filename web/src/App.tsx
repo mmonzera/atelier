@@ -29,6 +29,7 @@ import {
 import { setLang } from './i18n';
 import { useWorkspace } from './state/useWorkspace';
 import { AgentReportsView } from './views/AgentReportsView';
+import { BrowserView } from './views/BrowserView';
 import { ChatView } from './views/ChatView';
 import { LibraryView } from './views/LibraryView';
 import { OnboardingView } from './views/OnboardingView';
@@ -73,7 +74,15 @@ type ActiveModal =
 
 export function App() {
   const tr = useT();
-  const { state, connected, loading } = useWorkspace();
+  const {
+    state,
+    connected,
+    loading,
+    browserSessions,
+    browserApprovals,
+    browserFrames,
+    browserTakeovers,
+  } = useWorkspace();
 
   // the saved interface language (when one was chosen) follows the user across devices
   useEffect(() => {
@@ -363,8 +372,8 @@ export function App() {
 
   const dimmedBackground =
     pluginsOpen ||
-    (viewMode === 'project' && (activeTab === 'tasks' || activeTab === 'preview' || activeTab === 'library')) ||
-    (viewMode === 'agent' && (agentTab === 'reports' || agentTab === 'library'));
+    (viewMode === 'project' && (activeTab === 'tasks' || activeTab === 'preview' || activeTab === 'library' || activeTab === 'browser')) ||
+    (viewMode === 'agent' && (agentTab === 'reports' || agentTab === 'library' || agentTab === 'browser'));
 
   return (
     <div
@@ -447,6 +456,10 @@ export function App() {
               activeAgent={activeAgent}
               activeTab={activeTab}
               agentTab={agentTab}
+              hasActiveBrowserSession={Boolean(
+                activeAgent &&
+                  browserSessions.some((s) => s.agentId === activeAgent.id && s.status !== 'closed'),
+              )}
               onChangeTab={setActiveTab}
               onChangeAgentTab={setAgentTab}
               onEditAgent={() => {
@@ -464,6 +477,13 @@ export function App() {
               activeAgent ? (
                 agentTab === 'library' ? (
                   <LibraryView projectId={null} agentId={activeAgent.id} refreshKey={state.messages.length} />
+                ) : agentTab === 'browser' ? (
+                  <BrowserView
+                    agent={activeAgent}
+                    sessions={browserSessions}
+                    frames={browserFrames}
+                    onOpenBrowserSettings={() => setModal({ type: 'settings', initialTab: 'browser' })}
+                  />
                 ) : agentTab === 'reports' ? (
                   <AgentReportsView
                     agent={activeAgent}
@@ -491,6 +511,10 @@ export function App() {
                     onDismissFallback={handleDismissFallback}
                     onOpenTask={(task) => setModal({ type: 'edit-task', taskId: task.id })}
                     onOpenEditAgent={() => setModal({ type: 'edit-agent', agentId: activeAgent.id })}
+                    browserApprovals={browserApprovals}
+                    browserTakeovers={browserTakeovers}
+                    browserSessions={browserSessions}
+                    onOpenBrowserTab={() => setAgentTab('browser')}
                   />
                 )
               ) : (
@@ -636,6 +660,13 @@ export function App() {
               />
             ) : activeTab === 'library' ? (
               <LibraryView projectId={activeProject.id} refreshKey={state.messages.length} />
+            ) : activeTab === 'browser' ? (
+              <BrowserView
+                agent={activeProjectAgent}
+                sessions={browserSessions}
+                frames={browserFrames}
+                onOpenBrowserSettings={() => setModal({ type: 'settings', initialTab: 'browser' })}
+              />
             ) : activeTab === 'preview' ? (
               <PreviewView
                 project={activeProject}
@@ -680,6 +711,10 @@ export function App() {
                 onOpenEditAgent={() =>
                   setModal({ type: 'edit-agent', agentId: activeProjectAgent.id })
                 }
+                browserApprovals={browserApprovals}
+                browserTakeovers={browserTakeovers}
+                browserSessions={browserSessions}
+                onOpenBrowserTab={() => setActiveTab('browser')}
               />
             ) : (
               <div
@@ -743,6 +778,7 @@ export function App() {
               onOpenUsage={() => setModal({ type: 'usage' })}
               onOpenSettings={() => setModal({ type: 'settings', initialTab: 'general' })}
               onOpenPlugins={openPlugins}
+              onOpenBrowserSettings={() => setModal({ type: 'settings', initialTab: 'browser' })}
             />
 
             {pluginsOpen && (
@@ -819,6 +855,7 @@ export function App() {
           onClose={() => setModal(null)}
           onSaved={(saved) => handleSelectProjectAgent(saved.id)}
           onOpenMcp={openPlugins}
+          onOpenBrowserSettings={() => setModal({ type: 'settings', initialTab: 'browser' })}
         />
       )}
 
@@ -831,6 +868,7 @@ export function App() {
           onClose={() => setModal(null)}
           onSaved={(saved) => handleSelectDirectAgent(saved.id)}
           onOpenMcp={openPlugins}
+          onOpenBrowserSettings={() => setModal({ type: 'settings', initialTab: 'browser' })}
         />
       )}
 
@@ -850,6 +888,7 @@ export function App() {
             else setActiveAgentId(null);
           }}
           onOpenMcp={openPlugins}
+          onOpenBrowserSettings={() => setModal({ type: 'settings', initialTab: 'browser' })}
         />
       )}
 

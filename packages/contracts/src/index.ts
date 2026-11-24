@@ -42,8 +42,8 @@ export type QueueKind = 'user' | 'task' | 'teammate';
 export type MessageAuthor = 'user' | 'agent' | 'teammate' | 'system';
 export type ActivityKind = 'tool' | 'status' | 'task' | 'pr' | 'error';
 export type ReasoningEffort = 'Low' | 'Medium' | 'High';
-export type WorkspaceTab = 'chat' | 'tasks' | 'preview' | 'library';
-export type AgentViewTab = 'chat' | 'reports' | 'library';
+export type WorkspaceTab = 'chat' | 'tasks' | 'preview' | 'library' | 'browser';
+export type AgentViewTab = 'chat' | 'reports' | 'library' | 'browser';
 export type ModelProvider = 'claude' | 'openai' | 'antigravity' | 'deepseek' | 'opencode' | 'openrouter';
 export type RealProvider = ModelProvider;
 
@@ -92,6 +92,8 @@ export interface ModelEntry {
   label: string;
   provider: RealProvider;
   builtIn?: boolean;
+  /** True when the model supports tool/function calling (undefined = unknown/assumed true for CLI). */
+  supportsTools?: boolean;
 }
 
 /** Every model a provider offers (fetched live when possible), used to choose what the chat shows. */
@@ -576,6 +578,8 @@ export interface StructuredMemory {
   artifacts: { id: string; label: string; path?: string }[];
 }
 
+export type CompactTrigger = 'messages' | 'conversation_tokens' | 'provider_limit';
+
 export interface ThreadCompaction {
   summary: string;
   structured?: StructuredMemory;
@@ -584,24 +588,34 @@ export interface ThreadCompaction {
   compactedAt: string;
   estimatedTokensBefore?: number;
   estimatedTokensAfter?: number;
+  trigger?: CompactTrigger;
 }
 
 export interface AutoCompactSettings {
   enabled: boolean;
-  settingsVersion?: 2;
+  settingsVersion?: 2 | 3;
   tailTokens?: number;
   summarizerModel?: string;
+  /** padatkan kalau pesan yang belum dipadatkan sebanyak ini */
   maxMessages: number;
+  /** pesan terbaru yang selalu dibiarkan utuh */
   keepRecentMessages: number;
+  /** batas token PERCAKAPAN (perkiraan Atelier: ringkasan + pesan belum dipadatkan) */
   maxContextTokens: number;
+  /** jangan padatkan otomatis kalau yang bisa diringkas kurang dari ini */
+  minCompactMessages?: number;
+  /** pengaman: token yang dilaporkan provider (seluruh prompt) */
+  providerContextLimit?: number;
 }
 
 export const DEFAULT_AUTO_COMPACT_SETTINGS: AutoCompactSettings = {
   enabled: true,
-  settingsVersion: 2,
-  maxMessages: 60,
+  settingsVersion: 3,
+  maxMessages: 80,
   keepRecentMessages: 14,
-  maxContextTokens: 24000,
+  maxContextTokens: 48000,
+  minCompactMessages: 10,
+  providerContextLimit: 100000,
   tailTokens: 6000,
 };
 
@@ -617,6 +631,193 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface BrowserProfile {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export type SiteLoginStatus = 'ok' | 'wrong_password' | 'needs_verification' | 'blocked' | 'error';
+
+export interface SiteCredentialSelectors {
+  username?: string;
+  password?: string;
+  next?: string;
+  submit?: string;
+  emailStepButton?: string;
+}
+
+export type SitePresetSelectors = SiteCredentialSelectors;
+
+export interface SiteCredentialLastLogin {
+  at: string;
+  status: SiteLoginStatus;
+  message?: string;
+}
+
+export interface SiteCredential {
+  id: string;
+  label: string;
+  presetId?: string | null;
+  origin: string;
+  loginUrl: string;
+  username: string;
+  maskedUsername?: string;
+  profileId: string;
+  selectors?: SiteCredentialSelectors;
+  lastLogin?: SiteCredentialLastLogin;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SitePreset {
+  id: string;
+  name: string;
+  origin: string;
+  loginUrl: string;
+  flow: 'single' | 'two_step';
+  selectors: SitePresetSelectors;
+  successUrlIncludes?: string;
+  successSelector?: string;
+  verifySelector?: string;
+  allowedHosts?: string[];
+  defaultProfileName?: string;
+  description?: string;
+  builtIn: boolean;
+}
+
+export interface DetectedSitePreset {
+  origin: string;
+  loginUrl: string;
+  flow: 'single' | 'two_step';
+  selectors: SitePresetSelectors;
+  screenshotUrl?: string;
+}
+
+export const SITE_PRESETS: SitePreset[] = [
+  {
+    id: 'mobbin',
+    name: 'Mobbin',
+    origin: 'https://mobbin.com',
+    loginUrl: 'https://mobbin.com/login',
+    flow: 'two_step',
+    selectors: {
+      username: 'input[name="email"]',
+      password: 'input[name="password"]',
+      next: 'button[type="submit"]',
+      submit: 'button[type="submit"]',
+    },
+    successUrlIncludes: '/browse',
+    verifySelector: 'input[name="token"]',
+    allowedHosts: ['mobbin.com'],
+    defaultProfileName: 'Mobbin',
+    description: 'UI & UX design reference library',
+    builtIn: true,
+  },
+];
+
+export interface AgentBrowserAccess {
+  enabled: boolean;
+  allowedHosts: string[];
+  credentialIds: string[];
+  confirmSensitive: boolean;
+  defaultProfileId?: string | null;
+}
+
+export type BrowserSessionStatus =
+  | 'idle'
+  | 'working'
+  | 'waiting_user'
+  | 'takeover'
+  | 'paused'
+  | 'closed';
+
+export interface BrowserSessionInfo {
+  id: string;
+  agentId: string;
+  profileId: string;
+  profileName?: string;
+  url: string;
+  title: string;
+  status: BrowserSessionStatus;
+  live: boolean;
+  takeoverReason?: string | null;
+}
+
+export interface BrowserFrameEvent {
+  sessionId: string;
+  jpegBase64: string;
+  width: number;
+  height: number;
+}
+
+export interface BrowserApprovalRequest {
+  id: string;
+  sessionId: string;
+  agentId: string;
+  action: string;
+  url: string;
+  screenshotUrl?: string;
+  expiresAt: string;
+}
+
+export interface BrowserApprovalResolvedEvent {
+  id: string;
+  sessionId: string;
+  agentId: string;
+  allowed: boolean;
+}
+
+export interface BrowserTakeoverEvent {
+  sessionId: string;
+  agentId: string;
+  reason: string;
+}
+
+export interface BrowserScreenshotSummary {
+  artifactId: string;
+  label: string;
+  url: string;
+  pageUrl?: string;
+  createdAt: string;
+}
+
+export interface CreateSiteCredentialInput {
+  label: string;
+  presetId?: string | null;
+  origin: string;
+  loginUrl: string;
+  username: string;
+  password: string;
+  profileId?: string | null;
+  selectors?: SiteCredentialSelectors;
+}
+
+export interface UpdateSiteCredentialInput {
+  label?: string;
+  presetId?: string | null;
+  origin?: string;
+  loginUrl?: string;
+  username?: string;
+  password?: string;
+  profileId?: string;
+  selectors?: SiteCredentialSelectors;
+}
+
+export interface TestSiteCredentialResult {
+  status: SiteLoginStatus;
+  message: string;
+  screenshotUrl?: string;
+  credential: SiteCredential;
+}
+
+export interface BrowserStatusInfo {
+  available: boolean;
+  browserName: string | null;
+  executablePath: string | null;
+}
+
 export interface Agent {
   id: string;
   projectId?: string | null;
@@ -628,6 +829,7 @@ export interface Agent {
   skills: AgentSkill[];
   mcpServerIds: string[];
   allowShell: boolean;
+  browser?: AgentBrowserAccess;
   providerOverride: ModelProvider | null;
   modelOverride: string | null;
   fallbackChain?: ModelRef[];
@@ -640,6 +842,7 @@ export interface Agent {
   sessionCanon?: Record<string, { sessionId: string; version: string }>;
   contextCompactions?: Record<string, ThreadCompaction>;
   scopeTokens?: Record<string, number>;
+  conversationTokens?: Record<string, number>;
   lastError: string | null;
   tokenUsage: {
     input: number;
@@ -678,6 +881,7 @@ export interface MessageMetadata {
   };
   fallbackTo?: ModelRef;
   qaRun?: QaRun;
+  browserScreenshots?: BrowserScreenshotSummary[];
   attachments?: MessageAttachment[];
   /** Skills the user invoked by hand (via /skill) for this message. */
   skills?: Array<{ id: string; name: string }>;
@@ -903,6 +1107,7 @@ export interface Settings {
   usageLimits?: Partial<Record<ModelProvider, ProviderUsageLimit>>;
   fallbackMode?: FallbackMode;
   fallbackChain?: ModelRef[];
+  sitePresets?: SitePreset[];
 }
 
 export interface QueueItem {
@@ -932,6 +1137,8 @@ export interface WorkspaceState {
   activities: Activity[];
   ports: PortEntry[];
   settings: Settings;
+  browserSessions?: BrowserSessionInfo[];
+  browserApprovals?: BrowserApprovalRequest[];
 }
 
 // Command Input DTOs
@@ -969,6 +1176,7 @@ export interface CreateAgentInput {
   skills?: AgentSkill[];
   mcpServerIds?: string[];
   allowShell?: boolean;
+  browser?: AgentBrowserAccess;
   providerOverride?: ModelProvider | null;
   modelOverride?: string | null;
   fallbackChain?: ModelRef[];
@@ -983,6 +1191,7 @@ export interface UpdateAgentInput {
   skills?: AgentSkill[];
   mcpServerIds?: string[];
   allowShell?: boolean;
+  browser?: AgentBrowserAccess;
   providerOverride?: ModelProvider | null;
   modelOverride?: string | null;
   fallbackChain?: ModelRef[];
@@ -1030,6 +1239,7 @@ export interface SettingsInput {
   usageLimits?: Partial<Record<ModelProvider, ProviderUsageLimit>>;
   fallbackMode?: FallbackMode;
   fallbackChain?: ModelRef[];
+  sitePresets?: SitePreset[];
 }
 
 export interface ApiErrorResponse {
@@ -1057,7 +1267,12 @@ export type ServerEvent =
   | { type: 'task-deleted'; payload: { id: string; projectId: string } }
   | { type: 'activity-added'; payload: Activity }
   | { type: 'port-upserted'; payload: PortEntry }
-  | { type: 'settings-changed'; payload: Settings };
+  | { type: 'settings-changed'; payload: Settings }
+  | { type: 'browser-session'; payload: BrowserSessionInfo }
+  | { type: 'browser-frame'; payload: BrowserFrameEvent }
+  | { type: 'browser-approval'; payload: BrowserApprovalRequest }
+  | { type: 'browser-approval-resolved'; payload: BrowserApprovalResolvedEvent }
+  | { type: 'browser-takeover'; payload: BrowserTakeoverEvent };
 
 export interface OnboardingStatus {
   hostname: string;

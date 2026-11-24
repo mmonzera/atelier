@@ -1,4 +1,10 @@
-import type { ServerEvent } from '@atelier/contracts';
+import type {
+  BrowserApprovalRequest,
+  BrowserFrameEvent,
+  BrowserSessionInfo,
+  BrowserTakeoverEvent,
+  ServerEvent,
+} from '@atelier/contracts';
 import { useEffect, useReducer, useState } from 'react';
 import { LOCKED_EVENT, api, authApi } from '../api';
 import { INITIAL_WORKSPACE_STATE, workspaceReducer } from './reducer';
@@ -7,6 +13,10 @@ export function useWorkspace() {
   const [state, dispatch] = useReducer(workspaceReducer, INITIAL_WORKSPACE_STATE);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [browserSessions, setBrowserSessions] = useState<BrowserSessionInfo[]>([]);
+  const [browserApprovals, setBrowserApprovals] = useState<BrowserApprovalRequest[]>([]);
+  const [browserFrames, setBrowserFrames] = useState<Record<string, BrowserFrameEvent>>({});
+  const [browserTakeovers, setBrowserTakeovers] = useState<Record<string, BrowserTakeoverEvent>>({});
 
   useEffect(() => {
     let active = true;
@@ -15,12 +25,25 @@ export function useWorkspace() {
     let hasConnectedOnce = false;
     let hiddenAtMs: number | null = null;
 
+    const applySnapshotExtras = (snapshot: {
+      browserSessions?: BrowserSessionInfo[];
+      browserApprovals?: BrowserApprovalRequest[];
+    }) => {
+      if (Array.isArray(snapshot.browserSessions)) {
+        setBrowserSessions(snapshot.browserSessions.filter((s) => s.status !== 'closed'));
+      }
+      if (Array.isArray(snapshot.browserApprovals)) {
+        setBrowserApprovals(snapshot.browserApprovals);
+      }
+    };
+
     const syncSnapshot = () => {
       api
         .getState()
         .then((snapshot) => {
           if (!active) return;
           dispatch({ type: 'snapshot', payload: snapshot });
+          applySnapshotExtras(snapshot);
           setLoading(false);
         })
         .catch(() => {
@@ -48,8 +71,68 @@ export function useWorkspace() {
       ws.onmessage = (event) => {
         try {
           const parsed = JSON.parse(String(event.data)) as ServerEvent;
+          if (parsed.type === 'browser-frame') {
+            setBrowserFrames((prev) => ({
+              ...prev,
+              [parsed.payload.sessionId]: parsed.payload,
+            }));
+            return;
+          }
+          if (parsed.type === 'browser-session') {
+            const next = parsed.payload;
+            setBrowserSessions((prev) => {
+              if (next.status === 'closed') {
+                return prev.filter((s) => s.id !== next.id);
+              }
+              const idx = prev.findIndex((s) => s.id === next.id);
+              if (idx === -1) return [...prev, next];
+              const copy = prev.slice();
+              copy[idx] = next;
+              return copy;
+            });
+            if (next.status !== 'takeover') {
+              setBrowserTakeovers((prev) => {
+                if (!(next.id in prev)) return prev;
+                const copy = { ...prev };
+                delete copy[next.id];
+                return copy;
+              });
+            }
+            if (next.status === 'closed') {
+              setBrowserFrames((prev) => {
+                if (!(next.id in prev)) return prev;
+                const copy = { ...prev };
+                delete copy[next.id];
+                return copy;
+              });
+            }
+            return;
+          }
+          if (parsed.type === 'browser-approval') {
+            setBrowserApprovals((prev) => {
+              const idx = prev.findIndex((a) => a.id === parsed.payload.id);
+              if (idx === -1) return [...prev, parsed.payload];
+              const copy = prev.slice();
+              copy[idx] = parsed.payload;
+              return copy;
+            });
+            return;
+          }
+          if (parsed.type === 'browser-approval-resolved') {
+            setBrowserApprovals((prev) => prev.filter((a) => a.id !== parsed.payload.id));
+            return;
+          }
+          if (parsed.type === 'browser-takeover') {
+            setBrowserTakeovers((prev) => ({
+              ...prev,
+              [parsed.payload.sessionId]: parsed.payload,
+            }));
+            return;
+          }
+
           dispatch(parsed);
           if (parsed.type === 'snapshot') {
+            applySnapshotExtras(parsed.payload);
             setLoading(false);
           }
         } catch {
@@ -108,5 +191,13 @@ export function useWorkspace() {
     };
   }, []);
 
-  return { state, connected, loading };
+  return {
+    state,
+    connected,
+    loading,
+    browserSessions,
+    browserApprovals,
+    browserFrames,
+    browserTakeovers,
+  };
 }

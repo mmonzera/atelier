@@ -280,7 +280,14 @@ describe('Memory budgets and archive', () => {
     const raw = (autoCompact: object) => db.sqlite.prepare('UPDATE settings SET data=? WHERE id=1')
       .run(JSON.stringify({ ...settings, autoCompact }));
     raw(oldDefaults);
-    expect(store.getSettings().autoCompact).toMatchObject({ maxMessages: 60, keepRecentMessages: 14, maxContextTokens: 24000 });
+    expect(store.getSettings().autoCompact).toMatchObject({
+      maxMessages: 80,
+      keepRecentMessages: 14,
+      maxContextTokens: 48000,
+      minCompactMessages: 10,
+      providerContextLimit: 100000,
+      settingsVersion: 3,
+    });
     raw({ ...oldDefaults, maxMessages: 41 });
     expect(store.getSettings().autoCompact).toMatchObject({ maxMessages: 41, keepRecentMessages: 6, maxContextTokens: 40000 });
     store.updateSettings({ autoCompact: oldDefaults });
@@ -291,18 +298,22 @@ describe('Memory budgets and archive', () => {
     expect(store.getAgent(agent.id)?.contextCompactions?.[project.id]).toEqual(old);
   });
 
-  it('rotates a native session above its context limit and leaves another scope active', () => {
+  it('rotates a native session on provider limit emergency and leaves another scope active', () => {
     const { store, project, agent } = fixture();
     store.updateAgent(agent.id, {
       sessionId: 'claude:project',
       sessions: { [project.id]: 'claude:project', direct: 'claude:direct' },
-      scopeTokens: { [project.id]: 28000 },
+      scopeTokens: { [project.id]: 120000 },
     });
     for (const text of ['We use Tailwind', 'First result', 'Next step']) {
       store.createMessage({ agentId: agent.id, projectId: project.id, author: 'user', text });
     }
-    const result = compactAgentScope(store, agent.id, project.id, { reason: 'auto' });
+    const result = compactAgentScope(store, agent.id, project.id, {
+      reason: 'auto',
+      trigger: 'provider_limit',
+    });
     expect(result.compacted).toBe(true);
+    expect(result.compaction?.trigger).toBe('provider_limit');
     expect(result.agent?.sessions).toEqual({ direct: 'claude:direct' });
     expect(result.agent?.sessionId).toBeNull();
   });

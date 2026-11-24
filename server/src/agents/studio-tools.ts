@@ -9,6 +9,12 @@ import {
   type Task,
 } from '@atelier/contracts';
 import { z } from 'zod';
+import {
+  BROWSER_TOOL_DEFS,
+  type BrowserToolContext,
+  executeBrowserTool,
+} from '../browser/tools.js';
+import type { BrowserManager } from '../browser/manager.js';
 import { runBrowserQa } from '../qa/browser-qa.js';
 import { type AtelierStore, newId } from '../store.js';
 import { CANON_KEY, CanonInputFields, CanonInputSchema } from '../memory-files.js';
@@ -522,7 +528,10 @@ export function createStudioTools(deps: {
   };
 }
 
-export async function createAtelierSdkMcpServer(tools: StudioTools): Promise<unknown | null> {
+export async function createAtelierSdkMcpServer(
+  tools: StudioTools,
+  extraBrowser?: { browserManager: BrowserManager; ctx: BrowserToolContext },
+): Promise<unknown | null> {
   try {
     const modName = '@anthropic-ai/claude-agent-sdk';
     const sdk = (await import(modName)) as {
@@ -598,6 +607,22 @@ export async function createAtelierSdkMcpServer(tools: StudioTools): Promise<unk
           RunBrowserQaToolSchema.shape,
           async (args) => wrapResult(tools.run_browser_qa(RunBrowserQaToolSchema.parse(args))),
         ),
+        ...(extraBrowser
+          ? BROWSER_TOOL_DEFS.map((def) =>
+              sdk.tool!(def.name, def.description, def.schema.shape, async (args) => {
+                const res = await executeBrowserTool(
+                  extraBrowser.browserManager,
+                  def.name,
+                  args,
+                  extraBrowser.ctx,
+                );
+                return {
+                  content: [{ type: 'text', text: res.text }],
+                  ...(res.isError ? { isError: true } : {}),
+                };
+              }),
+            )
+          : []),
       ],
     });
   } catch {

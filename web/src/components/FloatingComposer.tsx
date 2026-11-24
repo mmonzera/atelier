@@ -2,6 +2,7 @@ import { t as translate, useT } from '../i18n';
 import {
   ATTACHMENT_LIMITS,
   BUILT_IN_MODELS,
+  DEFAULT_AUTO_COMPACT_SETTINGS,
   type Agent,
   type AgentSkill,
   type McpServerConfig,
@@ -61,6 +62,7 @@ interface FloatingComposerProps {
   onOpenUsage: () => void;
   onOpenSettings: () => void;
   onOpenPlugins: () => void;
+  onOpenBrowserSettings?: () => void;
 }
 
 const EFFORTS: ReasoningEffort[] = ['Low', 'Medium', 'High'];
@@ -210,6 +212,7 @@ export function FloatingComposer({
   onOpenUsage,
   onOpenSettings,
   onOpenPlugins,
+  onOpenBrowserSettings,
 }: FloatingComposerProps) {
   const t = useT();
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
@@ -433,19 +436,23 @@ export function FloatingComposer({
   };
 
   const scopeKey = project?.id ?? 'direct';
-  const autoCompact = settings.autoCompact ?? {
-    enabled: true,
-    maxMessages: 20,
-    keepRecentMessages: 6,
-    maxContextTokens: 40000,
-  };
-  const contextTokens = agent
-    ? (agent.scopeTokens?.[scopeKey] ?? agent.tokenUsage.input)
+  const autoCompact = settings.autoCompact ?? DEFAULT_AUTO_COMPACT_SETTINGS;
+  const conversationTokens = agent
+    ? (agent.conversationTokens?.[scopeKey] ??
+        Math.ceil((agent.contextCompactions?.[scopeKey]?.summary.length ?? 0) / 4))
     : 0;
+  const providerTokens = agent ? (agent.scopeTokens?.[scopeKey] ?? 0) : 0;
+  const providerLimit =
+    autoCompact.providerContextLimit ??
+    DEFAULT_AUTO_COMPACT_SETTINGS.providerContextLimit ??
+    100_000;
   const contextPct = agent
     ? Math.min(
         100,
-        Math.max(contextTokens > 0 ? 2 : 0, (contextTokens / autoCompact.maxContextTokens) * 100),
+        Math.max(
+          conversationTokens > 0 ? 2 : 0,
+          (conversationTokens / autoCompact.maxContextTokens) * 100,
+        ),
       )
     : 0;
   const outputPct = agent
@@ -873,6 +880,15 @@ export function FloatingComposer({
                       setPluginsMenuOpen(false);
                       onOpenPlugins();
                     }}
+                    onOpenBrowserSettings={
+                      onOpenBrowserSettings
+                        ? () => {
+                            setPlusMenuOpen(false);
+                            setPluginsMenuOpen(false);
+                            onOpenBrowserSettings();
+                          }
+                        : undefined
+                    }
                   />
                 </div>
               )}
@@ -1229,6 +1245,9 @@ export function FloatingComposer({
                           }}
                         >
                           <span style={{ flex: 1, minWidth: 0 }}>{m.label}</span>
+                          {agent?.browser?.enabled && m.supportsTools === false && (
+                            <span style={{ fontSize: 10, color: 'var(--agent-amber)' }}>{t('no tools')}</span>
+                          )}
                           {active && (
                             <Check size={15} strokeWidth={2} style={{ color: 'var(--agent-green)' }} />
                           )}
@@ -1440,7 +1459,17 @@ export function FloatingComposer({
           >
             <TokenRing
               percent={contextPct}
-              label={t('Context: {v0} / {v1} tokens · Auto-compact {v2}{v3}', { v0: contextTokens.toLocaleString(), v1: autoCompact.maxContextTokens.toLocaleString(), v2: autoCompact.enabled ? 'ON' : 'OFF', v3: agent && !isWorking ? t(' (click to compact)') : '' })}
+              label={t(
+                'Conversation: {v0} / {v1} · Provider: {v2} / {v3} · Auto-compact {v4}{v5}',
+                {
+                  v0: conversationTokens.toLocaleString(),
+                  v1: autoCompact.maxContextTokens.toLocaleString(),
+                  v2: providerTokens.toLocaleString(),
+                  v3: providerLimit.toLocaleString(),
+                  v4: autoCompact.enabled ? 'ON' : 'OFF',
+                  v5: agent && !isWorking ? t(' (click to compact)') : '',
+                },
+              )}
             />
           </button>
           <TokenRing percent={outputPct} label={t('Output tokens: {v0}', { v0: agent?.tokenUsage.output ?? 0 })} />

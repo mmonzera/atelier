@@ -6,18 +6,21 @@ import {
   BUILT_IN_SKILLS,
   type Agent,
   type AgentAvatarShape,
+  type AgentBrowserAccess,
   type AgentColor,
   type AgentSkill,
+  type BrowserProfile,
   type ModelEntry,
   type ModelProvider,
   type ModelRef,
   type Project,
   type Settings,
+  type SiteCredential,
 } from '@atelier/contracts';
-import { Check, FileText, Plus, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { AlertTriangle, Check, FileText, Globe, Plus, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { shownModels } from '../../state/models';
-import { api } from '../../api';
+import { api, browserApi } from '../../api';
 import { BotMascot } from '../mascot/BotMascot';
 import { MASCOT_COLORS, MASCOT_SHAPES, resolveMascotColor, resolveMascotShape } from '../mascot/mascotConfig';
 import { Select } from '../Select';
@@ -40,6 +43,7 @@ export function AgentModal({
   onSaved,
   onDeleted,
   onOpenMcp,
+  onOpenBrowserSettings,
 }: {
   project?: Project | null;
   existingAgent?: Agent | null;
@@ -49,6 +53,7 @@ export function AgentModal({
   onSaved: (agent: Agent) => void;
   onDeleted?: () => void;
   onOpenMcp?: () => void;
+  onOpenBrowserSettings?: () => void;
 }) {
   const tr = useT();
   const isEdit = Boolean(existingAgent);
@@ -71,6 +76,31 @@ export function AgentModal({
   );
   const [modelOverride, setModelOverride] = useState<string>(existingAgent?.modelOverride ?? '');
   const [fallbackChain, setFallbackChain] = useState<ModelRef[]>(existingAgent?.fallbackChain ?? []);
+  const [browserEnabled, setBrowserEnabled] = useState(existingAgent?.browser?.enabled ?? false);
+  const [allowedHosts, setAllowedHosts] = useState<string[]>(existingAgent?.browser?.allowedHosts ?? []);
+  const [hostDraft, setHostDraft] = useState('');
+  const [credentialIds, setCredentialIds] = useState<string[]>(
+    existingAgent?.browser?.credentialIds ?? [],
+  );
+  const [confirmSensitive, setConfirmSensitive] = useState(
+    existingAgent?.browser?.confirmSensitive ?? true,
+  );
+  const [defaultProfileId, setDefaultProfileId] = useState<string | null>(
+    existingAgent?.browser?.defaultProfileId ?? null,
+  );
+  const [allCredentials, setAllCredentials] = useState<SiteCredential[]>([]);
+  const [allProfiles, setAllProfiles] = useState<BrowserProfile[]>([]);
+
+  useEffect(() => {
+    browserApi
+      .listCredentials()
+      .then((r) => setAllCredentials(r.credentials))
+      .catch(() => undefined);
+    browserApi
+      .listProfiles()
+      .then((r) => setAllProfiles(r.profiles))
+      .catch(() => undefined);
+  }, []);
 
   // Skill installer states
   const [localSkillPath, setLocalSkillPath] = useState('');
@@ -180,12 +210,20 @@ export function AgentModal({
     setSaving(true);
     setError(null);
     try {
+      const browserPayload: AgentBrowserAccess = {
+        enabled: browserEnabled,
+        allowedHosts,
+        credentialIds,
+        confirmSensitive,
+        defaultProfileId,
+      };
       const payload = {
         name: name.trim(),
         role: role.trim(),
         color,
         avatarShape,
         allowShell,
+        browser: browserPayload,
         systemInstructions,
         skills,
         mcpServerIds,
@@ -775,6 +813,226 @@ export function AgentModal({
               </div>
             </div>
           )}
+        </Section>
+
+        {/* Browser & Site Login */}
+        <Section
+          title={tr('Browser')}
+          action={
+            onOpenBrowserSettings && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenBrowserSettings();
+                }}
+                style={{
+                  fontSize: 12,
+                  color: 'var(--text-secondary)',
+                  textDecoration: 'underline',
+                  textUnderlineOffset: 3,
+                }}
+              >
+                {tr('Manage logins…')}
+              </button>
+            )
+          }
+        >
+          <div
+            style={{
+              padding: '11px 14px',
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border-subtle)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <Globe size={16} style={{ color: browserEnabled ? 'var(--agent-green)' : 'var(--text-tertiary)', flexShrink: 0 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>
+                    {tr('Allow browser access')}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                    {tr('Lets the agent browse websites, take screenshots to Library, and sign in with saved logins.')}
+                  </div>
+                </div>
+              </div>
+              <Switch checked={browserEnabled} onChange={setBrowserEnabled} label={tr('Allow browser access')} />
+            </div>
+
+            {browserEnabled && (providerOverride || settings.provider) === 'antigravity' && (
+              <div
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(244, 188, 46, 0.08)',
+                  border: '1px solid rgba(244, 188, 46, 0.25)',
+                  fontSize: 11.5,
+                  color: 'var(--agent-amber)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+                <span>{tr('Browser is not available for Antigravity CLI yet. Switch to Claude, Codex, OpenCode, DeepSeek, or OpenRouter.')}</span>
+              </div>
+            )}
+
+            {browserEnabled && (
+              <>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 6 }}>
+                    {tr('Allowed websites')}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                    {allowedHosts.map((host) => (
+                      <span
+                        key={host}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          padding: '3px 8px',
+                          borderRadius: 'var(--radius-full)',
+                          background: 'var(--surface-3)',
+                          border: '1px solid var(--border-default)',
+                          fontSize: 11.5,
+                          color: 'var(--text-primary)',
+                        }}
+                      >
+                        {host}
+                        <button
+                          type="button"
+                          onClick={() => setAllowedHosts((prev) => prev.filter((h) => h !== host))}
+                          style={{ color: 'var(--text-tertiary)', display: 'inline-flex' }}
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      value={hostDraft}
+                      onChange={(e) => setHostDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const clean = hostDraft.trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0] ?? '';
+                          if (clean && !allowedHosts.includes(clean)) {
+                            setAllowedHosts((prev) => [...prev, clean]);
+                          }
+                          setHostDraft('');
+                        }
+                      }}
+                      placeholder="mobbin.com"
+                      style={{ ...inputStyle, flex: 1, height: 30, fontSize: 12 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const clean = hostDraft.trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0] ?? '';
+                        if (clean && !allowedHosts.includes(clean)) {
+                          setAllowedHosts((prev) => [...prev, clean]);
+                        }
+                        setHostDraft('');
+                      }}
+                      style={{ ...secondaryBtnStyle, height: 30, padding: '0 10px', fontSize: 12 }}
+                    >
+                      {tr('Add')}
+                    </button>
+                  </div>
+                  {allowedHosts.length === 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--agent-amber)', marginTop: 5 }}>
+                      {tr('Empty = all websites allowed. Add specific hosts (e.g. mobbin.com) for stricter safety.')}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 6 }}>
+                    {tr('Allowed site logins')}
+                  </div>
+                  {allCredentials.length === 0 ? (
+                    <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                      {tr('No saved logins yet.')}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {allCredentials.map((cred) => {
+                        const checked = credentialIds.includes(cred.id);
+                        return (
+                          <button
+                            key={cred.id}
+                            type="button"
+                            onClick={() =>
+                              setCredentialIds((prev) =>
+                                prev.includes(cred.id) ? prev.filter((id) => id !== cred.id) : [...prev, cred.id],
+                              )
+                            }
+                            style={{
+                              padding: '5px 10px',
+                              borderRadius: 'var(--radius-full)',
+                              background: checked ? 'var(--surface-3)' : 'var(--surface-1)',
+                              border: `1px solid ${checked ? 'rgba(255,255,255,0.24)' : 'var(--border-subtle)'}`,
+                              fontSize: 11.5,
+                              color: 'var(--text-primary)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                            }}
+                          >
+                            {checked && <Check size={11} style={{ color: 'var(--agent-green)' }} />}
+                            <span>{cred.label}</span>
+                            <span style={{ color: 'var(--text-muted)' }}>({cred.maskedUsername ?? cred.username})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)' }}>
+                      {tr('Ask confirmation for sensitive actions')}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                      {tr('Prompts before clicking buy, pay, delete, send, or publish buttons.')}
+                    </div>
+                  </div>
+                  <Switch
+                    small
+                    checked={confirmSensitive}
+                    onChange={setConfirmSensitive}
+                    label={tr('Confirm sensitive actions')}
+                  />
+                </div>
+
+                {allProfiles.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 4 }}>
+                      {tr('Default browser profile')}
+                    </div>
+                    <Select
+                      ariaLabel={tr('Default browser profile')}
+                      value={defaultProfileId ?? '__auto'}
+                      onChange={(v) => setDefaultProfileId(v === '__auto' ? null : v)}
+                      options={[
+                        { value: '__auto', label: tr('Auto (Default / credential profile)') },
+                        ...allProfiles.map((p) => ({ value: p.id, label: p.name })),
+                      ]}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </Section>
 
         {/* MCP connections */}

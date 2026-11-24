@@ -1,5 +1,5 @@
 import type { Agent, McpServerConfig, Settings } from '@atelier/contracts';
-import { ArrowUpRight, Plug, Search } from 'lucide-react';
+import { ArrowUpRight, Globe, Plug, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { api } from '../api';
 import { useMcpOAuth } from '../state/useMcpOAuth';
@@ -37,15 +37,41 @@ export function PluginsPopover({
   settings,
   oauth,
   onManage,
+  onOpenBrowserSettings,
 }: {
   agent: Agent | null;
   settings: Settings;
   oauth: OAuth;
   onManage: () => void;
+  onOpenBrowserSettings?: () => void;
 }) {
   const t = useT();
   const [query, setQuery] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [browserBusy, setBrowserBusy] = useState(false);
+
+  const showBuiltInBrowser = !query.trim() || 'browser remote web'.includes(query.trim().toLowerCase());
+  const browserEnabled = Boolean(agent?.browser?.enabled);
+
+  const toggleBrowser = async (next: boolean) => {
+    if (!agent) return;
+    setBrowserBusy(true);
+    try {
+      await api.updateAgent(agent.id, {
+        browser: {
+          enabled: next,
+          allowedHosts: agent.browser?.allowedHosts ?? [],
+          credentialIds: agent.browser?.credentialIds ?? [],
+          confirmSensitive: agent.browser?.confirmSensitive ?? true,
+          defaultProfileId: agent.browser?.defaultProfileId ?? null,
+        },
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('Failed to update browser access'));
+    } finally {
+      setBrowserBusy(false);
+    }
+  };
 
   const list = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -112,7 +138,52 @@ export function PluginsPopover({
       <div style={{ height: 1, background: 'var(--border-subtle)', margin: '0 4px 4px' }} />
 
       <div style={{ maxHeight: 250, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-        {list.length === 0 ? (
+        {showBuiltInBrowser && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '7px 10px',
+              borderRadius: 'var(--radius-sm)',
+            }}
+          >
+            <div
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                background: 'rgba(56, 189, 248, 0.14)',
+                color: '#38bdf8',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <Globe size={13} strokeWidth={1.75} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{t('Browser')}</div>
+              {onOpenBrowserSettings && (
+                <button
+                  type="button"
+                  onClick={onOpenBrowserSettings}
+                  style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textDecoration: 'underline' }}
+                >
+                  {t('Manage logins…')}
+                </button>
+              )}
+            </div>
+            <Switch
+              checked={browserEnabled}
+              disabled={!agent || browserBusy}
+              label={t('Toggle Browser')}
+              onChange={(next) => void toggleBrowser(next)}
+            />
+          </div>
+        )}
+        {list.length === 0 && !showBuiltInBrowser ? (
           <div style={{ padding: '14px 10px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
             {settings.mcpServers.length === 0 ? t('No plugins yet.') : t('No matching plugin.')}
           </div>
