@@ -1,4 +1,5 @@
 import { serve } from '@hono/node-server';
+import { DEFAULT_MEETING_SETTINGS } from '@atelier/contracts';
 import fs from 'node:fs';
 import type { Server } from 'node:http';
 import path from 'node:path';
@@ -16,10 +17,16 @@ import { createBrowserRoutes } from './browser/routes.js';
 import { type AppConfig, loadConfig } from './config.js';
 import { AtelierDb } from './db.js';
 import { createHttpRouter } from './http.js';
+import { createMeetingRoutes } from './meetings/routes.js';
+import { MeetingService } from './meetings/service.js';
 import { AtelierStore } from './store.js';
 import { BackupService } from './backup/service.js';
 import { createSecurityRoutes } from './security/routes.js';
 import { LocalVault, SESSION_COOKIE, parseCookie } from './security/vault.js';
+import type { SttCatalog } from './stt/catalog.js';
+import { SttInstaller } from './stt/installer.js';
+import { type LocalWhisperConfig, LocalWhisperProvider } from './stt/local-whisper.js';
+import { createSttRoutes } from './stt/routes.js';
 
 export interface AtelierServerHandle {
   config: AppConfig;
@@ -31,6 +38,9 @@ export interface AtelierServerHandle {
   backup: BackupService;
   browserManager: BrowserManager;
   credentials: CredentialStore;
+  sttInstaller: SttInstaller;
+  sttProvider: LocalWhisperProvider;
+  meetingService: MeetingService;
   server: Server;
   port: number;
   close: () => Promise<void>;
@@ -50,6 +60,12 @@ export async function startAtelierServer(opts?: {
   configOverrides?: Parameters<typeof loadConfig>[0];
   customRunner?: AgentRunner;
   customRunnerFactory?: (deps: { store: AtelierStore; enqueue: EnqueueTaskFn }) => AgentRunner;
+  sttOptions?: {
+    catalog?: SttCatalog;
+    idleTimeoutMs?: number;
+    readyTimeoutMs?: number;
+    buildSpawnSpec?: (cfg: LocalWhisperConfig, port: number) => { command: string; args: string[] };
+  };
 }): Promise<AtelierServerHandle> {
   const config = loadConfig(opts?.configOverrides);
   const db = new AtelierDb(config.dbPath);
@@ -61,11 +77,6 @@ export async function startAtelierServer(opts?: {
 
   const credentials = new CredentialStore(db, config.dataDir);
   const browserManager = new BrowserManager({ db, store, bus, config, credentials });
-  store.setSnapshotAugmenter((base) => ({
-    ...base,
-    browserSessions: browserManager.listSessions(),
-    browserApprovals: browserManager.listApprovals(),
-  }));
 
   const runtime = new AgentRuntime(
     store,
@@ -75,6 +86,49 @@ export async function startAtelierServer(opts?: {
     browserManager,
   );
   const authManager = new ProviderAuthManager();
+
+  const sttInstaller = new SttInstaller({
+    dataDir: config.dataDir,
+    catalog: opts?.sttOptions?.catalog,
+    onProgress: (event) => bus.broadcast({ type: 'stt-download-progress', payload: event }),
+  });
+
+  const sttProvider = new LocalWhisperProvider({
+    getConfig: () => {
+      const m = store.getSettings().meeting ?? DEFAULT_MEETING_SETTINGS;
+      return {
+        exePath: sttInstaller.getExePath(),
+        modelPath: sttInstaller.getModelPath(m.activeModelId),
+        threads: m.threads,
+        language: m.language,
+        useGpu: m.useGpu,
+      };
+    },
+    idleTimeoutMs: opts?.sttOptions?.idleTimeoutMs,
+    readyTimeoutMs: opts?.sttOptions?.readyTimeoutMs,
+    buildSpawnSpec: opts?.sttOptions?.buildSpawnSpec,
+  });
+
+  const meetingService = new MeetingService({
+    db,
+    config,
+    store,
+    bus,
+    sttProvider,
+    installer: sttInstaller,
+    summarize: (transcript, signal) =>
+      runtime.summarizeText(
+        `Create concise structured meeting notes in Markdown from the transcript below:\n\n${transcript}`,
+        signal,
+      ),
+  });
+
+  store.setSnapshotAugmenter((base) => ({
+    ...base,
+    browserSessions: browserManager.listSessions(),
+    browserApprovals: browserManager.listApprovals(),
+    activeMeeting: meetingService.getActiveMeetingStatus(),
+  }));
 
   const vault = new LocalVault(db);
   const backup = new BackupService(db, store, config, {
@@ -110,6 +164,8 @@ export async function startAtelierServer(opts?: {
         onLock: () => void browserManager.stopAllWatches(),
       }),
       browserRoutes: createBrowserRoutes({ browserManager, credentials }),
+      sttRoutes: createSttRoutes({ installer: sttInstaller, provider: sttProvider, store }),
+      meetingRoutes: createMeetingRoutes({ meetingService }),
     }),
   );
   app.route('/mcp/browser', createBrowserMcpRouter({ browserManager, config }));
@@ -180,10 +236,15 @@ export async function startAtelierServer(opts?: {
     backup,
     browserManager,
     credentials,
+    sttInstaller,
+    sttProvider,
+    meetingService,
     server,
     port: actualPort,
     close: async () => {
       authManager.shutdown();
+      await meetingService.shutdown();
+      await sttProvider.shutdown();
       await runtime.shutdown();
       await browserManager.shutdown();
       // "Backup on close": snapshot via VACUUM INTO before the DB handle goes away.

@@ -81,6 +81,10 @@ export function createHttpRouter(deps: {
   securityRoutes?: Hono;
   /** Remote browser routes, mounted behind the origin check and lock gate. */
   browserRoutes?: Hono;
+  /** Local STT routes, mounted behind the origin check and lock gate. */
+  sttRoutes?: Hono;
+  /** Meeting transcription routes, mounted behind the origin check and lock gate. */
+  meetingRoutes?: Hono;
 }): Hono {
   const { store, runtime, config } = deps;
   const authManager = deps.authManager ?? new ProviderAuthManager();
@@ -101,6 +105,8 @@ export function createHttpRouter(deps: {
   if (deps.vault) api.use('*', lockGate(deps.vault));
   if (deps.securityRoutes) api.route('/', deps.securityRoutes);
   if (deps.browserRoutes) api.route('/', deps.browserRoutes);
+  if (deps.sttRoutes) api.route('/', deps.sttRoutes);
+  if (deps.meetingRoutes) api.route('/', deps.meetingRoutes);
   api.route('/', createAttachmentRoutes({ store, config }));
   api.route('/', createLibraryRoutes({ store, config }));
 
@@ -830,6 +836,19 @@ export function createHttpRouter(deps: {
             }),
           )
           .max(50)
+          .optional(),
+        meeting: z
+          .object({
+            mode: z.enum(['live', 'economy']).optional(),
+            activeModelId: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9._-]+$/).optional(),
+            threads: z.number().int().min(1).max(128).optional(),
+            useGpu: z.boolean().optional(),
+            language: z.enum(['auto', 'id', 'en']).optional(),
+            keepAudio: z.boolean().optional(),
+            remindParticipants: z.boolean().optional(),
+            noticeTextId: z.string().max(1000).optional(),
+            noticeTextEn: z.string().max(1000).optional(),
+          })
           .optional(),
       })
       .safeParse(body);

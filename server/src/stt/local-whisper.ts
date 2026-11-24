@@ -1,0 +1,349 @@
+import { type ChildProcess, spawn } from 'node:child_process';
+import net from 'node:net';
+import os from 'node:os';
+import type { SttLanguage } from '@atelier/contracts';
+import type { SttProvider } from '../meetings/stt.js';
+
+export class WhisperFatalCrashError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WhisperFatalCrashError';
+  }
+}
+
+export interface LocalWhisperConfig {
+  exePath: string | null;
+  modelPath: string | null;
+  threads: number;
+  language: SttLanguage;
+  useGpu: boolean;
+}
+
+export interface LocalWhisperOptions {
+  getConfig: () => LocalWhisperConfig;
+  idleTimeoutMs?: number;
+  readyTimeoutMs?: number;
+  /** Optional test hook to override the executable and arguments spawned. */
+  buildSpawnSpec?: (cfg: LocalWhisperConfig, port: number) => { command: string; args: string[] };
+  onFatalCrash?: (err: Error) => void;
+}
+
+async function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      srv.close((closeErr) => {
+        if (closeErr) reject(closeErr);
+        else if (!port) reject(new Error('Failed to allocate a free port for Whisper server.'));
+        else resolve(port);
+      });
+    });
+  });
+}
+
+function configKey(cfg: LocalWhisperConfig): string {
+  return JSON.stringify([cfg.exePath, cfg.modelPath, cfg.threads, cfg.language, cfg.useGpu]);
+}
+
+export class LocalWhisperProvider implements SttProvider {
+  private readonly idleTimeoutMs: number;
+  private readonly readyTimeoutMs: number;
+  private child: ChildProcess | null = null;
+  private port: number | null = null;
+  private activeConfigKey: string | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private inFlight = false;
+  private queue: Promise<unknown> = Promise.resolve();
+  private consecutiveCrashes = 0;
+
+  constructor(private readonly opts: LocalWhisperOptions) {
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? 120_000;
+    this.readyTimeoutMs = opts.readyTimeoutMs ?? 30_000;
+  }
+
+  public isRunning(): boolean {
+    return Boolean(this.child && this.child.exitCode === null && !this.child.killed);
+  }
+
+  public getPort(): number | null {
+    return this.isRunning() ? this.port : null;
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  private enqueueOp<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(fn, fn);
+    this.queue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  public prepare(): Promise<void> {
+    return this.enqueueOp(async () => {
+      this.clearIdleTimer();
+      await this.ensureStarted();
+    });
+  }
+
+  public transcribe(
+    wav: Buffer,
+    opts: { language: 'auto' | 'id' | 'en'; prompt?: string; signal: AbortSignal },
+  ): Promise<{ text: string }> {
+    return this.enqueueOp(async () => {
+      this.clearIdleTimer();
+      this.inFlight = true;
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          if (opts.signal.aborted) {
+            throw new Error('Transcription aborted');
+          }
+          try {
+            await this.ensureStarted();
+            const text = await this.sendInference(wav, opts);
+            this.consecutiveCrashes = 0;
+            return { text };
+          } catch (err) {
+            if (opts.signal.aborted) {
+              throw err;
+            }
+            const isProcessDead = !this.isRunning() || this.isConnectionError(err);
+            if (!isProcessDead) {
+              throw err;
+            }
+            this.consecutiveCrashes += 1;
+            await this.stopProcess();
+            if (this.consecutiveCrashes >= 2 || attempt === 1) {
+              const fatal = new WhisperFatalCrashError(
+                err instanceof Error
+                  ? `Whisper engine crashed repeatedly: ${err.message}`
+                  : 'Whisper engine crashed repeatedly.',
+              );
+              this.opts.onFatalCrash?.(fatal);
+              throw fatal;
+            }
+          }
+        }
+        throw new WhisperFatalCrashError('Whisper engine failed after restart.');
+      } finally {
+        this.inFlight = false;
+      }
+    });
+  }
+
+  public release(): Promise<void> {
+    return this.enqueueOp(async () => {
+      this.clearIdleTimer();
+      if (!this.isRunning()) return;
+      this.idleTimer = setTimeout(() => {
+        this.idleTimer = null;
+        if (!this.inFlight) {
+          void this.stopProcess();
+        }
+      }, this.idleTimeoutMs);
+      this.idleTimer.unref?.();
+    });
+  }
+
+  public async shutdown(): Promise<void> {
+    this.clearIdleTimer();
+    await this.stopProcess();
+  }
+
+  private isConnectionError(err: unknown): boolean {
+    if (!(err instanceof Error)) return false;
+    const msg = `${err.message} ${String((err as { cause?: unknown }).cause ?? '')}`.toLowerCase();
+    return (
+      msg.includes('fetch failed') ||
+      msg.includes('econnrefused') ||
+      msg.includes('econnreset') ||
+      msg.includes('socket hang up') ||
+      msg.includes('exited') ||
+      msg.includes('crashed')
+    );
+  }
+
+  private async ensureStarted(): Promise<void> {
+    const cfg = this.opts.getConfig();
+    if (!cfg.exePath) {
+      throw new Error('Whisper engine is not installed.');
+    }
+    if (!cfg.modelPath) {
+      throw new Error('Selected Whisper model is not downloaded.');
+    }
+    const desiredKey = configKey(cfg);
+    if (this.isRunning() && this.activeConfigKey === desiredKey) {
+      return;
+    }
+    if (this.isRunning()) {
+      await this.stopProcess();
+    }
+
+    const port = await findFreePort();
+    const spec = this.opts.buildSpawnSpec
+      ? this.opts.buildSpawnSpec(cfg, port)
+      : {
+          command: cfg.exePath,
+          args: [
+            '-m',
+            cfg.modelPath,
+            '--host',
+            '127.0.0.1',
+            '--port',
+            String(port),
+            '-t',
+            String(Math.max(1, cfg.threads)),
+            '-l',
+            cfg.language,
+            ...(cfg.useGpu ? [] : ['--no-gpu']),
+          ],
+        };
+
+    const child = spawn(spec.command, spec.args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    this.child = child;
+    this.port = port;
+    this.activeConfigKey = desiredKey;
+
+    if (child.pid) {
+      try {
+        os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
+      } catch {
+        // Ignore if OS refuses priority change
+      }
+    }
+
+    let exitedEarly: string | null = null;
+    const stderrChunks: string[] = [];
+    child.stderr?.on('data', (d) => {
+      if (stderrChunks.length < 20) stderrChunks.push(String(d));
+    });
+    child.once('exit', (code, signal) => {
+      exitedEarly = `Whisper server exited (code=${code}, signal=${signal})`;
+      if (this.child === child) {
+        this.child = null;
+        this.port = null;
+        this.activeConfigKey = null;
+      }
+    });
+
+    const deadline = Date.now() + this.readyTimeoutMs;
+    while (Date.now() < deadline) {
+      if (exitedEarly) {
+        const tail = stderrChunks.join('').trim();
+        throw new Error(tail ? `${exitedEarly}: ${tail.slice(-300)}` : exitedEarly);
+      }
+      try {
+        let res = await fetch(`http://127.0.0.1:${port}/health`, {
+          signal: AbortSignal.timeout(1000),
+        });
+        if (res.status === 404) {
+          res = await fetch(`http://127.0.0.1:${port}/`, {
+            signal: AbortSignal.timeout(1000),
+          });
+        }
+        if (res.ok) {
+          return;
+        }
+      } catch {
+        // Server still starting or loading model
+      }
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    await this.stopProcess();
+    throw new Error(`Whisper server did not become ready within ${this.readyTimeoutMs}ms.`);
+  }
+
+  private async sendInference(
+    wav: Buffer,
+    opts: { language: 'auto' | 'id' | 'en'; prompt?: string; signal: AbortSignal },
+  ): Promise<string> {
+    if (!this.isRunning() || !this.port) {
+      throw new Error('Whisper server exited before inference.');
+    }
+
+    const child = this.child!;
+    const port = this.port;
+    const abortCtrl = new AbortController();
+
+    const onCallerAbort = () => abortCtrl.abort(opts.signal.reason);
+    const onChildExit = () => abortCtrl.abort(new Error('Whisper server exited during inference'));
+    opts.signal.addEventListener('abort', onCallerAbort, { once: true });
+    child.once('exit', onChildExit);
+
+    try {
+      const form = new FormData();
+      form.set('file', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'chunk.wav');
+      form.set('response_format', 'json');
+      form.set('temperature', '0');
+      if (opts.language && opts.language !== 'auto') {
+        form.set('language', opts.language);
+      }
+      if (opts.prompt?.trim()) {
+        form.set('prompt', opts.prompt.trim());
+      }
+
+      const res = await fetch(`http://127.0.0.1:${port}/inference`, {
+        method: 'POST',
+        body: form,
+        signal: abortCtrl.signal,
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`Whisper inference failed (${res.status}): ${body.slice(0, 200)}`);
+      }
+      const data = (await res.json()) as { text?: string };
+      return typeof data.text === 'string' ? data.text.trim() : '';
+    } finally {
+      opts.signal.removeEventListener('abort', onCallerAbort);
+      child.off('exit', onChildExit);
+    }
+  }
+
+  private async stopProcess(): Promise<void> {
+    const child = this.child;
+    this.child = null;
+    this.port = null;
+    this.activeConfigKey = null;
+    if (!child || child.exitCode !== null) return;
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      child.once('exit', done);
+      try {
+        child.kill();
+      } catch {
+        done();
+        return;
+      }
+      const killTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // ignore
+        }
+        done();
+      }, 2000);
+      killTimer.unref?.();
+    });
+  }
+}

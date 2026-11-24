@@ -145,6 +145,23 @@ export class AtelierDb {
         secret BLOB NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS meetings (
+        id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        data TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS meeting_chunks (
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        text TEXT,
+        audio_path TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (meeting_id, seq)
+      );
+
       -- Machine-local tables: never exported in backups, never overwritten on import.
       CREATE TABLE IF NOT EXISTS app_lock (
         id INTEGER PRIMARY KEY CHECK (id = 1),

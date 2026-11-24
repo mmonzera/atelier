@@ -13,6 +13,7 @@ import { Plus, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import { FloatingComposer } from './components/FloatingComposer';
+import { MeetingRecordingPill } from './components/MeetingRecordingPill';
 import { PatternBackground } from './components/PatternBackground';
 import { LeftRail } from './components/LeftRail';
 import { RightPanel } from './components/RightPanel';
@@ -82,6 +83,8 @@ export function App() {
     browserApprovals,
     browserFrames,
     browserTakeovers,
+    sttDownload,
+    activeMeeting,
   } = useWorkspace();
 
   // the saved interface language (when one was chosen) follows the user across devices
@@ -781,6 +784,20 @@ export function App() {
               onOpenBrowserSettings={() => setModal({ type: 'settings', initialTab: 'browser' })}
             />
 
+            {activeMeeting && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 54,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  zIndex: 25,
+                }}
+              >
+                <MeetingRecordingPill event={activeMeeting} />
+              </div>
+            )}
+
             {pluginsOpen && (
               <div
                 style={{
@@ -941,6 +958,7 @@ export function App() {
           settings={state.settings}
           activeProject={activeProject}
           discoveredModels={discoveredModels}
+          sttDownload={sttDownload}
           initialTab={modal.initialTab ?? 'general'}
           onOpenMcp={openPlugins}
           onClose={() => setModal(null)}

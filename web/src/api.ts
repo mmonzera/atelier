@@ -14,6 +14,9 @@ import type {
   DetectedSitePreset,
   ExportBackupInput,
   LibraryImage,
+  MeetingMode,
+  MeetingSession,
+  MeetingStatusEvent,
   MessageAttachment,
   RecoveryKeyResponse,
   RelinkCandidate,
@@ -41,6 +44,9 @@ import type {
   SettingsInput,
   SiteCredential,
   SitePreset,
+  SttBenchmarkResult,
+  SttLanguage,
+  SttLocalStatus,
   Task,
   ThreadCompaction,
   TestSiteCredentialResult,
@@ -547,5 +553,73 @@ export const browserApi = {
     request<{ ok: boolean }>(`/api/browser/approvals/${id}`, {
       method: 'POST',
       body: JSON.stringify({ allow }),
+    }),
+};
+
+export const sttApi = {
+  status: () => request<{ status: SttLocalStatus }>('/api/stt/local/status'),
+  installEngine: (id = 'cpu-x64') =>
+    request<{ status: SttLocalStatus }>('/api/stt/local/install-engine', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    }),
+  downloadModel: (id: string) =>
+    request<{ status: SttLocalStatus }>(`/api/stt/local/models/${encodeURIComponent(id)}/download`, {
+      method: 'POST',
+    }),
+  deleteModel: (id: string) =>
+    request<{ ok: boolean; status: SttLocalStatus }>(`/api/stt/local/models/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  deleteEngine: () =>
+    request<{ ok: boolean; status: SttLocalStatus }>('/api/stt/local/engine', {
+      method: 'DELETE',
+    }),
+  clearAll: () =>
+    request<{ ok: boolean; status: SttLocalStatus }>('/api/stt/local/all', {
+      method: 'DELETE',
+    }),
+  cancel: () =>
+    request<{ ok: boolean; cancelled: boolean; status: SttLocalStatus }>('/api/stt/local/cancel', {
+      method: 'POST',
+    }),
+  benchmark: (modelId?: string) =>
+    request<{ result: SttBenchmarkResult; status: SttLocalStatus }>('/api/stt/local/benchmark', {
+      method: 'POST',
+      body: JSON.stringify(modelId ? { modelId } : {}),
+    }),
+};
+
+export const meetingsApi = {
+  list: () => request<{ meetings: MeetingSession[]; active: MeetingStatusEvent | null }>('/api/meetings'),
+  get: (id: string) => request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}`),
+  start: (body?: {
+    title?: string;
+    mode?: MeetingMode;
+    language?: SttLanguage;
+    modelId?: string;
+    keepAudio?: boolean;
+    prompt?: string;
+  }) =>
+    request<MeetingStatusEvent>('/api/meetings/start', {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
+  stop: (id: string) =>
+    request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/stop`, {
+      method: 'POST',
+    }),
+  defer: (id: string) =>
+    request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/defer`, {
+      method: 'POST',
+    }),
+  switchModel: (id: string, modelId: string) =>
+    request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/switch-model`, {
+      method: 'POST',
+      body: JSON.stringify({ modelId }),
+    }),
+  resume: (id: string) =>
+    request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/resume`, {
+      method: 'POST',
     }),
 };

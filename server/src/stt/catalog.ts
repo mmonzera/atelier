@@ -1,0 +1,151 @@
+export interface WhisperEngineCatalogEntry {
+  id: string;
+  version: string;
+  platform: string;
+  url: string;
+  host: string;
+  sha256: string;
+  sizeBytes: number;
+  exe: string;
+  gpu?: boolean;
+}
+
+export interface WhisperModelCatalogEntry {
+  id: string;
+  label: string;
+  filename: string;
+  url: string;
+  host: string;
+  sha256: string;
+  sizeBytes: number;
+  ramMb: number;
+  quality: number;
+  recommended?: boolean;
+}
+
+export interface SttCatalog {
+  engines: readonly WhisperEngineCatalogEntry[];
+  models: readonly WhisperModelCatalogEntry[];
+}
+
+export const WHISPER_ENGINES: readonly WhisperEngineCatalogEntry[] = [
+  {
+    id: 'cpu-x64',
+    version: 'b5907',
+    platform: 'win32-x64',
+    url: 'https://github.com/ggml-org/whisper.cpp/releases/download/b5907/whisper-bin-x64.zip',
+    host: 'github.com',
+    sha256: 'ecca07b277d943e9b9f4712856a144b857271a6b333104e511e1988e80db582b',
+    sizeBytes: 9168428,
+    exe: 'Release/whisper-server.exe',
+  },
+  {
+    id: 'blas-x64',
+    version: 'b5907',
+    platform: 'win32-x64',
+    url: 'https://github.com/ggml-org/whisper.cpp/releases/download/b5907/whisper-blas-bin-x64.zip',
+    host: 'github.com',
+    sha256: '98a4691eb23a3a2afe91b0773bea5b2b4bcd5e7432a49e588724e84268711f11',
+    sizeBytes: 21955392,
+    exe: 'Release/whisper-server.exe',
+  },
+];
+
+export const WHISPER_MODELS: readonly WhisperModelCatalogEntry[] = [
+  {
+    id: 'large-v3-turbo-q5_0',
+    label: 'Large v3 Turbo (recommended)',
+    filename: 'ggml-large-v3-turbo-q5_0.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
+    host: 'huggingface.co',
+    sha256: '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2',
+    sizeBytes: 574041195,
+    ramMb: 1400,
+    quality: 4,
+    recommended: true,
+  },
+  {
+    id: 'medium-q5_0',
+    label: 'Medium',
+    filename: 'ggml-medium-q5_0.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin',
+    host: 'huggingface.co',
+    sha256: '19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f',
+    sizeBytes: 539212467,
+    ramMb: 1200,
+    quality: 4,
+  },
+  {
+    id: 'small-q5_1',
+    label: 'Small (lightweight)',
+    filename: 'ggml-small-q5_1.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin',
+    host: 'huggingface.co',
+    sha256: 'ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb',
+    sizeBytes: 190085487,
+    ramMb: 600,
+    quality: 2,
+  },
+  {
+    id: 'base',
+    label: 'Base (ultra-light)',
+    filename: 'ggml-base.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+    host: 'huggingface.co',
+    sha256: '60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe',
+    sizeBytes: 147951465,
+    ramMb: 400,
+    quality: 1,
+  },
+];
+
+export const DEFAULT_STT_CATALOG: SttCatalog = {
+  engines: WHISPER_ENGINES,
+  models: WHISPER_MODELS,
+};
+
+export function getPlatformKey(): string {
+  return `${process.platform}-${process.arch}`;
+}
+
+export function getEngineById(
+  id: string,
+  catalog: SttCatalog = DEFAULT_STT_CATALOG,
+): WhisperEngineCatalogEntry | undefined {
+  return catalog.engines.find((e) => e.id === id);
+}
+
+export function getModelById(
+  id: string,
+  catalog: SttCatalog = DEFAULT_STT_CATALOG,
+): WhisperModelCatalogEntry | undefined {
+  return catalog.models.find((m) => m.id === id);
+}
+
+/** Ordered from heaviest to lightest to suggest a faster fallback when live transcription lags. */
+const MODEL_SPEED_ORDER = ['large-v3-turbo-q5_0', 'medium-q5_0', 'small-q5_1', 'base'];
+
+export function getSmallerInstalledModel(
+  activeModelId: string,
+  installedModelIds: readonly string[],
+): string | null {
+  const installedSet = new Set(installedModelIds);
+  const activeIdx = MODEL_SPEED_ORDER.indexOf(activeModelId);
+  if (activeIdx === -1) {
+    // Pick the lightest installed model other than activeModelId
+    for (let i = MODEL_SPEED_ORDER.length - 1; i >= 0; i -= 1) {
+      const candidate = MODEL_SPEED_ORDER[i]!;
+      if (candidate !== activeModelId && installedSet.has(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+  for (let i = activeIdx + 1; i < MODEL_SPEED_ORDER.length; i += 1) {
+    const candidate = MODEL_SPEED_ORDER[i]!;
+    if (installedSet.has(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}

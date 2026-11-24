@@ -3,7 +3,9 @@ import type {
   BrowserFrameEvent,
   BrowserSessionInfo,
   BrowserTakeoverEvent,
+  MeetingStatusEvent,
   ServerEvent,
+  SttDownloadProgressEvent,
 } from '@atelier/contracts';
 import { useEffect, useReducer, useState } from 'react';
 import { LOCKED_EVENT, api, authApi } from '../api';
@@ -17,6 +19,8 @@ export function useWorkspace() {
   const [browserApprovals, setBrowserApprovals] = useState<BrowserApprovalRequest[]>([]);
   const [browserFrames, setBrowserFrames] = useState<Record<string, BrowserFrameEvent>>({});
   const [browserTakeovers, setBrowserTakeovers] = useState<Record<string, BrowserTakeoverEvent>>({});
+  const [sttDownload, setSttDownload] = useState<SttDownloadProgressEvent | null>(null);
+  const [activeMeeting, setActiveMeeting] = useState<MeetingStatusEvent | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -28,6 +32,7 @@ export function useWorkspace() {
     const applySnapshotExtras = (snapshot: {
       browserSessions?: BrowserSessionInfo[];
       browserApprovals?: BrowserApprovalRequest[];
+      activeMeeting?: MeetingStatusEvent | null;
     }) => {
       if (Array.isArray(snapshot.browserSessions)) {
         setBrowserSessions(snapshot.browserSessions.filter((s) => s.status !== 'closed'));
@@ -35,6 +40,7 @@ export function useWorkspace() {
       if (Array.isArray(snapshot.browserApprovals)) {
         setBrowserApprovals(snapshot.browserApprovals);
       }
+      setActiveMeeting(snapshot.activeMeeting ?? null);
     };
 
     const syncSnapshot = () => {
@@ -129,6 +135,20 @@ export function useWorkspace() {
             }));
             return;
           }
+          if (parsed.type === 'stt-download-progress') {
+            setSttDownload(
+              parsed.payload.status === 'done' || parsed.payload.status === 'cancelled'
+                ? null
+                : parsed.payload,
+            );
+            window.dispatchEvent(new CustomEvent('atelier:stt-progress', { detail: parsed.payload }));
+            return;
+          }
+          if (parsed.type === 'meeting-status') {
+            const st = parsed.payload.meeting.status;
+            setActiveMeeting(st === 'completed' || st === 'error' ? null : parsed.payload);
+            return;
+          }
 
           dispatch(parsed);
           if (parsed.type === 'snapshot') {
@@ -199,5 +219,7 @@ export function useWorkspace() {
     browserApprovals,
     browserFrames,
     browserTakeovers,
+    sttDownload,
+    activeMeeting,
   };
 }

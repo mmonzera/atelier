@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   AGENT_AVATAR_SHAPES,
@@ -7,6 +8,7 @@ import {
   AGENT_TEMPLATES,
   BUILT_IN_SKILLS,
   DEFAULT_AUTO_COMPACT_SETTINGS,
+  DEFAULT_MEETING_SETTINGS,
   parseMessageSegments,
   type Artifact,
   type CanonEntry,
@@ -24,6 +26,7 @@ import {
   type FallbackErrorKind,
   type FallbackMode,
   type McpServerConfig,
+  type MeetingSettings,
   type Message,
   type MessageAuthor,
   type MessageMetadata,
@@ -456,6 +459,43 @@ export class AtelierStore {
     };
   }
 
+  private normalizeMeetingSettings(raw?: Partial<MeetingSettings> | null): MeetingSettings {
+    const cpuCores = Math.max(1, os.cpus().length);
+    const defaultThreads = Math.min(4, Math.max(1, Math.floor(cpuCores / 2)));
+    const base: MeetingSettings = {
+      ...DEFAULT_MEETING_SETTINGS,
+      threads: defaultThreads,
+    };
+    if (!raw || typeof raw !== 'object') return base;
+    const rawThreads = Number(raw.threads ?? base.threads);
+    const threads = Number.isFinite(rawThreads)
+      ? Math.min(cpuCores, Math.max(1, Math.round(rawThreads)))
+      : base.threads;
+    const mode: MeetingSettings['mode'] = raw.mode === 'economy' ? 'economy' : 'live';
+    const language: MeetingSettings['language'] =
+      raw.language === 'id' || raw.language === 'en' ? raw.language : 'auto';
+    const activeModelId =
+      typeof raw.activeModelId === 'string' && raw.activeModelId.trim()
+        ? raw.activeModelId.trim()
+        : base.activeModelId;
+    return {
+      mode,
+      activeModelId,
+      threads,
+      useGpu: typeof raw.useGpu === 'boolean' ? raw.useGpu : base.useGpu,
+      language,
+      keepAudio: typeof raw.keepAudio === 'boolean' ? raw.keepAudio : base.keepAudio,
+      remindParticipants:
+        typeof raw.remindParticipants === 'boolean' ? raw.remindParticipants : base.remindParticipants,
+      ...(typeof raw.noticeTextId === 'string' && raw.noticeTextId.trim()
+        ? { noticeTextId: raw.noticeTextId }
+        : {}),
+      ...(typeof raw.noticeTextEn === 'string' && raw.noticeTextEn.trim()
+        ? { noticeTextEn: raw.noticeTextEn }
+        : {}),
+    };
+  }
+
   public getSettings(): Settings {
     const row = this.db.sqlite.prepare(`SELECT data FROM settings WHERE id = 1`).get() as {
       data: string;
@@ -489,6 +529,7 @@ export class AtelierStore {
       fallbackMode: parsed.fallbackMode === 'auto' ? 'auto' : 'ask',
       fallbackChain: Array.isArray(parsed.fallbackChain) ? parsed.fallbackChain : [],
       sitePresets: Array.isArray(parsed.sitePresets) ? (parsed.sitePresets as SitePreset[]) : [],
+      meeting: this.normalizeMeetingSettings(parsed.meeting),
     };
   }
 
@@ -531,6 +572,9 @@ export class AtelierStore {
         fallbackMode: input.fallbackMode ?? current.fallbackMode ?? 'ask',
         fallbackChain: input.fallbackChain ?? current.fallbackChain ?? [],
         sitePresets: input.sitePresets !== undefined ? input.sitePresets : (current.sitePresets ?? []),
+        meeting: input.meeting
+          ? this.normalizeMeetingSettings({ ...(current.meeting ?? DEFAULT_MEETING_SETTINGS), ...input.meeting })
+          : this.normalizeMeetingSettings(current.meeting),
       };
       this.db.sqlite
         .prepare(`UPDATE settings SET data = ? WHERE id = 1`)

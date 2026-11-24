@@ -9,6 +9,7 @@ import {
   type Project,
   type ReasoningEffort,
   type Settings,
+  type SttDownloadProgressEvent,
 } from '@atelier/contracts';
 import {
   ArrowDown,
@@ -34,14 +35,16 @@ import { ModelsProvidersPanel } from '../components/modals/ModelsModal';
 import { Select } from '../components/Select';
 import { toast } from '../components/Toast';
 import { BrowserSettingsPanel } from './BrowserSettingsPanel';
+import { MeetingSettingsPanel } from './MeetingSettingsPanel';
 import { SecurityBackupPanel } from './SecurityBackupPanel';
 
-export type SettingsTab = 'general' | 'providers' | 'browser' | 'security';
+export type SettingsTab = 'general' | 'providers' | 'meeting' | 'browser' | 'security';
 
 export function SettingsView({
   settings,
   activeProject,
   discoveredModels = [],
+  sttDownload = null,
   initialTab = 'general',
   onOpenMcp,
   onClose,
@@ -49,6 +52,7 @@ export function SettingsView({
   settings: Settings;
   activeProject: Project | null;
   discoveredModels?: ModelEntry[];
+  sttDownload?: SttDownloadProgressEvent | null;
   initialTab?: SettingsTab;
   onOpenMcp: () => void;
   onClose: () => void;
@@ -224,6 +228,7 @@ export function SettingsView({
             [
               { id: 'general' as SettingsTab, label: t('General') },
               { id: 'providers' as SettingsTab, label: t('Models & Providers') },
+              { id: 'meeting' as SettingsTab, label: t('Meeting') },
               { id: 'browser' as SettingsTab, label: t('Browser & Login') },
               { id: 'security' as SettingsTab, label: t('Security & Backup') },
             ]
@@ -255,6 +260,8 @@ export function SettingsView({
           <SecurityBackupPanel />
         ) : activeTab === 'browser' ? (
           <BrowserSettingsPanel settings={settings} />
+        ) : activeTab === 'meeting' ? (
+          <MeetingSettingsPanel settings={settings} sttDownload={sttDownload} />
         ) : activeTab === 'providers' ? (
           <ModelsProvidersPanel settings={settings} discoveredModels={discoveredModels} />
         ) : (

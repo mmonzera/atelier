@@ -1088,6 +1088,145 @@ export interface UsageDashboardResponse {
   recentLogs: UsageLogEntry[];
 }
 
+export type MeetingMode = 'live' | 'economy';
+export type SttLanguage = 'auto' | 'id' | 'en';
+
+export interface MeetingSettings {
+  mode: MeetingMode;
+  activeModelId: string;
+  threads: number;
+  useGpu: boolean;
+  language: SttLanguage;
+  keepAudio: boolean;
+  remindParticipants: boolean;
+  noticeTextId?: string;
+  noticeTextEn?: string;
+}
+
+export const DEFAULT_MEETING_SETTINGS: MeetingSettings = {
+  mode: 'live',
+  activeModelId: 'large-v3-turbo-q5_0',
+  threads: 4,
+  useGpu: false,
+  language: 'auto',
+  keepAudio: false,
+  remindParticipants: true,
+};
+
+export interface WhisperEngineInfo {
+  id: string;
+  version: string;
+  platform: string;
+  url: string;
+  host: string;
+  sizeBytes: number;
+  gpu?: boolean;
+  installed: boolean;
+  updateAvailable: boolean;
+}
+
+export interface WhisperModelInfo {
+  id: string;
+  label: string;
+  filename: string;
+  url: string;
+  host: string;
+  sizeBytes: number;
+  ramMb: number;
+  quality: number;
+  recommended?: boolean;
+  installed: boolean;
+  active: boolean;
+}
+
+export type SttBenchmarkRecommendation = 'live_safe' | 'live_tight' | 'economy';
+
+export interface SttBenchmarkResult {
+  engineVersion: string;
+  modelId: string;
+  threads: number;
+  useGpu: boolean;
+  audioDurationSec: number;
+  elapsedSec: number;
+  realtimeRatio: number;
+  recommendation: SttBenchmarkRecommendation;
+  measuredAt: string;
+}
+
+export interface SttDownloadProgressEvent {
+  kind: 'engine' | 'model';
+  id: string;
+  status: 'downloading' | 'verifying' | 'extracting' | 'done' | 'error' | 'cancelled';
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number;
+  error?: string;
+}
+
+export interface SttLocalStatus {
+  ready: boolean;
+  platform: string;
+  cpuCores: number;
+  defaultThreads: number;
+  installedEngine: {
+    id: string;
+    version: string;
+    installedAt: string;
+    exePath: string;
+  } | null;
+  engines: WhisperEngineInfo[];
+  models: WhisperModelInfo[];
+  diskUsage: {
+    engineBytes: number;
+    modelsBytes: number;
+    totalBytes: number;
+  };
+  activeDownload: SttDownloadProgressEvent | null;
+  benchmarks: SttBenchmarkResult[];
+  settings: MeetingSettings;
+}
+
+export type MeetingStatus =
+  | 'recording'
+  | 'transcribing'
+  | 'summarizing'
+  | 'completed'
+  | 'pending'
+  | 'error';
+
+export interface MeetingTranscriptSegment {
+  seq: number;
+  text: string;
+  createdAt: string;
+}
+
+export interface MeetingSession {
+  id: string;
+  title: string;
+  mode: MeetingMode;
+  language: SttLanguage;
+  modelId: string;
+  status: MeetingStatus;
+  keepAudio: boolean;
+  pendingChunks: number;
+  completedChunks: number;
+  totalChunks: number;
+  lagSeconds: number;
+  transcribeProgress: number;
+  transcript: MeetingTranscriptSegment[];
+  summary: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MeetingStatusEvent {
+  meeting: MeetingSession;
+  canSwitchSmallerModel: boolean;
+  smallerModelId: string | null;
+  warning?: string | null;
+}
+
 export interface Settings {
   provider: ModelProvider;
   model: string;
@@ -1108,6 +1247,7 @@ export interface Settings {
   fallbackMode?: FallbackMode;
   fallbackChain?: ModelRef[];
   sitePresets?: SitePreset[];
+  meeting?: MeetingSettings;
 }
 
 export interface QueueItem {
@@ -1139,6 +1279,7 @@ export interface WorkspaceState {
   settings: Settings;
   browserSessions?: BrowserSessionInfo[];
   browserApprovals?: BrowserApprovalRequest[];
+  activeMeeting?: MeetingStatusEvent | null;
 }
 
 // Command Input DTOs
@@ -1240,6 +1381,7 @@ export interface SettingsInput {
   fallbackMode?: FallbackMode;
   fallbackChain?: ModelRef[];
   sitePresets?: SitePreset[];
+  meeting?: Partial<MeetingSettings>;
 }
 
 export interface ApiErrorResponse {
@@ -1272,7 +1414,9 @@ export type ServerEvent =
   | { type: 'browser-frame'; payload: BrowserFrameEvent }
   | { type: 'browser-approval'; payload: BrowserApprovalRequest }
   | { type: 'browser-approval-resolved'; payload: BrowserApprovalResolvedEvent }
-  | { type: 'browser-takeover'; payload: BrowserTakeoverEvent };
+  | { type: 'browser-takeover'; payload: BrowserTakeoverEvent }
+  | { type: 'stt-download-progress'; payload: SttDownloadProgressEvent }
+  | { type: 'meeting-status'; payload: MeetingStatusEvent };
 
 export interface OnboardingStatus {
   hostname: string;

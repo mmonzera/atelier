@@ -361,6 +361,12 @@ export class AgentRuntime {
     return result;
   }
 
+  public async summarizeText(input: string, signal: AbortSignal): Promise<string | null> {
+    if (!this.runner.summarize) return null;
+    const settings = this.store.getSettings();
+    return this.runner.summarize(settings.provider, settings.model, input, signal);
+  }
+
   /** Stops every running turn (and clears their queues) but keeps the runtime usable. */
   public async stopAll(): Promise<void> {
     for (const controller of this.memorySummaries.values()) controller.abort();
