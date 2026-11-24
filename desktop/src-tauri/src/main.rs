@@ -38,6 +38,8 @@ struct Sidecar {
     hint_shown: AtomicBool,
     /// Meeting audio being recorded (at most one meeting at a time).
     recorder: Mutex<Option<meeting_audio::Recorder>>,
+    /// Level meter shown in Settings while the user picks a microphone.
+    meter: Mutex<Option<meeting_audio::Meter>>,
     /// Serialises start/stop requests so a stop never overtakes a start that is still opening devices.
     audio_ops: Mutex<()>,
     /// Watch for Zoom / Teams / browser meetings; the server switches it from Settings.
@@ -59,6 +61,12 @@ fn server_out(app: &AppHandle) -> meeting_audio::Out {
     Arc::new(move |line: String| app.state::<Sidecar>().send(&line))
 }
 
+/// The microphone / speaker the user picked (`null` = follow the Windows defaults).
+fn devices_from(v: &serde_json::Value) -> meeting_audio::Devices {
+    let pick = |key: &str| v[key].as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+    meeting_audio::Devices { mic: pick("micDevice"), speaker: pick("speakerDevice") }
+}
+
 /// `ATELIER_AUDIO {"action":"start"|"stop",…}` from the server. Runs off the stdout reader
 /// thread because opening devices and flushing the last chunk take a moment.
 fn handle_audio(app: &AppHandle, v: serde_json::Value) {
@@ -74,7 +82,8 @@ fn handle_audio(app: &AppHandle, v: serde_json::Value) {
                     rec.stop();
                 }
                 let dir = PathBuf::from(v["dir"].as_str().unwrap_or_default());
-                match meeting_audio::Recorder::start(id.clone(), dir, server_out(&app)) {
+                let devices = devices_from(&v);
+                match meeting_audio::Recorder::start(id.clone(), dir, server_out(&app), devices) {
                     Ok((rec, warnings)) => {
                         *state.recorder.lock().unwrap() = Some(rec);
                         state.send(&format!("audio-started {}", json!({ "meetingId": id })));
@@ -104,6 +113,23 @@ fn handle_audio(app: &AppHandle, v: serde_json::Value) {
                     rec.stop();
                 }
                 state.send(&format!("audio-stopped {}", json!({ "meetingId": id })));
+            }
+            Some("list-devices") => {
+                let request_id = v["requestId"].as_str().unwrap_or_default().to_string();
+                let mut devices = meeting_audio::list_devices();
+                devices["requestId"] = json!(request_id);
+                state.send(&format!("audio-devices {devices}"));
+            }
+            Some("meter") => {
+                // Replace a running meter; `enabled: false` only stops it.
+                let previous = state.meter.lock().unwrap().take();
+                if let Some(m) = previous {
+                    m.stop();
+                }
+                if v["enabled"].as_bool().unwrap_or(false) {
+                    let meter = meeting_audio::Meter::start(devices_from(&v), server_out(&app));
+                    *state.meter.lock().unwrap() = Some(meter);
+                }
             }
             Some(action @ ("pause" | "resume")) => {
                 if let Some(rec) = state.recorder.lock().unwrap().as_ref() {
@@ -274,6 +300,10 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         let recorder = state.recorder.lock().unwrap().take();
         if let Some(rec) = recorder {
             rec.stop();
+        }
+        let meter = state.meter.lock().unwrap().take();
+        if let Some(m) = meter {
+            m.stop();
         }
         // Server exited on its own (crash): tell the user instead of leaving a blank window.
         if !handle.state::<Sidecar>().quitting.load(Ordering::SeqCst) {

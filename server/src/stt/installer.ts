@@ -6,6 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
   MeetingSettings,
+  SpeakerEngineStatus,
   SttBenchmarkResult,
   SttDownloadProgressEvent,
   SttLocalStatus,
@@ -49,14 +50,31 @@ interface InstalledModelManifest {
   installedAt: string;
 }
 
+interface InstalledSpeakerEngineManifest {
+  version: string;
+  exeRelPath: string;
+  segmentationRelPath: string;
+  embeddingRelPath: string;
+  sizeBytes: number;
+  installedAt: string;
+}
+
 interface SttManifest {
   engine: InstalledEngineManifest | null;
   models: Record<string, InstalledModelManifest>;
   benchmarks: SttBenchmarkResult[];
+  speakers: InstalledSpeakerEngineManifest | null;
 }
 
 function emptyManifest(): SttManifest {
-  return { engine: null, models: {}, benchmarks: [] };
+  return { engine: null, models: {}, benchmarks: [], speakers: null };
+}
+
+/** Where the installed speaker engine and its two models are. */
+export interface SpeakerEnginePaths {
+  exe: string;
+  segmentationModel: string;
+  embeddingModel: string;
 }
 
 function dirSizeBytes(dirPath: string): number {
@@ -130,6 +148,7 @@ export class SttInstaller {
   private readonly sttDir: string;
   private readonly enginesDir: string;
   private readonly modelsDir: string;
+  private readonly speakersDir: string;
   private readonly manifestPath: string;
   private catalog: SttCatalog;
   private readonly onProgress?: (event: SttDownloadProgressEvent) => void;
@@ -147,6 +166,7 @@ export class SttInstaller {
     this.sttDir = path.join(opts.dataDir, 'stt');
     this.enginesDir = path.join(this.sttDir, 'engine');
     this.modelsDir = path.join(this.sttDir, 'models');
+    this.speakersDir = path.join(this.sttDir, 'speakers');
     this.manifestPath = path.join(this.sttDir, 'manifest.json');
     this.catalog = opts.catalog ?? DEFAULT_STT_CATALOG;
     this.onProgress = opts.onProgress;
@@ -168,6 +188,7 @@ export class SttInstaller {
         engine: raw.engine ?? null,
         models: raw.models && typeof raw.models === 'object' ? raw.models : {},
         benchmarks: Array.isArray(raw.benchmarks) ? raw.benchmarks : [],
+        speakers: raw.speakers ?? null,
       };
     } catch {
       return emptyManifest();
@@ -258,6 +279,7 @@ export class SttInstaller {
 
     const engineBytes = dirSizeBytes(this.enginesDir);
     const modelsBytes = dirSizeBytes(this.modelsDir);
+    const speakersBytes = dirSizeBytes(this.speakersDir);
     const activeModelInstalled = this.getModelPath(meetingSettings.activeModelId) !== null;
 
     return {
@@ -271,12 +293,45 @@ export class SttInstaller {
       diskUsage: {
         engineBytes,
         modelsBytes,
-        totalBytes: engineBytes + modelsBytes,
+        speakersBytes,
+        totalBytes: engineBytes + modelsBytes + speakersBytes,
       },
+      speakerEngine: this.getSpeakerEngineStatus(speakersBytes),
       activeDownload: this.activeDownload ? { ...this.activeDownload.event } : null,
       benchmarks: manifest.benchmarks,
       settings: meetingSettings,
     };
+  }
+
+  private getSpeakerEngineStatus(installedBytes: number): SpeakerEngineStatus {
+    const entry = this.catalog.speakers;
+    const manifest = this.readManifest();
+    const installed = this.getSpeakerPaths() !== null;
+    return {
+      installed,
+      version: installed ? (manifest.speakers?.version ?? null) : null,
+      sizeBytes: entry ? entry.engine.sizeBytes + entry.segmentation.sizeBytes + entry.embedding.sizeBytes : 0,
+      host: entry?.engine.host ?? 'github.com',
+      installedAt: installed ? (manifest.speakers?.installedAt ?? null) : null,
+      installedBytes,
+    };
+  }
+
+  /** Whether this catalog/platform can install the speaker engine at all. */
+  public speakerEngineSupported(): boolean {
+    const entry = this.catalog.speakers;
+    return Boolean(entry && (entry.platform === getPlatformKey() || entry.platform === 'any'));
+  }
+
+  public getSpeakerPaths(): SpeakerEnginePaths | null {
+    const m = this.readManifest().speakers;
+    if (!m) return null;
+    const exe = path.join(this.speakersDir, 'engine', m.version, m.exeRelPath);
+    const segmentationModel = path.join(this.speakersDir, 'models', m.segmentationRelPath);
+    const embeddingModel = path.join(this.speakersDir, 'models', m.embeddingRelPath);
+    return [exe, segmentationModel, embeddingModel].every((f) => fs.existsSync(f))
+      ? { exe, segmentationModel, embeddingModel }
+      : null;
   }
 
   private emitProgress(event: SttDownloadProgressEvent): void {
@@ -287,7 +342,7 @@ export class SttInstaller {
   }
 
   private async downloadAndVerify(opts: {
-    kind: 'engine' | 'model';
+    kind: 'engine' | 'model' | 'diarization';
     id: string;
     url: string;
     expectedSha256: string;
@@ -538,14 +593,7 @@ export class SttInstaller {
 
     try {
       fs.mkdirSync(stagingDir, { recursive: true });
-      // Use Windows' bsdtar explicitly: a GNU tar earlier in PATH (e.g. Git) treats "C:" as a remote host.
-      const tarBin =
-        process.platform === 'win32'
-          ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
-          : 'tar';
-      await execFileAsync(tarBin, ['-xf', archivePath, '-C', stagingDir], {
-        windowsHide: true,
-      });
+      await this.extractArchive(archivePath, stagingDir);
 
       const directCandidate = path.join(stagingDir, entry.exe);
       let resolvedExe = fs.existsSync(directCandidate) ? directCandidate : null;
@@ -598,6 +646,158 @@ export class SttInstaller {
       );
     }
   }
+
+  /** Unpacks a .zip / .tar.bz2 with the system's tar. */
+  private async extractArchive(archivePath: string, intoDir: string): Promise<void> {
+    // Use Windows' bsdtar explicitly: a GNU tar earlier in PATH (e.g. Git) treats "C:" as a remote host.
+    const tarBin =
+      process.platform === 'win32'
+        ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+        : 'tar';
+    await execFileAsync(tarBin, ['-xf', archivePath, '-C', intoDir], { windowsHide: true });
+  }
+
+  /**
+   * Installs the speaker engine: the program, the segmentation model and the voice-embedding
+   * model, each downloaded from its catalog URL and checked against its SHA-256.
+   */
+  public async installSpeakerEngine(): Promise<InstalledSpeakerEngineManifest> {
+    const entry = this.catalog.speakers;
+    if (!entry || !this.speakerEngineSupported()) {
+      throw new SttInstallerError(
+        'speakers_unsupported',
+        'Telling speakers apart is not available for this platform.',
+        400,
+      );
+    }
+    const engineDir = path.join(this.speakersDir, 'engine', entry.version);
+    const modelsDir = path.join(this.speakersDir, 'models');
+    fs.mkdirSync(modelsDir, { recursive: true });
+    const downloads = path.join(this.speakersDir, '.downloads');
+    const staging = path.join(this.speakersDir, `.staging-${Date.now()}`);
+    const extractFail = (err: unknown): never => {
+      if (err instanceof SttInstallerError) throw err;
+      throw new SttInstallerError(
+        'extract_failed',
+        err instanceof Error ? err.message : 'Failed to unpack the speaker engine.',
+        500,
+      );
+    };
+
+    try {
+      // 1. The program.
+      const engineArchive = path.join(downloads, 'engine.tar.bz2');
+      await this.downloadAndVerify({
+        kind: 'diarization',
+        id: 'engine',
+        url: entry.engine.url,
+        expectedSha256: entry.engine.sha256,
+        expectedSizeBytes: entry.engine.sizeBytes,
+        destPath: engineArchive,
+      });
+      this.emitProgress({
+        kind: 'diarization',
+        id: 'engine',
+        status: 'extracting',
+        downloadedBytes: entry.engine.sizeBytes,
+        totalBytes: entry.engine.sizeBytes,
+        percent: 99,
+      });
+      fs.mkdirSync(path.join(staging, 'engine'), { recursive: true });
+      await this.extractArchive(engineArchive, path.join(staging, 'engine')).catch(extractFail);
+      const exe = findFileRecursive(path.join(staging, 'engine'), entry.engine.exe);
+      if (!exe) {
+        throw new SttInstallerError('extract_failed', `Archive did not contain ${entry.engine.exe}.`, 500);
+      }
+      // The program needs onnxruntime.dll beside it; some packages only ship it in lib/.
+      const exeDir = path.dirname(exe);
+      const libDir = path.join(path.dirname(exeDir), 'lib');
+      if (fs.existsSync(libDir)) {
+        for (const name of fs.readdirSync(libDir)) {
+          if (name.toLowerCase().endsWith('.dll') && !fs.existsSync(path.join(exeDir, name))) {
+            fs.copyFileSync(path.join(libDir, name), path.join(exeDir, name));
+          }
+        }
+      }
+      fs.rmSync(engineArchive, { force: true });
+
+      // 2. Who speaks when.
+      const segArchive = path.join(downloads, 'segmentation.tar.bz2');
+      await this.downloadAndVerify({
+        kind: 'diarization',
+        id: 'segmentation',
+        url: entry.segmentation.url,
+        expectedSha256: entry.segmentation.sha256,
+        expectedSizeBytes: entry.segmentation.sizeBytes,
+        destPath: segArchive,
+      });
+      fs.mkdirSync(path.join(staging, 'segmentation'), { recursive: true });
+      await this.extractArchive(segArchive, path.join(staging, 'segmentation')).catch(extractFail);
+      const segModel = findFileRecursive(path.join(staging, 'segmentation'), entry.segmentation.modelFile);
+      if (!segModel) {
+        throw new SttInstallerError(
+          'extract_failed',
+          `Archive did not contain ${entry.segmentation.modelFile}.`,
+          500,
+        );
+      }
+      fs.rmSync(segArchive, { force: true });
+
+      // 3. Who sounds like whom.
+      await this.downloadAndVerify({
+        kind: 'diarization',
+        id: 'embedding',
+        url: entry.embedding.url,
+        expectedSha256: entry.embedding.sha256,
+        expectedSizeBytes: entry.embedding.sizeBytes,
+        destPath: path.join(modelsDir, entry.embedding.filename),
+      });
+
+      // Everything is in: move it to its final place.
+      const exeRel = path.relative(path.join(staging, 'engine'), exe);
+      const segRel = path.join('segmentation', path.relative(path.join(staging, 'segmentation'), segModel));
+      fs.rmSync(engineDir, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(engineDir), { recursive: true });
+      fs.renameSync(path.join(staging, 'engine'), engineDir);
+      const segFinal = path.join(modelsDir, 'segmentation');
+      fs.rmSync(segFinal, { recursive: true, force: true });
+      fs.renameSync(path.join(staging, 'segmentation'), segFinal);
+
+      const installed: InstalledSpeakerEngineManifest = {
+        version: entry.version,
+        exeRelPath: exeRel,
+        segmentationRelPath: segRel,
+        embeddingRelPath: entry.embedding.filename,
+        sizeBytes: entry.engine.sizeBytes + entry.segmentation.sizeBytes + entry.embedding.sizeBytes,
+        installedAt: new Date().toISOString(),
+      };
+      const manifest = this.readManifest();
+      manifest.speakers = installed;
+      this.writeManifest(manifest);
+      this.emitProgress({
+        kind: 'diarization',
+        id: 'all',
+        status: 'done',
+        downloadedBytes: installed.sizeBytes,
+        totalBytes: installed.sizeBytes,
+        percent: 100,
+      });
+      return installed;
+    } finally {
+      fs.rmSync(downloads, { recursive: true, force: true });
+      fs.rmSync(staging, { recursive: true, force: true });
+    }
+  }
+
+  public deleteSpeakerEngine(): boolean {
+    const manifest = this.readManifest();
+    const had = Boolean(manifest.speakers) || fs.existsSync(this.speakersDir);
+    fs.rmSync(this.speakersDir, { recursive: true, force: true });
+    manifest.speakers = null;
+    this.writeManifest(manifest);
+    return had;
+  }
+
 
   public async downloadModel(modelId: string): Promise<InstalledModelManifest> {
     const entry: WhisperModelCatalogEntry | undefined = getModelById(modelId, this.catalog);

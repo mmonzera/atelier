@@ -361,10 +361,22 @@ export class AgentRuntime {
     return result;
   }
 
-  public async summarizeText(input: string, signal: AbortSignal): Promise<string | null> {
+  /**
+   * One-off text generation with the app's default provider and model, or with `override`
+   * (e.g. meeting notes written by a cheaper or local model). `systemPrompt` replaces the
+   * built-in summary instructions.
+   */
+  public async summarizeText(
+    input: string,
+    signal: AbortSignal,
+    override?: { provider?: ModelProvider | null; model?: string | null; systemPrompt?: string },
+  ): Promise<string | null> {
     if (!this.runner.summarize) return null;
     const settings = this.store.getSettings();
-    return this.runner.summarize(settings.provider, settings.model, input, signal);
+    const provider = override?.provider ?? settings.provider;
+    // A model belongs to its provider: only reuse the default model when the provider is the default.
+    const model = override?.provider ? (override.model ?? undefined) : settings.model;
+    return this.runner.summarize(provider, model, input, signal, override?.systemPrompt ? { systemPrompt: override.systemPrompt } : undefined);
   }
 
   /** Stops every running turn (and clears their queues) but keeps the runtime usable. */

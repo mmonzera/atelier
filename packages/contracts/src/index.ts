@@ -1105,6 +1105,18 @@ export interface MeetingSettings {
   detectMeetingApps: boolean;
   /** App ids ("zoom", "teams", "browser", …) the user said not to ask about again. */
   ignoredMeetingApps: string[];
+  /** Label who said what ("Me" vs "Others", and who the others are once the speaker engine is installed). */
+  speakerLabels: boolean;
+  /** Input/output device names to record; null follows the Windows defaults. */
+  micDevice: string | null;
+  speakerDevice: string | null;
+  /** Who writes the notes: null follows the app's default provider/model. */
+  notesProvider: ModelProvider | null;
+  notesModel: string | null;
+  /** Language of the notes: follow the transcript, or force one. */
+  notesLanguage: SttLanguage;
+  /** Own instructions for the layout of the notes; empty uses the built-in template. */
+  notesTemplate: string;
 }
 
 export const DEFAULT_MEETING_SETTINGS: MeetingSettings = {
@@ -1117,7 +1129,41 @@ export const DEFAULT_MEETING_SETTINGS: MeetingSettings = {
   remindParticipants: true,
   detectMeetingApps: true,
   ignoredMeetingApps: [],
+  speakerLabels: true,
+  micDevice: null,
+  speakerDevice: null,
+  notesProvider: null,
+  notesModel: null,
+  notesLanguage: 'auto',
+  notesTemplate: '',
 };
+
+/** An audio device the desktop shell can record from (inputs) or capture the sound of (outputs). */
+export interface AudioDeviceInfo {
+  name: string;
+  isDefault: boolean;
+}
+
+export interface AudioDevicesInfo {
+  inputs: AudioDeviceInfo[];
+  outputs: AudioDeviceInfo[];
+}
+
+/** Live loudness (RMS, 0..1) of the chosen microphone and speaker while the level meter is on. */
+export interface MeetingMeterEvent {
+  mic: number;
+  speaker: number;
+}
+
+export interface SpeakerEngineStatus {
+  installed: boolean;
+  version: string | null;
+  /** Download size of everything (engine + both models). */
+  sizeBytes: number;
+  host: string;
+  installedAt: string | null;
+  installedBytes: number;
+}
 
 /** A meeting app started or stopped using the microphone (detected by the desktop shell). */
 export interface MeetingAppEvent {
@@ -1173,7 +1219,7 @@ export interface SttBenchmarkResult {
 }
 
 export interface SttDownloadProgressEvent {
-  kind: 'engine' | 'model';
+  kind: 'engine' | 'model' | 'diarization';
   id: string;
   status: 'downloading' | 'verifying' | 'extracting' | 'done' | 'error' | 'cancelled';
   downloadedBytes: number;
@@ -1198,8 +1244,12 @@ export interface SttLocalStatus {
   diskUsage: {
     engineBytes: number;
     modelsBytes: number;
+    /** Speaker engine + its models. */
+    speakersBytes: number;
     totalBytes: number;
   };
+  /** The optional engine that tells the other participants apart (sherpa-onnx). */
+  speakerEngine: SpeakerEngineStatus;
   activeDownload: SttDownloadProgressEvent | null;
   benchmarks: SttBenchmarkResult[];
   settings: MeetingSettings;
@@ -1208,15 +1258,38 @@ export interface SttLocalStatus {
 export type MeetingStatus =
   | 'recording'
   | 'transcribing'
+  | 'identifying'
   | 'summarizing'
   | 'completed'
   | 'pending'
   | 'error';
 
 export interface MeetingTranscriptSegment {
+  /** Sequence number of the audio chunk this sentence came from. */
   seq: number;
+  /** Position inside the chunk (a chunk holds several sentences). */
+  idx: number;
   text: string;
   createdAt: string;
+  /** Position on the recording timeline (pauses excluded), null for meetings from before timestamps. */
+  startMs: number | null;
+  endMs: number | null;
+  /** Who said it: a MeetingSpeaker id, or null when unknown. */
+  speakerId: string | null;
+}
+
+export interface MeetingSpeaker {
+  /** "me", "others" (before the speaker engine ran) or "spk_1", "spk_2", … */
+  id: string;
+  /** Automatic name ("Me", "Speaker 2"). */
+  label: string;
+  /** Name the user gave, if any. Shown in place of the label. */
+  name: string | null;
+  color: AgentColor;
+  isMe: boolean;
+  segmentCount: number;
+  /** A short audio sample can be played (the audio is still kept). */
+  hasSample: boolean;
 }
 
 export interface MeetingSession {
@@ -1237,6 +1310,11 @@ export interface MeetingSession {
   error: string | null;
   createdAt: string;
   updatedAt: string;
+  speakers: MeetingSpeaker[];
+  /** The speaker engine found voices and the user has not finished naming them. */
+  speakersPending: boolean;
+  /** The recorded audio is still on disk (kept for naming speakers, or by the "keep audio" setting). */
+  audioKept: boolean;
   /** Recording is paused (audio is not kept). */
   paused: boolean;
   /** Total time spent paused before `pausedSince`, ms. Recorded time = now − createdAt − paused time. */
@@ -1256,6 +1334,8 @@ export interface MeetingStatusEvent {
   canSwitchSmallerModel: boolean;
   smallerModelId: string | null;
   warning?: string | null;
+  /** Machine-readable cause of `warning` (e.g. "mic_silent") so the UI can offer the right fix. */
+  warningCode?: string | null;
 }
 
 export interface Settings {
@@ -1450,6 +1530,7 @@ export type ServerEvent =
   | { type: 'meeting-status'; payload: MeetingStatusEvent }
   | { type: 'meeting-app'; payload: MeetingAppEvent }
   | { type: 'meeting-level'; payload: MeetingLevelEvent }
+  | { type: 'meeting-meter'; payload: MeetingMeterEvent }
   | { type: 'meeting-removed'; payload: { id: string } };
 
 export interface OnboardingStatus {

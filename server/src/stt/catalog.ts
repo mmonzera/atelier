@@ -23,9 +23,30 @@ export interface WhisperModelCatalogEntry {
   recommended?: boolean;
 }
 
+export interface SpeakerEngineAsset {
+  url: string;
+  host: string;
+  sha256: string;
+  sizeBytes: number;
+}
+
+/**
+ * The engine that tells voices apart (sherpa-onnx offline speaker diarization): the program,
+ * a segmentation model (who speaks when) and a voice-embedding model (who sounds alike).
+ */
+export interface SpeakerEngineCatalog {
+  version: string;
+  platform: string;
+  engine: SpeakerEngineAsset & { exe: string };
+  segmentation: SpeakerEngineAsset & { modelFile: string };
+  embedding: SpeakerEngineAsset & { filename: string };
+}
+
 export interface SttCatalog {
   engines: readonly WhisperEngineCatalogEntry[];
   models: readonly WhisperModelCatalogEntry[];
+  /** Optional: without it the app only separates "me" from "others". */
+  speakers?: SpeakerEngineCatalog;
 }
 
 export const WHISPER_ENGINES: readonly WhisperEngineCatalogEntry[] = [
@@ -99,9 +120,42 @@ export const WHISPER_MODELS: readonly WhisperModelCatalogEntry[] = [
   },
 ];
 
+/**
+ * sherpa-onnx v2.0.3 (Apache-2.0). SHA-256 values: GitHub's release digests for the engine and
+ * the embedding model; the segmentation archive had none, so it was hashed after download.
+ * The segmentation model is MIT-licensed (pyannote/segmentation-3.0, converted by k2-fsa).
+ * Not used on purpose: sherpa-onnx-reverb-diarization-v1 (non-commercial licence).
+ */
+export const SPEAKER_ENGINE: SpeakerEngineCatalog = {
+  version: 'sherpa-onnx-v2.0.3',
+  platform: 'win32-x64',
+  engine: {
+    url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.3/sherpa-onnx-v2.0.3-win-x64-shared-MD-Release-no-tts.tar.bz2',
+    host: 'github.com',
+    sha256: '88adaac47d3b3fe5b341634fd17f8287340d1b99e23ba1b5a57ffc0a2a38d0bc',
+    sizeBytes: 26028350,
+    exe: 'sherpa-onnx-offline-speaker-diarization.exe',
+  },
+  segmentation: {
+    url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2',
+    host: 'github.com',
+    sha256: '24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488',
+    sizeBytes: 6958444,
+    modelFile: 'model.int8.onnx',
+  },
+  embedding: {
+    url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx',
+    host: 'github.com',
+    sha256: 'f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498',
+    sizeBytes: 39593762,
+    filename: '3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx',
+  },
+};
+
 export const DEFAULT_STT_CATALOG: SttCatalog = {
   engines: WHISPER_ENGINES,
   models: WHISPER_MODELS,
+  speakers: SPEAKER_ENGINE,
 };
 
 export function getPlatformKey(): string {

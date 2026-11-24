@@ -162,6 +162,30 @@ export class AtelierDb {
         PRIMARY KEY (meeting_id, seq)
       );
 
+      -- One row per transcribed sentence, on the recording timeline (pauses excluded).
+      CREATE TABLE IF NOT EXISTS meeting_segments (
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        idx INTEGER NOT NULL,
+        start_ms INTEGER NOT NULL,
+        end_ms INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        side TEXT,
+        speaker_id TEXT,
+        PRIMARY KEY (meeting_id, seq, idx)
+      );
+
+      CREATE TABLE IF NOT EXISTS meeting_speakers (
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        name TEXT,
+        color TEXT NOT NULL,
+        is_me INTEGER NOT NULL DEFAULT 0,
+        sort INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (meeting_id, id)
+      );
+
       -- Machine-local tables: never exported in backups, never overwritten on import.
       CREATE TABLE IF NOT EXISTS app_lock (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -176,6 +200,16 @@ export class AtelierDb {
 
     this.migrateGlobalAgentsSchema();
     this.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_messages_scope_agent ON messages(project_id, agent_id, created_at)');
+    // Chunks recorded before timestamps existed have no position on the timeline.
+    this.ensureColumn('meeting_chunks', 'start_ms', 'INTEGER');
+    this.ensureColumn('meeting_chunks', 'energy_path', 'TEXT');
+  }
+
+  private ensureColumn(table: string, column: string, type: string): void {
+    const columns = this.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === column)) {
+      this.sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
   }
 
   private initMessageFts(): boolean {

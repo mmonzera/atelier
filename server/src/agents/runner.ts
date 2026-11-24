@@ -30,5 +30,6 @@ export interface TurnCallbacks {
 
 export interface AgentRunner {
   run(turn: Turn, cb: TurnCallbacks): Promise<{ finalText: string }>;
-  summarize?(provider: ModelProvider, model: string | undefined, input: string, signal: AbortSignal): Promise<string>;
+  /** `opts.systemPrompt` replaces the built-in (agent memory) summary instructions, e.g. for meeting notes. */
+  summarize?(provider: ModelProvider, model: string | undefined, input: string, signal: AbortSignal, opts?: { systemPrompt?: string }): Promise<string>;
 }

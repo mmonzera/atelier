@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import net from 'node:net';
 import os from 'node:os';
 import type { SttLanguage } from '@atelier/contracts';
-import type { SttProvider } from '../meetings/stt.js';
+import type { SttProvider, SttSegment } from '../meetings/stt.js';
 
 export class WhisperFatalCrashError extends Error {
   constructor(message: string) {
@@ -100,7 +100,7 @@ export class LocalWhisperProvider implements SttProvider {
   public transcribe(
     wav: Buffer,
     opts: { language: 'auto' | 'id' | 'en'; prompt?: string; signal: AbortSignal },
-  ): Promise<{ text: string }> {
+  ): Promise<{ text: string; segments?: SttSegment[] }> {
     return this.enqueueOp(async () => {
       this.clearIdleTimer();
       this.inFlight = true;
@@ -111,9 +111,9 @@ export class LocalWhisperProvider implements SttProvider {
           }
           try {
             await this.ensureStarted();
-            const text = await this.sendInference(wav, opts);
+            const result = await this.sendInference(wav, opts);
             this.consecutiveCrashes = 0;
-            return { text };
+            return result;
           } catch (err) {
             if (opts.signal.aborted) {
               throw err;
@@ -284,7 +284,7 @@ export class LocalWhisperProvider implements SttProvider {
   private async sendInference(
     wav: Buffer,
     opts: { language: 'auto' | 'id' | 'en'; prompt?: string; signal: AbortSignal },
-  ): Promise<string> {
+  ): Promise<{ text: string; segments?: SttSegment[] }> {
     if (!this.isRunning() || !this.port) {
       throw new Error('Whisper server exited before inference.');
     }
@@ -301,7 +301,8 @@ export class LocalWhisperProvider implements SttProvider {
     try {
       const form = new FormData();
       form.set('file', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'chunk.wav');
-      form.set('response_format', 'json');
+      // verbose_json adds the sentences with start/end seconds (whisper.cpp server).
+      form.set('response_format', 'verbose_json');
       form.set('temperature', '0');
       if (opts.language && opts.language !== 'auto') {
         form.set('language', opts.language);
@@ -320,8 +321,22 @@ export class LocalWhisperProvider implements SttProvider {
         const body = await res.text().catch(() => '');
         throw new Error(`Whisper inference failed (${res.status}): ${body.slice(0, 200)}`);
       }
-      const data = (await res.json()) as { text?: string };
-      return typeof data.text === 'string' ? data.text.trim() : '';
+      const data = (await res.json()) as {
+        text?: string;
+        segments?: Array<{ start?: unknown; end?: unknown; text?: unknown }>;
+      };
+      const segments: SttSegment[] = [];
+      for (const seg of Array.isArray(data.segments) ? data.segments : []) {
+        const text = typeof seg.text === 'string' ? seg.text.trim() : '';
+        if (!text || typeof seg.start !== 'number' || typeof seg.end !== 'number') continue;
+        segments.push({
+          startMs: Math.max(0, Math.round(seg.start * 1000)),
+          endMs: Math.max(0, Math.round(seg.end * 1000)),
+          text,
+        });
+      }
+      const text = typeof data.text === 'string' ? data.text.trim() : segments.map((s) => s.text).join(' ');
+      return segments.length > 0 ? { text, segments } : { text };
     } finally {
       opts.signal.removeEventListener('abort', onCallerAbort);
       child.off('exit', onChildExit);

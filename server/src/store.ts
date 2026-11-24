@@ -493,6 +493,18 @@ export class AtelierStore {
       ...(typeof raw.noticeTextEn === 'string' && raw.noticeTextEn.trim()
         ? { noticeTextEn: raw.noticeTextEn }
         : {}),
+      speakerLabels: typeof raw.speakerLabels === 'boolean' ? raw.speakerLabels : base.speakerLabels,
+      micDevice: typeof raw.micDevice === 'string' && raw.micDevice.trim() ? raw.micDevice.trim() : null,
+      speakerDevice:
+        typeof raw.speakerDevice === 'string' && raw.speakerDevice.trim() ? raw.speakerDevice.trim() : null,
+      notesProvider:
+        raw.notesProvider &&
+        ['claude', 'openai', 'antigravity', 'deepseek', 'opencode', 'openrouter'].includes(raw.notesProvider)
+          ? raw.notesProvider
+          : null,
+      notesModel: typeof raw.notesModel === 'string' && raw.notesModel.trim() ? raw.notesModel.trim() : null,
+      notesLanguage: raw.notesLanguage === 'id' || raw.notesLanguage === 'en' ? raw.notesLanguage : 'auto',
+      notesTemplate: typeof raw.notesTemplate === 'string' ? raw.notesTemplate.slice(0, 4000) : '',
       detectMeetingApps:
         typeof raw.detectMeetingApps === 'boolean' ? raw.detectMeetingApps : base.detectMeetingApps,
       ignoredMeetingApps: Array.isArray(raw.ignoredMeetingApps)

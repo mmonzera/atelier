@@ -245,15 +245,53 @@ where
         .map_err(|e| e.to_string())
 }
 
-/// Opens the default microphone, or the default speakers in loopback mode.
+/// Devices to record: `None` follows the Windows defaults.
+#[derive(Clone, Default, Debug)]
+pub struct Devices {
+    pub mic: Option<String>,
+    pub speaker: Option<String>,
+}
+
+fn dev_name(d: &cpal::Device) -> String {
+    d.description().map(|x| x.name().to_string()).unwrap_or_default()
+}
+
+/// The device called `wanted`, else the Windows default (with a warning when the name is gone).
+fn pick_device(host: &cpal::Host, loopback: bool, wanted: Option<&str>) -> (Option<cpal::Device>, Option<String>) {
+    let default = || if loopback { host.default_output_device() } else { host.default_input_device() };
+    let Some(name) = wanted.map(str::trim).filter(|n| !n.is_empty()) else {
+        return (default(), None);
+    };
+    let all: Vec<cpal::Device> = if loopback {
+        host.output_devices().map(|i| i.collect()).unwrap_or_default()
+    } else {
+        host.input_devices().map(|i| i.collect()).unwrap_or_default()
+    };
+    if let Some(found) = all.into_iter().find(|d| dev_name(d) == name) {
+        return (Some(found), None);
+    }
+    (default(), Some(format!("Perangkat \"{name}\" tidak ditemukan; memakai default Windows.")))
+}
+
+pub struct OpenedSource {
+    /// Owned only to keep the device open: audio stops when the stream is dropped.
+    #[allow(dead_code)]
+    pub stream: cpal::Stream,
+    pub name: String,
+    pub warning: Option<String>,
+}
+
+/// Opens a microphone, or a speaker in loopback mode (what the other participants say).
 fn open_source(
     host: &cpal::Host,
     loopback: bool,
+    wanted: Option<&str>,
     buf: Buffer,
     on_error: Arc<dyn Fn(String) + Send + Sync>,
-) -> Result<cpal::Stream, String> {
-    let device = if loopback { host.default_output_device() } else { host.default_input_device() }
-        .ok_or_else(|| if loopback { "tidak ada perangkat suara" } else { "tidak ada mikrofon" }.to_string())?;
+) -> Result<OpenedSource, String> {
+    let (device, warning) = pick_device(host, loopback, wanted);
+    let device =
+        device.ok_or_else(|| if loopback { "tidak ada perangkat suara" } else { "tidak ada mikrofon" }.to_string())?;
     let supported = if loopback { device.default_output_config() } else { device.default_input_config() }
         .map_err(|e| e.to_string())?;
     let format = supported.sample_format();
@@ -265,7 +303,185 @@ fn open_source(
         other => Err(format!("format audio {other} tidak didukung")),
     }?;
     stream.play().map_err(|e| e.to_string())?;
-    Ok(stream)
+    Ok(OpenedSource { stream, name: dev_name(&device), warning })
+}
+
+/// Input and output devices, for the pickers in Settings.
+pub fn list_devices() -> serde_json::Value {
+    let host = cpal::default_host();
+    let default_in = host.default_input_device().map(|d| dev_name(&d));
+    let default_out = host.default_output_device().map(|d| dev_name(&d));
+    let entries = |devices: Vec<cpal::Device>, default: &Option<String>| -> Vec<serde_json::Value> {
+        let mut seen = Vec::<String>::new();
+        let mut out = Vec::new();
+        for d in devices {
+            let name = dev_name(&d);
+            if name.is_empty() || seen.contains(&name) {
+                continue;
+            }
+            out.push(json!({ "name": name, "isDefault": default.as_deref() == Some(name.as_str()) }));
+            seen.push(name);
+        }
+        out
+    };
+    let inputs = host.input_devices().map(|i| i.collect()).unwrap_or_default();
+    let outputs = host.output_devices().map(|i| i.collect()).unwrap_or_default();
+    json!({ "inputs": entries(inputs, &default_in), "outputs": entries(outputs, &default_out) })
+}
+
+fn rms_of(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    (samples.iter().map(|v| v * v).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+// ------------------------------------------------------------------------------- level meter
+
+/// Opens the chosen devices without recording, and reports their loudness ~8× a second, so the
+/// user can see in Settings which microphone really delivers sound.
+pub struct Meter {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Meter {
+    pub fn start(devices: Devices, out: Out) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let stop = stop.clone();
+            std::thread::Builder::new()
+                .name("meeting-meter".into())
+                .spawn(move || meter_run(devices, out, stop))
+                .ok()
+        };
+        Self { stop, thread }
+    }
+
+    pub fn stop(mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+fn meter_run(devices: Devices, out: Out, stop: Arc<AtomicBool>) {
+    let host = cpal::default_host();
+    let mic_buf: Buffer = Arc::new(Mutex::new(Vec::new()));
+    let sys_buf: Buffer = Arc::new(Mutex::new(Vec::new()));
+    let quiet: Arc<dyn Fn(String) + Send + Sync> = Arc::new(|_| {});
+    let mic = open_source(&host, false, devices.mic.as_deref(), mic_buf.clone(), quiet.clone());
+    let sys = open_source(&host, true, devices.speaker.as_deref(), sys_buf.clone(), quiet);
+    let mic_error = mic.as_ref().err().cloned();
+    let sys_error = sys.as_ref().err().cloned();
+    let mut first = true;
+    while !stop.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(120));
+        let take = |buf: &Buffer| -> Vec<f32> { buf.lock().map(|mut b| std::mem::take(&mut *b)).unwrap_or_default() };
+        let (m, s) = (take(&mic_buf), take(&sys_buf));
+        let mut payload = json!({ "mic": rms_of(&m), "speaker": rms_of(&s) });
+        if first {
+            first = false;
+            payload["micError"] = json!(mic_error);
+            payload["speakerError"] = json!(sys_error);
+            payload["micName"] = json!(mic.as_ref().ok().map(|o| o.name.clone()));
+            payload["speakerName"] = json!(sys.as_ref().ok().map(|o| o.name.clone()));
+        }
+        out(format!("audio-meter {payload}"));
+    }
+}
+
+// ------------------------------------------------------------------------------- energy
+
+/// Loudness of the microphone and of the laptop sound per 100 ms, along the recording timeline.
+/// Written next to every chunk so the server can tell "me" (loud mic) from "others" (loud laptop
+/// sound) for each sentence.
+const ENERGY_FRAME: usize = RATE_USIZE / 10;
+
+#[derive(Default)]
+pub struct Energy {
+    mic: Vec<f32>,
+    sys: Vec<f32>,
+    /// Absolute index of the first stored frame.
+    base: usize,
+    acc_mic: f64,
+    acc_sys: f64,
+    acc_n: usize,
+}
+
+impl Energy {
+    pub fn push(&mut self, mic: &[f32], sys: &[f32]) {
+        for (m, s) in mic.iter().zip(sys.iter()) {
+            self.acc_mic += f64::from(*m) * f64::from(*m);
+            self.acc_sys += f64::from(*s) * f64::from(*s);
+            self.acc_n += 1;
+            if self.acc_n == ENERGY_FRAME {
+                self.close_frame();
+            }
+        }
+    }
+
+    fn close_frame(&mut self) {
+        let n = self.acc_n.max(1) as f64;
+        self.mic.push((self.acc_mic / n).sqrt() as f32);
+        self.sys.push((self.acc_sys / n).sqrt() as f32);
+        self.acc_mic = 0.0;
+        self.acc_sys = 0.0;
+        self.acc_n = 0;
+    }
+
+    /// Closes the last, partly filled frame (when recording stops).
+    pub fn flush(&mut self) {
+        if self.acc_n > 0 {
+            self.close_frame();
+        }
+    }
+
+    /// Frames covering the samples `[start, end)`, then forgets everything before `end`.
+    pub fn take(&mut self, start: u64, end: u64) -> (Vec<f32>, Vec<f32>) {
+        let first = (start as usize / ENERGY_FRAME).max(self.base);
+        let last = (end as usize).div_ceil(ENERGY_FRAME);
+        let stored_end = self.base + self.mic.len();
+        let (a, b) = (first.min(stored_end), last.min(stored_end));
+        let round = |v: &[f32]| v.iter().map(|x| (x * 10_000.0).round() / 10_000.0).collect::<Vec<f32>>();
+        let result = if b > a {
+            (round(&self.mic[a - self.base..b - self.base]), round(&self.sys[a - self.base..b - self.base]))
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        // Keep the frame the next chunk may start in.
+        let forget_to = ((end as usize) / ENERGY_FRAME).min(stored_end);
+        if forget_to > self.base {
+            let drop_n = forget_to - self.base;
+            self.mic.drain(..drop_n);
+            self.sys.drain(..drop_n);
+            self.base = forget_to;
+        }
+        result
+    }
+}
+
+/// One-pole high-pass at ~80 Hz: removes the rumble and desk thumps of a microphone, which would
+/// otherwise count as "me talking" and make Whisper hear noise.
+#[derive(Default)]
+struct HighPass {
+    prev_in: f32,
+    prev_out: f32,
+}
+
+impl HighPass {
+    const ALPHA: f32 = 0.9696; // RC / (RC + 1/16000) with fc = 80 Hz
+
+    fn apply(&mut self, samples: &mut [f32]) {
+        for v in samples.iter_mut() {
+            let x = *v;
+            let y = Self::ALPHA * (self.prev_out + x - self.prev_in);
+            self.prev_in = x;
+            self.prev_out = y;
+            *v = y;
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------- recorder
@@ -281,7 +497,12 @@ pub struct Recorder {
 impl Recorder {
     /// Opens the devices and starts recording. Returns warnings (e.g. no microphone, but the
     /// laptop sound is recorded) to pass on once the server knows capture has started.
-    pub fn start(meeting_id: String, dir: PathBuf, out: Out) -> Result<(Self, Vec<String>), String> {
+    pub fn start(
+        meeting_id: String,
+        dir: PathBuf,
+        out: Out,
+        devices: Devices,
+    ) -> Result<(Self, Vec<String>), String> {
         fs::create_dir_all(&dir).map_err(|e| format!("Folder rekaman tidak bisa dibuat: {e}"))?;
         let stop = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
@@ -292,7 +513,7 @@ impl Recorder {
             let id = meeting_id.clone();
             std::thread::Builder::new()
                 .name("meeting-audio".into())
-                .spawn(move || run(id, dir, out, stop, paused, ready_tx))
+                .spawn(move || run(id, dir, out, devices, stop, paused, ready_tx))
                 .map_err(|e| e.to_string())?
         };
         match ready_rx.recv_timeout(Duration::from_secs(6)) {
@@ -322,16 +543,76 @@ impl Recorder {
     }
 }
 
+/// Writes finished chunks (audio + energy) and tells the server about them.
+struct ChunkWriter {
+    dir: PathBuf,
+    out: Out,
+    meeting_id: String,
+    seq: u32,
+}
+
+impl ChunkWriter {
+    /// `start` is the chunk's first sample on the recording timeline. Silent chunks are skipped
+    /// (Whisper invents text on silence), but the caller still advances the timeline.
+    fn write(&mut self, mut chunk: Vec<f32>, start: u64, energy: &mut Energy, warn: &dyn Fn(String)) {
+        let end = start + chunk.len() as u64;
+        let (mic, sys) = energy.take(start, end);
+        if is_silent(&chunk) {
+            return;
+        }
+        normalize(&mut chunk);
+        self.seq += 1;
+        let wav = self.dir.join(format!("{:05}.wav", self.seq));
+        let energy_path = self.dir.join(format!("{:05}.energy.json", self.seq));
+        let start_sec = start as f64 / f64::from(RATE);
+        let energy_json = json!({
+            "frameMs": 100,
+            "startSec": start_sec,
+            "firstFrame": start as usize / ENERGY_FRAME,
+            "mic": mic,
+            "speaker": sys,
+        });
+        let energy_ok = fs::write(&energy_path, energy_json.to_string()).is_ok();
+        match write_wav(&wav, &chunk) {
+            Ok(()) => (self.out)(format!(
+                "audio-chunk {}",
+                json!({
+                    "meetingId": self.meeting_id,
+                    "path": wav.to_string_lossy(),
+                    "seconds": chunk.len() as f64 / f64::from(RATE),
+                    "startSec": start_sec,
+                    "energyPath": energy_ok.then(|| energy_path.to_string_lossy().to_string()),
+                })
+            )),
+            Err(e) => warn(format!("Potongan audio tidak bisa disimpan: {e}")),
+        }
+    }
+}
+
+/// How long to wait before concluding that the microphone delivers nothing.
+const MIC_CHECK_AFTER: Duration = Duration::from_secs(6);
+
 fn run(
     meeting_id: String,
     dir: PathBuf,
     out: Out,
+    devices: Devices,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     ready: mpsc::Sender<Result<Vec<String>, String>>,
 ) {
     let host = cpal::default_host();
-    let warn: Arc<dyn Fn(String) + Send + Sync> = {
+    let warn_code = {
+        let out = out.clone();
+        let id = meeting_id.clone();
+        move |code: Option<&str>, message: String| {
+            out(format!(
+                "audio-error {}",
+                json!({ "meetingId": id, "message": message, "fatal": false, "code": code })
+            ));
+        }
+    };
+    let warn_plain: Arc<dyn Fn(String) + Send + Sync> = {
         let out = out.clone();
         let id = meeting_id.clone();
         Arc::new(move |message: String| {
@@ -341,12 +622,12 @@ fn run(
 
     let mic_buf: Buffer = Arc::new(Mutex::new(Vec::new()));
     let sys_buf: Buffer = Arc::new(Mutex::new(Vec::new()));
-    let mic = open_source(&host, false, mic_buf.clone(), {
-        let warn = warn.clone();
+    let mic = open_source(&host, false, devices.mic.as_deref(), mic_buf.clone(), {
+        let warn = warn_plain.clone();
         Arc::new(move |e| warn(format!("Mikrofon bermasalah: {e}")))
     });
-    let sys = open_source(&host, true, sys_buf.clone(), {
-        let warn = warn.clone();
+    let sys = open_source(&host, true, devices.speaker.as_deref(), sys_buf.clone(), {
+        let warn = warn_plain.clone();
         Arc::new(move |e| warn(format!("Rekaman suara laptop bermasalah: {e}")))
     });
 
@@ -366,37 +647,43 @@ fn run(
         )),
         _ => {}
     }
+    for opened in [mic.as_ref().ok(), sys.as_ref().ok()].into_iter().flatten() {
+        if let Some(w) = &opened.warning {
+            warnings.push(w.clone());
+        }
+    }
     let _ = ready.send(Ok(warnings));
 
-    let sources: Vec<&Buffer> = [(mic.is_ok(), &mic_buf), (sys.is_ok(), &sys_buf)]
-        .into_iter()
-        .filter_map(|(ok, b)| ok.then_some(b))
-        .collect();
+    let mic_name = mic.as_ref().ok().map(|o| o.name.clone());
+    let mic_ok = mic.is_ok();
+    let sys_ok = sys.is_ok();
 
     let started = Instant::now();
-    let mut produced: u64 = 0;
+    let mut produced: u64 = 0; // samples taken from the devices (wall clock)
+    let mut fed: u64 = 0; // samples on the recording timeline (pauses excluded)
+    let mut emitted: u64 = 0; // timeline samples already cut into chunks
     let mut segmenter = Segmenter::default();
-    let mut seq: u32 = 0;
-    let mut mix: Vec<f32> = Vec::new();
+    let mut energy = Energy::default();
+    let mut writer = ChunkWriter { dir, out: out.clone(), meeting_id: meeting_id.clone(), seq: 0 };
+    let mut hp = HighPass::default();
+    let mut mic_real: u64 = 0;
+    let mut mic_peak: f32 = 0.0;
+    let mut mic_checked = false;
 
-    let mut emit = |mut chunk: Vec<f32>| {
-        if is_silent(&chunk) {
-            return;
+    let take = |buf: &Buffer, n: usize, stopping: bool| -> (Vec<f32>, usize) {
+        let mut part = vec![0.0f32; n];
+        let mut real = 0;
+        if let Ok(mut b) = buf.lock() {
+            real = n.min(b.len());
+            for (slot, v) in part.iter_mut().zip(b.drain(..real)) {
+                *slot = v;
+            }
+            if !stopping && b.len() > MAX_BACKLOG {
+                let excess = b.len() - MAX_BACKLOG / 2;
+                b.drain(..excess);
+            }
         }
-        normalize(&mut chunk);
-        seq += 1;
-        let path = dir.join(format!("{seq:05}.wav"));
-        match write_wav(&path, &chunk) {
-            Ok(()) => out(format!(
-                "audio-chunk {}",
-                json!({
-                    "meetingId": meeting_id,
-                    "path": path.to_string_lossy(),
-                    "seconds": chunk.len() as f64 / f64::from(RATE),
-                })
-            )),
-            Err(e) => warn(format!("Potongan audio tidak bisa disimpan: {e}")),
-        }
+        (part, real)
     };
 
     loop {
@@ -405,52 +692,73 @@ fn run(
             std::thread::sleep(Duration::from_millis(200));
         }
 
-        // How much audio to mix now: follow the wall clock (a silent loopback device delivers
+        // How much audio to take now: follow the wall clock (a silent loopback device delivers
         // nothing at all), or everything that is left once stopping.
         let n = if stopping {
-            sources.iter().map(|b| b.lock().map(|b| b.len()).unwrap_or(0)).max().unwrap_or(0)
+            let len = |b: &Buffer| b.lock().map(|b| b.len()).unwrap_or(0);
+            [(mic_ok, &mic_buf), (sys_ok, &sys_buf)]
+                .into_iter()
+                .filter(|(ok, _)| *ok)
+                .map(|(_, b)| len(b))
+                .max()
+                .unwrap_or(0)
         } else {
             let elapsed = (started.elapsed().as_secs_f64() - MIX_LATENCY_SEC).max(0.0);
             ((elapsed * f64::from(RATE)) as u64).saturating_sub(produced) as usize
         };
 
         if n > 0 {
-            mix.clear();
-            mix.resize(n, 0.0);
-            for buf in &sources {
-                let Ok(mut b) = buf.lock() else { continue };
-                let take = n.min(b.len());
-                for (slot, v) in mix.iter_mut().zip(b.drain(..take)) {
-                    *slot += v;
-                }
-                if !stopping && b.len() > MAX_BACKLOG {
-                    let excess = b.len() - MAX_BACKLOG / 2;
-                    b.drain(..excess);
-                }
-            }
-            for v in mix.iter_mut() {
-                *v = v.clamp(-1.0, 1.0);
-            }
+            let (mut mic_part, mic_taken) = if mic_ok { take(&mic_buf, n, stopping) } else { (vec![0.0; n], 0) };
+            let (sys_part, _) = if sys_ok { take(&sys_buf, n, stopping) } else { (vec![0.0; n], 0) };
+            mic_real += mic_taken as u64;
+            mic_peak = mic_part.iter().take(mic_taken).fold(mic_peak, |m, v| m.max(v.abs()));
+            hp.apply(&mut mic_part);
             produced += n as u64;
+
             if !paused.load(Ordering::SeqCst) {
+                let mix: Vec<f32> = mic_part.iter().zip(sys_part.iter()).map(|(a, b)| (a + b).clamp(-1.0, 1.0)).collect();
+                energy.push(&mic_part, &sys_part);
                 // Loudness per 100 ms for the live waveform in the UI (a few numbers, 5× a second).
                 if !stopping {
                     let levels: Vec<f32> = mix
                         .chunks(RATE_USIZE / 10)
-                        .map(|c| ((c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).sqrt() * 1000.0).round() / 1000.0)
+                        .map(|c| (rms_of(c) * 1000.0).round() / 1000.0)
                         .collect();
                     out(format!("audio-level {}", json!({ "meetingId": meeting_id, "levels": levels })));
                 }
+                fed += n as u64;
                 for chunk in segmenter.push(&mix) {
-                    emit(chunk);
+                    let len = chunk.len() as u64;
+                    writer.write(chunk, emitted, &mut energy, &warn_plain.as_ref());
+                    emitted += len;
                 }
             }
         }
 
-        if stopping {
-            if let Some(chunk) = segmenter.finish() {
-                emit(chunk);
+        // Windows happily "opens" a microphone that never delivers sound (a camera's mic, a phone
+        // mic app that is not connected). Tell the user instead of recording silence all meeting.
+        if !stopping && !mic_checked && mic_ok && started.elapsed() >= MIC_CHECK_AFTER {
+            mic_checked = true;
+            let name = mic_name.clone().unwrap_or_else(|| "mikrofon".into());
+            if mic_real == 0 {
+                warn_code(
+                    Some("mic_silent"),
+                    format!("Mikrofon \"{name}\" tidak mengirim data sama sekali. Pilih mikrofon lain di Settings → Meeting."),
+                );
+            } else if mic_peak == 0.0 {
+                warn_code(
+                    Some("mic_silent"),
+                    format!("Mikrofon \"{name}\" hanya mengirim keheningan. Pilih mikrofon lain di Settings → Meeting."),
+                );
             }
+        }
+
+        if stopping {
+            energy.flush();
+            if let Some(chunk) = segmenter.finish() {
+                writer.write(chunk, emitted, &mut energy, &warn_plain.as_ref());
+            }
+            let _ = fed;
             break;
         }
     }
@@ -532,6 +840,38 @@ mod tests {
         assert!(!is_silent(&tone(20.0, 0.1)));
     }
 
+    /// Prints the devices and whether each input delivers sound (2 s each).
+    /// Run with `cargo test print_devices -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn print_devices() {
+        println!("{}", list_devices());
+        let host = cpal::default_host();
+        for d in host.input_devices().unwrap() {
+            let buf: Buffer = Arc::new(Mutex::new(Vec::new()));
+            let name = dev_name(&d);
+            let Ok(cfg) = d.default_input_config() else { continue };
+            let on_err: Arc<dyn Fn(String) + Send + Sync> = Arc::new(|e| println!("  error: {e}"));
+            let stream = match cfg.sample_format() {
+                SampleFormat::F32 => build_source::<f32>(&d, cfg.config(), buf.clone(), on_err),
+                SampleFormat::I16 => build_source::<i16>(&d, cfg.config(), buf.clone(), on_err),
+                _ => continue,
+            };
+            let Ok(stream) = stream else { println!("{name}: cannot open"); continue };
+            let _ = stream.play();
+            std::thread::sleep(Duration::from_secs(2));
+            drop(stream);
+            let samples = buf.lock().unwrap().clone();
+            let rms = frame_rms(&samples);
+            println!(
+                "LEVEL {name}: {} samples in 2 s, median RMS {:.4}, peak {:.4}",
+                samples.len(),
+                percentile(&rms, 0.5),
+                rms.iter().cloned().fold(0.0f32, f32::max)
+            );
+        }
+    }
+
     /// Opens the real microphone and loopback for 3 s. Run with `cargo test -- --ignored`.
     #[test]
     #[ignore]
@@ -540,12 +880,51 @@ mod tests {
         let lines = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = lines.clone();
         let out: Out = Arc::new(move |l| sink.lock().unwrap().push(l));
-        let (rec, warnings) = Recorder::start("mtg_test".into(), dir.clone(), out).expect("devices open");
+        // ATELIER_TEST_MIC picks a microphone by name; unset follows the Windows default.
+        let devices = Devices { mic: std::env::var("ATELIER_TEST_MIC").ok(), speaker: None };
+        let (rec, warnings) = Recorder::start("mtg_test".into(), dir.clone(), out, devices).expect("devices open");
         println!("warnings: {warnings:?}");
-        std::thread::sleep(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_secs(8));
         rec.stop();
-        println!("lines: {:?}", lines.lock().unwrap());
+        for l in lines.lock().unwrap().iter().filter(|l| l.starts_with("audio-error") || l.starts_with("audio-chunk")) {
+            println!("{l}");
+        }
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn energy_frames_follow_the_timeline() {
+        let mut e = Energy::default();
+        // 1 s of loud mic over a quiet speaker, then 1 s of the opposite.
+        let loud = vec![0.5f32; RATE_USIZE];
+        let quiet = vec![0.01f32; RATE_USIZE];
+        e.push(&loud, &quiet);
+        e.push(&quiet, &loud);
+        e.flush();
+        // A chunk covering the second second only.
+        let (mic, sys) = e.take(RATE_USIZE as u64, 2 * RATE_USIZE as u64);
+        assert_eq!(mic.len(), 10);
+        assert!(mic.iter().all(|v| *v < 0.05), "mic is quiet in the second second");
+        assert!(sys.iter().all(|v| *v > 0.4), "speaker is loud in the second second");
+        // Earlier frames are forgotten, later ones are still available.
+        let (mic2, _) = e.take(0, RATE_USIZE as u64);
+        assert!(mic2.is_empty());
+    }
+
+    #[test]
+    fn high_pass_removes_dc_but_keeps_speech_band() {
+        let mut hp = HighPass::default();
+        let mut dc = vec![0.3f32; RATE_USIZE];
+        hp.apply(&mut dc);
+        assert!(dc[RATE_USIZE - 1].abs() < 0.01, "constant offset is removed");
+
+        let mut hp = HighPass::default();
+        let mut voice: Vec<f32> = (0..RATE_USIZE)
+            .map(|i| (2.0 * std::f32::consts::PI * 400.0 * i as f32 / RATE as f32).sin() * 0.5)
+            .collect();
+        hp.apply(&mut voice);
+        let peak = voice[RATE_USIZE / 2..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak > 0.45, "400 Hz passes almost untouched (peak {peak})");
     }
 
     #[test]

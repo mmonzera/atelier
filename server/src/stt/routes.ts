@@ -94,6 +94,26 @@ export function createSttRoutes(deps: {
     });
   });
 
+  app.post('/stt/local/speakers/install', async (c) => {
+    try {
+      await installer.installSpeakerEngine();
+      return c.json({ ok: true, status: installer.getStatus(currentMeetingSettings()) });
+    } catch (err) {
+      if (err instanceof SttInstallerError) {
+        return c.json(apiError(err.code, err.message), err.status);
+      }
+      return c.json(
+        apiError('install_failed', err instanceof Error ? err.message : 'Failed to install the speaker engine.'),
+        500,
+      );
+    }
+  });
+
+  app.delete('/stt/local/speakers', (c) => {
+    installer.deleteSpeakerEngine();
+    return c.json({ ok: true, status: installer.getStatus(currentMeetingSettings()) });
+  });
+
   app.delete('/stt/local/all', async (c) => {
     await provider.shutdown();
     await installer.clearAll();

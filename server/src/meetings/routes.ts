@@ -29,6 +29,38 @@ export function createMeetingRoutes(deps: { meetingService: MeetingService }): H
     });
   });
 
+  // Static paths first: "/meetings/:id" would swallow them.
+  app.get('/meetings/audio-devices', async (c) => {
+    try {
+      return c.json(await meetingService.listAudioDevices());
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
+  app.post('/meetings/audio-meter', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = z
+      .object({
+        enabled: z.boolean(),
+        micDevice: z.string().trim().max(200).nullable().optional(),
+        speakerDevice: z.string().trim().max(200).nullable().optional(),
+      })
+      .safeParse(body);
+    if (!parsed.success) return c.json(apiError('invalid_meter', 'Invalid meter request.'), 400);
+    try {
+      meetingService.setAudioMeter(parsed.data.enabled, {
+        micDevice: parsed.data.micDevice,
+        speakerDevice: parsed.data.speakerDevice,
+      });
+      return c.json({ ok: true });
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
   app.get('/meetings/:id', (c) => {
     const status = meetingService.getMeeting(c.req.param('id'));
     if (!status) {
@@ -141,6 +173,84 @@ export function createMeetingRoutes(deps: { meetingService: MeetingService }): H
     }
     try {
       return c.json(meetingService.setPaused(c.req.param('id'), parsed.data.paused));
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
+  app.post('/meetings/:id/regenerate-notes', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z
+      .object({
+        provider: z.enum(['claude', 'openai', 'antigravity', 'deepseek', 'opencode', 'openrouter']).nullable().optional(),
+        model: z.string().trim().min(1).max(120).nullable().optional(),
+      })
+      .safeParse(body ?? {});
+    if (!parsed.success) return c.json(apiError('invalid_notes_request', 'Invalid provider or model.'), 400);
+    try {
+      const override =
+        parsed.data.provider !== undefined || parsed.data.model !== undefined
+          ? { provider: parsed.data.provider ?? null, model: parsed.data.model ?? null }
+          : undefined;
+      return c.json(await meetingService.regenerateNotes(c.req.param('id'), override));
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
+  app.patch('/meetings/:id/speakers/:sid', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = z.object({ name: z.string().max(60).nullable() }).safeParse(body);
+    if (!parsed.success) return c.json(apiError('invalid_speaker_name', 'Provide { name: string | null }.'), 400);
+    try {
+      return c.json(meetingService.renameSpeaker(c.req.param('id'), c.req.param('sid'), parsed.data.name));
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
+  app.post('/meetings/:id/speakers/:sid/merge', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = z.object({ into: z.string().trim().min(1).max(40) }).safeParse(body);
+    if (!parsed.success) return c.json(apiError('invalid_merge', 'Provide { into: speakerId }.'), 400);
+    try {
+      return c.json(meetingService.mergeSpeakers(c.req.param('id'), c.req.param('sid'), parsed.data.into));
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
+  app.get('/meetings/:id/speakers/:sid/sample.wav', (c) => {
+    const wav = meetingService.speakerSample(c.req.param('id'), c.req.param('sid'));
+    if (!wav) return c.json(apiError('no_sample', 'No audio sample for this speaker.'), 404);
+    return new Response(new Uint8Array(wav), {
+      status: 200,
+      headers: { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store' },
+    });
+  });
+
+  app.post('/meetings/:id/diarize', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ participants: z.number().int().min(1).max(20).nullable().optional() }).safeParse(body ?? {});
+    if (!parsed.success) return c.json(apiError('invalid_participants', 'Participants must be 1–20.'), 400);
+    try {
+      return c.json(await meetingService.rediarize(c.req.param('id'), parsed.data.participants ?? null));
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
+  app.post('/meetings/:id/speakers-done', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z.object({ regenerate: z.boolean().optional() }).safeParse(body ?? {});
+    if (!parsed.success) return c.json(apiError('invalid_request', 'Invalid request.'), 400);
+    try {
+      return c.json(await meetingService.finishSpeakerNaming(c.req.param('id'), Boolean(parsed.data.regenerate)));
     } catch (err) {
       const e = handleError(err);
       return c.json(e.body, e.status);

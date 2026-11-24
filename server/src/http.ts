@@ -848,6 +848,16 @@ export function createHttpRouter(deps: {
             remindParticipants: z.boolean().optional(),
             noticeTextId: z.string().max(1000).optional(),
             noticeTextEn: z.string().max(1000).optional(),
+            speakerLabels: z.boolean().optional(),
+            micDevice: z.string().trim().min(1).max(200).nullable().optional(),
+            speakerDevice: z.string().trim().min(1).max(200).nullable().optional(),
+            notesProvider: z
+              .enum(['claude', 'openai', 'antigravity', 'deepseek', 'opencode', 'openrouter'])
+              .nullable()
+              .optional(),
+            notesModel: z.string().trim().min(1).max(120).nullable().optional(),
+            notesLanguage: z.enum(['auto', 'id', 'en']).optional(),
+            notesTemplate: z.string().max(4000).optional(),
             detectMeetingApps: z.boolean().optional(),
             ignoredMeetingApps: z
               .array(z.string().trim().min(1).max(40).regex(/^[a-z0-9_-]+$/))

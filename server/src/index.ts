@@ -25,6 +25,7 @@ import { BackupService } from './backup/service.js';
 import { createSecurityRoutes } from './security/routes.js';
 import { LocalVault, SESSION_COOKIE, parseCookie } from './security/vault.js';
 import type { SttCatalog } from './stt/catalog.js';
+import { SherpaDiarizer } from './stt/diarization.js';
 import { SttInstaller } from './stt/installer.js';
 import { type LocalWhisperConfig, LocalWhisperProvider } from './stt/local-whisper.js';
 import { createSttRoutes } from './stt/routes.js';
@@ -66,6 +67,11 @@ export async function startAtelierServer(opts?: {
     idleTimeoutMs?: number;
     readyTimeoutMs?: number;
     buildSpawnSpec?: (cfg: LocalWhisperConfig, port: number) => { command: string; args: string[] };
+    /** Test hook: run something else than the real speaker engine program. */
+    buildDiarizerSpawnSpec?: (
+      paths: { exe: string; segmentationModel: string; embeddingModel: string },
+      args: string[],
+    ) => { command: string; args: string[] };
   };
   /** Desktop shell hooks: audio capture and native notifications for meetings. */
   meetingOptions?: {
@@ -115,6 +121,11 @@ export async function startAtelierServer(opts?: {
     buildSpawnSpec: opts?.sttOptions?.buildSpawnSpec,
   });
 
+  const diarizer = new SherpaDiarizer({
+    getPaths: () => sttInstaller.getSpeakerPaths(),
+    buildSpawnSpec: opts?.sttOptions?.buildDiarizerSpawnSpec,
+  });
+
   const meetingService = new MeetingService({
     db,
     config,
@@ -124,11 +135,13 @@ export async function startAtelierServer(opts?: {
     installer: sttInstaller,
     capture: opts?.meetingOptions?.capture,
     notify: opts?.meetingOptions?.notify,
-    summarize: (transcript, signal) =>
-      runtime.summarizeText(
-        `Create concise structured meeting notes in Markdown from the transcript below:\n\n${transcript}`,
-        signal,
-      ),
+    diarizer,
+    summarize: (req, signal) =>
+      runtime.summarizeText(req.prompt, signal, {
+        provider: req.provider,
+        model: req.model,
+        systemPrompt: req.system,
+      }),
   });
 
   store.setSnapshotAugmenter((base) => ({

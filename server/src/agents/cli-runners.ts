@@ -492,7 +492,7 @@ export class CliAgentRunner implements AgentRunner {
 
   }
 
-  public async summarize(provider: ModelProvider, requested: string | undefined, input: string, signal: AbortSignal): Promise<string> {
+  public async summarize(provider: ModelProvider, requested: string | undefined, input: string, signal: AbortSignal, opts?: { systemPrompt?: string }): Promise<string> {
     const model = validateModelId(requested || MEMORY_MODELS[provider]);
     const directory = path.resolve(this.config.dataDir, 'tmp');
     fs.mkdirSync(directory, { recursive: true });
@@ -504,7 +504,7 @@ export class CliAgentRunner implements AgentRunner {
       };
       return await this.runProvider(provider, turn, {
         onText() {}, onTool() {}, onSession() {},
-      }, { cwd, model, systemPrompt: SUMMARY_INSTRUCTIONS, attachedMcp: [] });
+      }, { cwd, model, systemPrompt: opts?.systemPrompt ?? SUMMARY_INSTRUCTIONS, attachedMcp: [] });
     } finally {
       if (path.dirname(cwd) === directory) fs.rmSync(cwd, { recursive: true, force: true });
     }
