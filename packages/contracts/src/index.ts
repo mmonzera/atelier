@@ -42,7 +42,7 @@ export type QueueKind = 'user' | 'task' | 'teammate';
 export type MessageAuthor = 'user' | 'agent' | 'teammate' | 'system';
 export type ActivityKind = 'tool' | 'status' | 'task' | 'pr' | 'error';
 export type ReasoningEffort = 'Low' | 'Medium' | 'High';
-export type WorkspaceTab = 'chat' | 'tasks' | 'preview';
+export type WorkspaceTab = 'chat' | 'tasks' | 'preview' | 'library';
 export type AgentViewTab = 'chat' | 'reports';
 export type ModelProvider = 'claude' | 'openai' | 'antigravity' | 'deepseek' | 'opencode';
 export type RealProvider = ModelProvider;
@@ -1150,6 +1150,20 @@ export const ATTACHMENT_LIMITS = {
 
 /** Message text used when the user sends attachments without typing anything. */
 export const ATTACHMENT_ONLY_TEXT = 'Please look at the attached file(s).';
+
+/** An image saved in a project: a chat upload or a design-option artifact. */
+export interface LibraryImage {
+  /** Attachment id (att_…) or artifact id (art_…). */
+  id: string;
+  source: 'attachment' | 'artifact';
+  name: string;
+  mime: string;
+  sizeBytes: number;
+  /** Same-origin URL that serves the image (already URL-encoded). */
+  url: string;
+  createdAt: string;
+  messageId?: string;
+}
 
 export type DesignOptionKind = 'html' | 'svg' | 'image';
 

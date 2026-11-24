@@ -8,6 +8,7 @@ import {
   Clock,
   XCircle,
 } from 'lucide-react';
+import { Markdown } from './Markdown';
 import { BotMascot } from './mascot/BotMascot';
 import { MASCOT_COLORS } from './mascot/mascotConfig';
 
@@ -253,47 +254,5 @@ export function TokenRing({ percent, label }: { percent: number; label: string }
 }
 
 export function FormattedText({ text }: { text: string }) {
-  const lines = text.split('\n');
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {lines.map((line, i) => {
-        if (!line.trim()) {
-          return <div key={i} style={{ height: 4 }} />;
-        }
-        const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-        return (
-          <div key={i} style={{ wordBreak: 'break-word' }}>
-            {parts.map((part, j) => {
-              if (part.startsWith('**') && part.endsWith('**')) {
-                return (
-                  <span key={j} style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
-                    {part.slice(2, -2)}
-                  </span>
-                );
-              }
-              if (part.startsWith('`') && part.endsWith('`')) {
-                return (
-                  <code
-                    key={j}
-                    className="mono-num"
-                    style={{
-                      fontSize: 12,
-                      padding: '1px 5px',
-                      borderRadius: 5,
-                      background: 'var(--surface-2)',
-                      border: '1px solid var(--border-subtle)',
-                      color: 'var(--text-primary)',
-                    }}
-                  >
-                    {part.slice(1, -1)}
-                  </code>
-                );
-              }
-              return <span key={j}>{part}</span>;
-            })}
-          </div>
-        );
-      })}
-    </div>
-  );
+  return <Markdown text={text} />;
 }

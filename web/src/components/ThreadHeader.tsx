@@ -24,6 +24,7 @@ const PROJECT_TABS: Array<{ id: WorkspaceTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'preview', label: 'Preview' },
+  { id: 'library', label: 'Library' },
 ];
 
 const AGENT_TABS: Array<{ id: AgentViewTab; label: string }> = [

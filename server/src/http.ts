@@ -36,6 +36,7 @@ import type { LocalVault } from './security/vault.js';
 import { ATTACHMENT_ONLY_TEXT } from '@atelier/contracts';
 import { AttachmentError, AttachmentStore } from './attachments.js';
 import { createAttachmentRoutes } from './attachments-routes.js';
+import { createLibraryRoutes } from './library-routes.js';
 import { CanonInputSchema } from './memory-files.js';
 
 function apiError(code: string, message: string): ApiErrorResponse {
@@ -96,6 +97,7 @@ export function createHttpRouter(deps: {
   if (deps.vault) api.use('*', lockGate(deps.vault));
   if (deps.securityRoutes) api.route('/', deps.securityRoutes);
   api.route('/', createAttachmentRoutes({ store, config }));
+  api.route('/', createLibraryRoutes({ store, config }));
 
   api.get('/health', (c) => {
     const settings = store.getSettings();

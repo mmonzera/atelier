@@ -7,6 +7,7 @@ import type {
   BackupImportResult,
   CloudFolderCandidate,
   ExportBackupInput,
+  LibraryImage,
   MessageAttachment,
   RecoveryKeyResponse,
   RelinkCandidate,
@@ -238,6 +239,9 @@ export const api = {
         body: JSON.stringify({ filePath }),
       },
     ),
+
+  libraryImages: (scope: string | null) =>
+    request<{ images: LibraryImage[] }>(`/api/projects/${encodeURIComponent(scope ?? 'direct')}/library`),
 
   pickDesign: (scope: string | null, messageId: string, optionId: string, segmentIndex: number) =>
     request<{ entry: CanonEntry }>(`/api/projects/${encodeURIComponent(scope ?? 'direct')}/canon/pick`, {

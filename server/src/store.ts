@@ -1374,6 +1374,14 @@ export class AtelierStore {
     return Boolean(row);
   }
 
+  /** Messages in a scope that carry attachments (used by the image library). */
+  public listMessagesWithAttachments(projectId: string | null): Message[] {
+    const rows = this.db.sqlite
+      .prepare(`SELECT data FROM messages WHERE project_id IS ? AND data LIKE '%"attachments"%' ORDER BY created_at DESC, rowid DESC`)
+      .all(projectId) as { data: string }[];
+    return rows.map((row) => JSON.parse(row.data) as Message);
+  }
+
   public listAgentMessages(agentId: string, projectId?: string | null): Message[] {
     const rows = projectId === undefined
       ? this.db.sqlite.prepare('SELECT data FROM messages WHERE agent_id = ? ORDER BY created_at, rowid').all(agentId)

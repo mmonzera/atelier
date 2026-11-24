@@ -29,6 +29,7 @@ import {
 import { useWorkspace } from './state/useWorkspace';
 import { AgentReportsView } from './views/AgentReportsView';
 import { ChatView } from './views/ChatView';
+import { LibraryView } from './views/LibraryView';
 import { OnboardingView } from './views/OnboardingView';
 import { PreviewView } from './views/PreviewView';
 import { SettingsView, type SettingsTab } from './views/SettingsView';
@@ -327,7 +328,7 @@ export function App() {
     : state.agents;
 
   const dimmedBackground =
-    (viewMode === 'project' && (activeTab === 'tasks' || activeTab === 'preview')) ||
+    (viewMode === 'project' && (activeTab === 'tasks' || activeTab === 'preview' || activeTab === 'library')) ||
     (viewMode === 'agent' && agentTab === 'reports');
 
   return (
@@ -603,6 +604,8 @@ export function App() {
                 onOpenTask={(task) => setModal({ type: 'edit-task', taskId: task.id })}
                 onJumpToAgent={handleSelectProjectAgent}
               />
+            ) : activeTab === 'library' ? (
+              <LibraryView project={activeProject} refreshKey={state.messages.length} />
             ) : activeTab === 'preview' ? (
               <PreviewView
                 project={activeProject}

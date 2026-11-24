@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ATTACHMENT_ONLY_TEXT,
+  type LibraryImage,
   type MessageAttachment,
   parseMessageSegments,
   summarizeDesignBlocks,
@@ -255,5 +256,61 @@ describe('workspace images for design cards', () => {
     const { project } = handle.store.createProject({ name: 'R' });
     handle.store.updateProject(project.id, { repo: { fullName: 'a/b', defaultBranch: 'main', localPath: repo } });
     expect((await get(path.join(repo, 'mock.png'))).status).toBe(200);
+  });
+});
+
+describe('project image library', () => {
+  it('lists chat uploads and image artifacts per project and serves them safely', async () => {
+    const runner: AgentRunner = {
+      async run(_turn, cb) {
+        cb.onText('ok');
+        return { finalText: 'ok' };
+      },
+    };
+    const { handle, base } = await boot(runner);
+    const { project, agents } = handle.store.createProject({ name: 'Lib', starterAgents: [{ name: 'Bot', role: 'Eng' }] });
+    const other = handle.store.createProject({ name: 'Other', starterAgents: [{ name: 'Bot2', role: 'Eng' }] }).project;
+
+    const up = (await (await upload(base, [{ name: 'shot.png', bytes: PNG }, { name: 'brief.txt', bytes: Buffer.from('hi') }])).json()) as {
+      attachments: MessageAttachment[];
+    };
+    const unsent = (await (await upload(base, [{ name: 'unsent.png', bytes: PNG }])).json()) as { attachments: MessageAttachment[] };
+    await fetch(`${base}/api/agents/${agents[0]!.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'lihat', projectId: project.id, attachmentIds: up.attachments.map((a) => a.id) }),
+    });
+
+    const svg = handle.store.createArtifact(
+      { projectId: project.id, kind: 'svg', label: 'Logo', mime: 'image/svg+xml' },
+      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><circle r="1"/></svg>'),
+    );
+    const badImage = handle.store.createArtifact(
+      { projectId: project.id, kind: 'image', label: 'Fake', mime: 'image/png' },
+      Buffer.from('<script>alert(1)</script>'),
+    );
+    handle.store.createArtifact({ projectId: project.id, kind: 'html', label: 'Page', mime: 'text/html' }, Buffer.from('<p>x</p>'));
+    handle.store.createArtifact({ projectId: other.id, kind: 'svg', label: 'Foreign', mime: 'image/svg+xml' }, Buffer.from('<svg/>'));
+
+    const list = async (scope: string) => (await fetch(`${base}/api/projects/${scope}/library`)).json() as Promise<{ images: LibraryImage[] }>;
+    const { images } = await list(project.id);
+    const names = images.map((i) => i.name).sort();
+    // sent image + svg + the fake image artifact; not the text file, unsent upload, html page or other project's art
+    expect(names).toEqual(['Fake', 'Logo', 'shot.png']);
+    expect(images.find((i) => i.name === 'shot.png')!.source).toBe('attachment');
+    expect(unsent.attachments[0]!.id).not.toBe(up.attachments[0]!.id);
+    expect(images.some((i) => i.id === unsent.attachments[0]!.id)).toBe(false);
+
+    for (const image of images.filter((i) => i.name !== 'Fake')) {
+      const res = await fetch(`${base}${image.url}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    }
+    const logo = images.find((i) => i.id === svg.id)!;
+    expect((await fetch(`${base}${logo.url}`)).headers.get('content-type')).toBe('image/svg+xml');
+    expect((await fetch(`${base}/api/projects/${project.id}/library/artifacts/${badImage.id}`)).status).toBe(400);
+    expect((await fetch(`${base}/api/projects/${other.id}/library/artifacts/${svg.id}`)).status).toBe(404);
+    expect((await fetch(`${base}/api/projects/nope/library`)).status).toBe(404);
+    expect((await list('direct')).images).toEqual([]);
   });
 });
