@@ -794,7 +794,44 @@ export class MeetingService {
     afterChunks.error = null;
     afterChunks.updatedAt = new Date().toISOString();
     this.saveRecord(afterChunks);
+    const lang = this.deps.store.getSettings().language;
+    this.deps.notify?.(
+      lang === 'en' ? 'Meeting notes are ready' : 'Catatan meeting siap',
+      lang === 'en'
+        ? `${afterChunks.title}: open Atelier → Meeting notes.`
+        : `${afterChunks.title}: buka Atelier → Catatan meeting.`,
+    );
     return this.broadcastStatus(afterChunks);
+  }
+
+  /** Removes a finished (or abandoned) meeting: its notes, transcript and any kept audio. */
+  public deleteMeeting(meetingId: string): void {
+    const rec = this.readRecord(meetingId);
+    if (!rec) {
+      throw new MeetingServiceError('meeting_not_found', `Meeting ${meetingId} not found.`, 404);
+    }
+    if (rec.status === 'recording' || rec.status === 'transcribing' || rec.status === 'summarizing') {
+      throw new MeetingServiceError(
+        'meeting_busy',
+        'Stop the meeting and wait for its notes before deleting it.',
+        409,
+      );
+    }
+    this.deps.db.sqlite.prepare(`DELETE FROM meeting_chunks WHERE meeting_id = ?`).run(meetingId);
+    this.deps.db.sqlite.prepare(`DELETE FROM meetings WHERE id = ?`).run(meetingId);
+    fs.rmSync(path.join(this.meetingsDir, meetingId), { recursive: true, force: true });
+  }
+
+  /** Renames a meeting (the title shown in the list and the exported file). */
+  public renameMeeting(meetingId: string, title: string): MeetingStatusEvent {
+    const rec = this.readRecord(meetingId);
+    if (!rec) {
+      throw new MeetingServiceError('meeting_not_found', `Meeting ${meetingId} not found.`, 404);
+    }
+    rec.title = title.trim() || rec.title;
+    rec.updatedAt = new Date().toISOString();
+    this.saveRecord(rec);
+    return this.broadcastStatus(rec);
   }
 
   public async shutdown(): Promise<void> {

@@ -4,11 +4,12 @@ import type {
   BrowserSessionInfo,
   BrowserTakeoverEvent,
   MeetingAppEvent,
+  MeetingSession,
   MeetingStatusEvent,
   ServerEvent,
   SttDownloadProgressEvent,
 } from '@atelier/contracts';
-import { useEffect, useReducer, useState } from 'react';
+import { useCallback, useEffect, useReducer, useState } from 'react';
 import { LOCKED_EVENT, api, authApi } from '../api';
 import { INITIAL_WORKSPACE_STATE, workspaceReducer } from './reducer';
 
@@ -24,6 +25,11 @@ export function useWorkspace() {
   const [activeMeeting, setActiveMeeting] = useState<MeetingStatusEvent | null>(null);
   /** A meeting app started (offer to take notes) or ended (offer to stop) — from the desktop shell. */
   const [meetingApp, setMeetingApp] = useState<MeetingAppEvent | null>(null);
+  /** A meeting whose notes were just written (shown once as "notes ready"). */
+  const [meetingReady, setMeetingReady] = useState<MeetingSession | null>(null);
+  // Stable identities: the cards use them in effects (auto-dismiss timers).
+  const dismissMeetingApp = useCallback(() => setMeetingApp(null), []);
+  const dismissMeetingReady = useCallback(() => setMeetingReady(null), []);
 
   useEffect(() => {
     let active = true;
@@ -31,6 +37,8 @@ export function useWorkspace() {
     let reconnectTimer: number | null = null;
     let hasConnectedOnce = false;
     let hiddenAtMs: number | null = null;
+    /** The meeting in progress as last seen, to notice the moment its notes are finished. */
+    let lastActive: MeetingStatusEvent | null = null;
 
     const applySnapshotExtras = (snapshot: {
       browserSessions?: BrowserSessionInfo[];
@@ -43,7 +51,8 @@ export function useWorkspace() {
       if (Array.isArray(snapshot.browserApprovals)) {
         setBrowserApprovals(snapshot.browserApprovals);
       }
-      setActiveMeeting(snapshot.activeMeeting ?? null);
+      lastActive = snapshot.activeMeeting ?? null;
+      setActiveMeeting(lastActive);
     };
 
     const syncSnapshot = () => {
@@ -149,7 +158,20 @@ export function useWorkspace() {
           }
           if (parsed.type === 'meeting-status') {
             const st = parsed.payload.meeting.status;
-            setActiveMeeting(st === 'completed' || st === 'error' ? null : parsed.payload);
+            const done = st === 'completed' || st === 'error';
+            if (
+              st === 'completed' &&
+              lastActive?.meeting.id === parsed.payload.meeting.id &&
+              lastActive.meeting.status !== 'completed'
+            ) {
+              setMeetingReady(parsed.payload.meeting);
+            }
+            if (done) {
+              if (lastActive?.meeting.id === parsed.payload.meeting.id) lastActive = null;
+            } else {
+              lastActive = parsed.payload;
+            }
+            setActiveMeeting(done ? null : parsed.payload);
             return;
           }
           if (parsed.type === 'meeting-app') {
@@ -234,6 +256,8 @@ export function useWorkspace() {
     sttDownload,
     activeMeeting,
     meetingApp,
-    dismissMeetingApp: () => setMeetingApp(null),
+    dismissMeetingApp,
+    meetingReady,
+    dismissMeetingReady,
   };
 }

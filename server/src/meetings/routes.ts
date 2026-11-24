@@ -37,6 +37,30 @@ export function createMeetingRoutes(deps: { meetingService: MeetingService }): H
     return c.json(status);
   });
 
+  app.delete('/meetings/:id', (c) => {
+    try {
+      meetingService.deleteMeeting(c.req.param('id'));
+      return c.json({ ok: true });
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
+  app.patch('/meetings/:id', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = z.object({ title: z.string().trim().min(1).max(200) }).safeParse(body);
+    if (!parsed.success) {
+      return c.json(apiError('invalid_meeting_title', 'Provide a title of 1–200 characters.'), 400);
+    }
+    try {
+      return c.json(meetingService.renameMeeting(c.req.param('id'), parsed.data.title));
+    } catch (err) {
+      const e = handleError(err);
+      return c.json(e.body, e.status);
+    }
+  });
+
   app.post('/meetings/start', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = z

@@ -1,5 +1,5 @@
 import type { Agent, Project } from '@atelier/contracts';
-import { BarChart3, PanelRight, Plug, Plus, Settings as SettingsIcon } from 'lucide-react';
+import { BarChart3, NotebookPen, PanelRight, Plug, Plus, Settings as SettingsIcon } from 'lucide-react';
 import { ProjectTile, getColorVar } from './Atoms';
 import { BotMascot } from './mascot/BotMascot';
 import { resolveMascotColor } from './mascot/mascotConfig';
@@ -20,6 +20,11 @@ interface LeftRailProps {
   onOpenUsage: () => void;
   onOpenSettings: () => void;
   onOpenPlugins: () => void;
+  onOpenMeetings: () => void;
+  /** The meeting notes page is open. */
+  meetingsActive: boolean;
+  /** A meeting is being recorded right now (shows a red dot on the icon). */
+  recording: boolean;
 }
 
 export function LeftRail({
@@ -37,6 +42,9 @@ export function LeftRail({
   onOpenUsage,
   onOpenSettings,
   onOpenPlugins,
+  onOpenMeetings,
+  meetingsActive,
+  recording,
 }: LeftRailProps) {
   const t = useT();
   const visibleProjects = projects.filter((p) => !p.archived);
@@ -274,6 +282,52 @@ export function LeftRail({
           }}
         >
           <Plug size={18} strokeWidth={1.5} />
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenMeetings}
+          title={recording ? t('Meeting notes · recording') : t('Meeting notes')}
+          aria-label={t('Meeting notes')}
+          aria-pressed={meetingsActive}
+          className="transition-atelier"
+          style={{
+            position: 'relative',
+            width: 32,
+            height: 32,
+            borderRadius: 'var(--radius-sm)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: meetingsActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+            background: meetingsActive ? 'var(--surface-3)' : 'transparent',
+            flexShrink: 0,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'var(--surface-3)';
+            e.currentTarget.style.color = 'var(--text-primary)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = meetingsActive ? 'var(--surface-3)' : 'transparent';
+            e.currentTarget.style.color = meetingsActive ? 'var(--text-primary)' : 'var(--text-secondary)';
+          }}
+        >
+          <NotebookPen size={18} strokeWidth={1.5} />
+          {recording && (
+            <span
+              aria-hidden
+              style={{
+                position: 'absolute',
+                top: 5,
+                right: 5,
+                width: 7,
+                height: 7,
+                borderRadius: '9999px',
+                background: 'var(--agent-red)',
+                boxShadow: '0 0 0 2px var(--surface-1)',
+              }}
+            />
+          )}
         </button>
 
         <button

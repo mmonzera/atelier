@@ -48,6 +48,7 @@ export async function runSttBenchmark(opts: {
     const realtimeRatio = Number((durationSec / elapsedSec).toFixed(2));
     const result: SttBenchmarkResult = {
       engineVersion: status.installedEngine.version,
+      engineId: status.installedEngine.id,
       modelId: targetModelId,
       threads: opts.settings.threads,
       useGpu: opts.settings.useGpu,

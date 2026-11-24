@@ -35,6 +35,7 @@ import { BrowserView } from './views/BrowserView';
 import { ChatView } from './views/ChatView';
 import { LibraryView } from './views/LibraryView';
 import { OnboardingView } from './views/OnboardingView';
+import { MeetingReadyCard, MeetingsView } from './views/MeetingsView';
 import { PluginsView } from './views/PluginsView';
 import { PreviewView } from './views/PreviewView';
 import { SettingsView, type SettingsTab } from './views/SettingsView';
@@ -42,21 +43,28 @@ import { TasksView } from './views/TasksView';
 
 /**
  * Band behind the chat column: fully solid across the column itself (so cables never run behind
- * message text), then an eased (smoothstep) fade to nothing on both sides so there is no visible edge.
+ * message text), then an eased (smoothstep) fade that always reaches nothing at <main>'s edges.
+ *
+ * The fade is placed relative to the band's own width: it starts at the edge and ends `solidHalf`
+ * px from the centre, but is never longer than `maxFade`. On a narrow window the fade gets shorter
+ * instead of being cut off mid-way, which used to leave a hard vertical edge on both sides.
  */
 const CHAT_BAND_GRADIENT = (() => {
   const solidHalf = 350; // px from the centre that stay fully solid (chat column is 650px wide + padding)
-  const fade = 340; // px over which the band melts away on each side
+  const maxFade = 340; // longest fade on each side, px
   const steps = 16;
+  // Where the solid part begins / where the fade begins, measured from the left edge.
+  const solidAt = `max(50% - ${solidHalf}px, 0px)`;
+  const fadeAt = `max(50% - ${solidHalf + maxFade}px, 0px)`;
   const left: string[] = [];
   const right: string[] = [];
   for (let i = 0; i <= steps; i += 1) {
-    const t = i / steps; // 0 = solid edge, 1 = fully transparent
-    const alpha = 1 - t * t * (3 - 2 * t);
+    const t = i / steps; // 0 = edge (transparent), 1 = solid
+    const alpha = t * t * (3 - 2 * t);
     const color = `rgba(13, 13, 17, ${alpha.toFixed(3)})`;
-    const d = solidHalf + t * fade;
-    left.unshift(`${color} calc(50% - ${d.toFixed(0)}px)`);
-    right.push(`${color} calc(50% + ${d.toFixed(0)}px)`);
+    const fromEdge = `(${fadeAt} + (${solidAt} - ${fadeAt}) * ${t.toFixed(4)})`;
+    left.push(`${color} calc${fromEdge}`);
+    right.unshift(`${color} calc(100% - ${fromEdge})`);
   }
   return `linear-gradient(to right, ${[...left, ...right].join(', ')})`;
 })();
@@ -88,6 +96,8 @@ export function App() {
     activeMeeting,
     meetingApp,
     dismissMeetingApp,
+    meetingReady,
+    dismissMeetingReady,
   } = useWorkspace();
 
   // the saved interface language (when one was chosen) follows the user across devices
@@ -106,9 +116,18 @@ export function App() {
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [modal, setModal] = useState<ActiveModal>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
+  /** Meeting notes page; `meetingId` null shows the list. */
+  const [meetingsPage, setMeetingsPage] = useState<{ meetingId: string | null } | null>(null);
+  const pageOpen = pluginsOpen || meetingsPage !== null;
   const openPlugins = () => {
     setModal(null);
+    setMeetingsPage(null);
     setPluginsOpen(true);
+  };
+  const openMeetings = (meetingId: string | null = null) => {
+    setModal(null);
+    setPluginsOpen(false);
+    setMeetingsPage({ meetingId });
   };
   const [discoveredModels, setDiscoveredModels] = useState<ModelEntry[]>([]);
   const [hostname, setHostname] = useState('Local Workstation');
@@ -376,10 +395,11 @@ export function App() {
     ? state.agents.filter((a) => modalEditTaskProject.agentIds.includes(a.id))
     : state.agents;
 
+  // Full pages (Plugins, Meetings) keep the cables and sit on the faded band like the chat does.
   const dimmedBackground =
-    pluginsOpen ||
-    (viewMode === 'project' && (activeTab === 'tasks' || activeTab === 'preview' || activeTab === 'library' || activeTab === 'browser')) ||
-    (viewMode === 'agent' && (agentTab === 'reports' || agentTab === 'library' || agentTab === 'browser'));
+    !pageOpen &&
+    ((viewMode === 'project' && (activeTab === 'tasks' || activeTab === 'preview' || activeTab === 'library' || activeTab === 'browser')) ||
+      (viewMode === 'agent' && (agentTab === 'reports' || agentTab === 'library' || agentTab === 'browser')));
 
   return (
     <div
@@ -410,6 +430,9 @@ export function App() {
         onOpenUsage={() => setModal({ type: 'usage' })}
         onOpenSettings={() => setModal({ type: 'settings' })}
         onOpenPlugins={openPlugins}
+        onOpenMeetings={() => openMeetings(null)}
+        meetingsActive={meetingsPage !== null}
+        recording={activeMeeting?.meeting.status === 'recording'}
       />
 
       <main
@@ -456,6 +479,9 @@ export function App() {
           />
         ) : (
           <>
+            {/* While a full page (Plugins, Meetings) is open the chat stays mounted but hidden, so
+                the page can sit on the same faded band instead of a solid block with hard edges. */}
+            <div style={{ display: 'contents', visibility: pageOpen ? 'hidden' : 'visible' }}>
             <ThreadHeader
               mode={viewMode}
               project={scopedProject}
@@ -786,6 +812,7 @@ export function App() {
               onOpenPlugins={openPlugins}
               onOpenBrowserSettings={() => setModal({ type: 'settings', initialTab: 'browser' })}
             />
+            </div>
 
             {activeMeeting && (
               <div
@@ -810,7 +837,15 @@ export function App() {
               />
             )}
 
-            {pluginsOpen && (
+            {meetingReady && !meetingApp && (
+              <MeetingReadyCard
+                meeting={meetingReady}
+                onOpen={() => openMeetings(meetingReady.id)}
+                onDismiss={dismissMeetingReady}
+              />
+            )}
+
+            {pageOpen && (
               <div
                 style={{
                   position: 'absolute',
@@ -818,11 +853,21 @@ export function App() {
                   zIndex: 30,
                   display: 'flex',
                   flexDirection: 'column',
-                  background: 'var(--bg-base)',
                   paddingTop: 4,
                 }}
               >
-                <PluginsView settings={state.settings} onBack={() => setPluginsOpen(false)} />
+                {pluginsOpen ? (
+                  <PluginsView settings={state.settings} onBack={() => setPluginsOpen(false)} />
+                ) : meetingsPage ? (
+                  <MeetingsView
+                    settings={state.settings}
+                    activeMeeting={activeMeeting}
+                    selectedId={meetingsPage.meetingId}
+                    onSelect={(meetingId) => setMeetingsPage({ meetingId })}
+                    onBack={() => setMeetingsPage(null)}
+                    onOpenSettings={() => setModal({ type: 'settings', initialTab: 'meeting' })}
+                  />
+                ) : null}
               </div>
             )}
           </>

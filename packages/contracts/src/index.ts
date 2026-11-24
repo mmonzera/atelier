@@ -1160,6 +1160,8 @@ export type SttBenchmarkRecommendation = 'live_safe' | 'live_tight' | 'economy';
 
 export interface SttBenchmarkResult {
   engineVersion: string;
+  /** Engine variant (cpu-x64, blas-x64, …): builds of one version can differ in speed. */
+  engineId?: string;
   modelId: string;
   threads: number;
   useGpu: boolean;

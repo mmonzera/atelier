@@ -184,6 +184,8 @@ export function MeetingSettingsPanel({
       status.benchmarks.find(
         (b) =>
           b.engineVersion === status.installedEngine!.version &&
+          // Older results have no variant: only trust them for the default CPU build.
+          (b.engineId ?? 'cpu-x64') === status.installedEngine!.id &&
           b.modelId === meeting.activeModelId &&
           b.threads === meeting.threads &&
           b.useGpu === meeting.useGpu,

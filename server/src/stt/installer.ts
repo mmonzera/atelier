@@ -689,6 +689,7 @@ export class SttInstaller {
       (b) =>
         !(
           b.engineVersion === result.engineVersion &&
+          (b.engineId ?? null) === (result.engineId ?? null) &&
           b.modelId === result.modelId &&
           b.threads === result.threads &&
           b.useGpu === result.useGpu

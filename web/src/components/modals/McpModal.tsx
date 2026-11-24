@@ -11,7 +11,6 @@ import {
 import { Check, FlaskConical, LogIn, LogOut, Plug, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
-import { Select } from '../Select';
 import { toast } from '../Toast';
 import { McpIcon } from './McpIcon';
 import {
@@ -23,6 +22,52 @@ import {
 } from './ModalShell';
 
 type AddMode = 'preset' | 'custom' | 'json';
+
+const formCardStyle: React.CSSProperties = {
+  padding: 14,
+  borderRadius: 'var(--radius-md)',
+  // One step darker than the inputs (surface-2) so the fields stand out.
+  background: 'var(--surface-1)',
+  border: '1px solid var(--border-subtle)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+};
+
+const formCardTitleStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 500,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--text-muted)',
+};
+
+function FormField({
+  label,
+  hint,
+  optional,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  optional?: boolean;
+  children: React.ReactNode;
+}) {
+  const t = useT();
+  // The <label> wraps the field so it names the input and focuses it on click.
+  return (
+    <div>
+      <label style={{ display: 'block' }}>
+        <span style={{ ...labelStyle, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+          {label}
+          {optional && <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>{t('optional')}</span>}
+        </span>
+        {children}
+      </label>
+      {hint && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 5 }}>{hint}</div>}
+    </div>
+  );
+}
 
 function parseKvLines(text: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -863,114 +908,191 @@ export function McpModal({
             </div>
           )}
 
-          {mode === 'custom' && (
-            <form onSubmit={handleAddCustom} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={labelStyle}>{t('Server name')}</label>
-                  <input
-                    type="text"
-                    value={customName}
-                    onChange={(e) => setCustomName(e.target.value)}
-                    placeholder={t('e.g. my-internal-api')}
-                    style={inputStyle}
-                  />
-                </div>
-                <div>
-                  <label style={labelStyle}>{t('Transport')}</label>
-                  <Select
-                    ariaLabel={t('Transport')}
-                    value={customTransport}
-                    onChange={(v) => setCustomTransport(v as McpTransport)}
-                    options={[
-                      { value: 'stdio', label: t('stdio (local command)') },
-                      { value: 'http', label: t('http (Streamable HTTP)') },
-                      { value: 'sse', label: t('sse (legacy SSE URL)') },
-                    ]}
-                  />
-                </div>
-              </div>
+          {mode === 'custom' && (() => {
+            const commandPreview = [customCommand.trim(), ...parseArgsInput(customArgs)]
+              .filter(Boolean)
+              .join(' ');
+            const canSubmit =
+              !busy &&
+              Boolean(customName.trim()) &&
+              (customTransport === 'stdio' ? Boolean(customCommand.trim()) : Boolean(customUrl.trim()));
+            return (
+              <form onSubmit={handleAddCustom} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {inline && (
+                  <p style={{ margin: '-6px 0 4px', fontSize: 13, lineHeight: '19px', color: 'var(--text-tertiary)' }}>
+                    {t('Connect your own MCP server: a command that runs on this laptop, or a URL.')}
+                  </p>
+                )}
 
-              {customTransport === 'stdio' ? (
-                <>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: 10 }}>
-                    <div>
-                      <label style={labelStyle}>{t('Command')}</label>
+                {/* How Atelier reaches the server */}
+                <div style={formCardStyle}>
+                  <div style={formCardTitleStyle}>{t('Connection')}</div>
+                  <div
+                    role="radiogroup"
+                    aria-label={t('Transport')}
+                    style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}
+                  >
+                    {(
+                      [
+                        { id: 'stdio', label: t('Local command'), hint: t('npx, uvx, node, python') },
+                        { id: 'http', label: t('HTTP'), hint: t('Streamable HTTP URL') },
+                        { id: 'sse', label: t('SSE'), hint: t('Older SSE URL') },
+                      ] as const
+                    ).map((opt) => {
+                      const on = customTransport === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={on}
+                          onClick={() => setCustomTransport(opt.id as McpTransport)}
+                          className="transition-atelier"
+                          style={{
+                            textAlign: 'left',
+                            padding: '9px 11px',
+                            borderRadius: 'var(--radius-sm)',
+                            background: on ? 'var(--surface-3)' : 'var(--surface-2)',
+                            border: `1px solid ${on ? 'rgba(255,255,255,0.24)' : 'var(--border-subtle)'}`,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 2,
+                          }}
+                        >
+                          <span style={{ fontSize: 12.5, fontWeight: 500, color: on ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                            {opt.label}
+                          </span>
+                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{opt.hint}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <FormField label={t('Server name')} hint={t('Shown in your plugin list and to agents.')}>
+                    <input
+                      type="text"
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      placeholder={t('e.g. my-internal-api')}
+                      style={inputStyle}
+                    />
+                  </FormField>
+                </div>
+
+                {customTransport === 'stdio' ? (
+                  <div style={formCardStyle}>
+                    <div style={formCardTitleStyle}>{t('Command')}</div>
+                    <FormField label={t('Program')} hint={t('The executable to start, e.g. npx or uvx.')}>
                       <input
                         type="text"
                         value={customCommand}
                         onChange={(e) => setCustomCommand(e.target.value)}
-                        placeholder={t('npx, uvx, node, python...')}
+                        placeholder="npx"
                         className="mono-num"
                         style={inputStyle}
                       />
-                    </div>
-                    <div>
-                      <label style={labelStyle}>{t('Args (space-separated or 1 per line)')}</label>
+                    </FormField>
+                    <FormField label={t('Arguments')} hint={t('Space-separated on one line, or one per line.')}>
                       <textarea
-                        rows={2}
+                        rows={3}
                         value={customArgs}
                         onChange={(e) => setCustomArgs(e.target.value)}
-                        placeholder={t('-y @my-org/mcp-server')}
+                        placeholder="-y @my-org/mcp-server"
                         className="mono-num"
-                        style={{ ...inputStyle, resize: 'vertical' }}
+                        style={{ ...inputStyle, resize: 'vertical', lineHeight: '18px' }}
                       />
-                    </div>
+                    </FormField>
+                    {commandPreview && (
+                      <div
+                        className="mono-num"
+                        aria-label={t('Command that will run')}
+                        style={{
+                          padding: '8px 11px',
+                          borderRadius: 'var(--radius-sm)',
+                          background: 'var(--bg-base)',
+                          border: '1px dashed var(--border-default)',
+                          fontSize: 12,
+                          color: 'var(--text-secondary)',
+                          overflowX: 'auto',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        <span style={{ color: 'var(--text-muted)', userSelect: 'none' }}>$ </span>
+                        {commandPreview}
+                      </div>
+                    )}
+                    <FormField
+                      label={t('Environment variables')}
+                      optional
+                      hint={t('KEY=VALUE, one per line. Stored on this laptop.')}
+                    >
+                      <textarea
+                        rows={2}
+                        value={customEnvText}
+                        onChange={(e) => setCustomEnvText(e.target.value)}
+                        placeholder="API_TOKEN=..."
+                        className="mono-num"
+                        style={{ ...inputStyle, resize: 'vertical', lineHeight: '18px' }}
+                      />
+                    </FormField>
                   </div>
-                  <div>
-                    <label style={labelStyle}>{t('Environment variables (optional, KEY=VALUE per line)')}</label>
-                    <textarea
-                      rows={2}
-                      value={customEnvText}
-                      onChange={(e) => setCustomEnvText(e.target.value)}
-                      placeholder={t('API_TOKEN=...')}
-                      className="mono-num"
-                      style={{ ...inputStyle, resize: 'vertical' }}
-                    />
+                ) : (
+                  <div style={formCardStyle}>
+                    <div style={formCardTitleStyle}>{t('Endpoint')}</div>
+                    <FormField label={t('URL')}>
+                      <input
+                        type="url"
+                        value={customUrl}
+                        onChange={(e) => setCustomUrl(e.target.value)}
+                        placeholder={
+                          customTransport === 'sse' ? 'https://mcp.example.com/sse' : 'https://mcp.example.com/mcp'
+                        }
+                        className="mono-num"
+                        style={inputStyle}
+                      />
+                    </FormField>
+                    <FormField
+                      label={t('Headers')}
+                      optional
+                      hint={t('Key: Value, one per line. Stored on this laptop.')}
+                    >
+                      <textarea
+                        rows={2}
+                        value={customHeadersText}
+                        onChange={(e) => setCustomHeadersText(e.target.value)}
+                        placeholder="Authorization: Bearer ..."
+                        className="mono-num"
+                        style={{ ...inputStyle, resize: 'vertical', lineHeight: '18px' }}
+                      />
+                    </FormField>
                   </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <label style={labelStyle}>{t('Endpoint URL')}</label>
-                    <input
-                      type="url"
-                      value={customUrl}
-                      onChange={(e) => setCustomUrl(e.target.value)}
-                      placeholder={t('https://mcp.example.com/mcp')}
-                      className="mono-num"
-                      style={inputStyle}
-                    />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>{t('Headers (optional, Key=Value or Key: Value per line)')}</label>
-                    <textarea
-                      rows={2}
-                      value={customHeadersText}
-                      onChange={(e) => setCustomHeadersText(e.target.value)}
-                      placeholder={t('Authorization: Bearer ...')}
-                      className="mono-num"
-                      style={{ ...inputStyle, resize: 'vertical' }}
-                    />
-                  </div>
-                </>
-              )}
+                )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  type="submit"
-                  disabled={
-                    busy ||
-                    !customName.trim() ||
-                    (customTransport === 'stdio' ? !customCommand.trim() : !customUrl.trim())
-                  }
-                  style={primaryBtnStyle}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    gap: 8,
+                    paddingTop: 4,
+                  }}
                 >
-                  {busy ? t('Adding…') : t('Add custom MCP')}
-                </button>
-              </div>
-            </form>
-          )}
+                  {inline && (
+                    <button type="button" onClick={onClose} style={secondaryBtnStyle}>
+                      {t('Cancel')}
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={!canSubmit}
+                    style={{ ...primaryBtnStyle, opacity: canSubmit ? 1 : 0.5 }}
+                  >
+                    {busy ? t('Adding…') : t('Add custom MCP')}
+                  </button>
+                </div>
+              </form>
+            );
+          })()}
 
           {mode === 'json' && (
             <form onSubmit={handleImportJson} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

@@ -625,4 +625,13 @@ export const meetingsApi = {
     request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}/resume`, {
       method: 'POST',
     }),
+  rename: (id: string, title: string) =>
+    request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  remove: (id: string) =>
+    request<{ ok: boolean }>(`/api/meetings/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 };

@@ -166,6 +166,39 @@ describe('Meeting audio capture through the desktop shell', () => {
   });
 });
 
+describe('Meeting notes management', () => {
+  it('announces finished notes, renames, and deletes a meeting with its files', async () => {
+    const root = makeTempDir('atelier-notes-');
+    const notices: string[] = [];
+    const handle = await startServer(root, undefined, notices);
+    const base = `http://127.0.0.1:${handle.port}`;
+
+    const started = await handle.meetingService.startMeeting({ mode: 'economy', keepAudio: true });
+    const id = started.meeting.id;
+
+    // Busy meetings cannot be deleted.
+    expect((await fetch(`${base}/api/meetings/${id}`, { method: 'DELETE' })).status).toBe(409);
+
+    // No audio: stopping completes straight away and tells the user the notes are ready.
+    const stopped = await handle.meetingService.stopMeeting(id);
+    expect(stopped.meeting.status).toBe('completed');
+    expect(notices.some((n) => /notes are ready|Catatan meeting siap/.test(n))).toBe(true);
+
+    const renamed = await fetch(`${base}/api/meetings/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Weekly sync' }),
+    });
+    expect(((await renamed.json()) as MeetingStatusEvent).meeting.title).toBe('Weekly sync');
+
+    const dir = path.join(root, 'data', 'meetings', id);
+    expect(fs.existsSync(dir)).toBe(true); // keepAudio left the folder
+    expect((await fetch(`${base}/api/meetings/${id}`, { method: 'DELETE' })).status).toBe(200);
+    expect(fs.existsSync(dir)).toBe(false);
+    expect((await fetch(`${base}/api/meetings/${id}`)).status).toBe(404);
+  });
+});
+
 describe('Meeting app detection', () => {
   it('offers notes for meeting apps, respects the settings, and asks to stop when the app ends', async () => {
     const root = makeTempDir('atelier-detect-');
