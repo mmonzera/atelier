@@ -1,23 +1,34 @@
 import { useEffect, useMemo, useRef } from 'react';
 import patternSource from '../assets/atelier-pattern.svg?raw';
-import { isAnimationActive } from '../state/animationGate';
+import { isAnimationActive, subscribeAnimationGate } from '../state/animationGate';
 
 /**
- * Atelier "patron de coupe" background: ~40 static SVG paths (a few KB of GPU work, no per-frame
- * redraw). Strands bend away from the pointer; that motion only runs while the pointer moves.
+ * Atelier "patron de coupe" background: ~40 SVG paths ("cables").
+ *
+ *  - Ambient drift: every cable sways slowly and continuously (a smooth wave in space and time,
+ *    so neighbouring strands in a bundle move together like real cables).
+ *  - Pointer: strands bend away from the cursor, same behaviour as the original SVG script.
+ *
+ * Cost is small by design: ~1.9k points of math at 15 fps, and the loop sleeps entirely while the
+ * window is unfocused / hidden / in the tray (animationGate).
  *
  * The SVG file is shipped as-is (assets/atelier-pattern.svg). Its embedded <script> never runs when
- * injected as markup, so it is stripped and the same pointer behaviour is implemented below.
+ * injected as markup, so it is stripped and the pointer behaviour is implemented here instead.
  */
 const MARKUP = patternSource
   .replace(/<script[\s\S]*?<\/script>/gi, '')
   .replace('<svg ', '<svg width="100%" height="100%" ');
 
+const FRAME_MS = 1000 / 15;
+/** Ambient sway amplitude in SVG units (viewBox is 1920 wide) and angular speeds in rad/s. */
+const SWAY = 11;
+const SWAY_SPEED_X = 0.32; // ~20 s per cycle
+const SWAY_SPEED_Y = 0.25; // ~25 s per cycle
+
 interface Strand {
   el: SVGPathElement;
   original: string;
   coords: number[];
-  dirty: boolean;
 }
 
 export function PatternBackground({ dimmed = false }: { dimmed?: boolean }) {
@@ -31,61 +42,77 @@ export function PatternBackground({ dimmed = false }: { dimmed?: boolean }) {
 
     const strands: Strand[] = Array.from(svg.querySelectorAll('path'), (el) => {
       const original = el.getAttribute('d') ?? '';
-      return { el, original, coords: (original.match(/-?[\d.]+/g) ?? []).map(Number), dirty: false };
+      return { el, original, coords: (original.match(/-?[\d.]+/g) ?? []).map(Number) };
     });
 
-    let target: DOMPoint | null = null;
+    let target: DOMPoint | null = null; // pointer in SVG coordinates
     let x = 0;
     let y = 0;
-    let power = 0;
-    let frame = 0;
+    let power = 0; // 0..1 strength of the pointer effect
+    let raf = 0;
+    let running = false;
+    let lastDraw = 0;
+    let lastTick = 0;
+    const t0 = performance.now();
 
-    const schedule = () => {
-      if (!frame) frame = requestAnimationFrame(draw);
-    };
+    function draw(now: number) {
+      const t = (now - t0) / 1000;
+      const dt = Math.min(0.2, lastTick ? (now - lastTick) / 1000 : FRAME_MS / 1000);
+      lastTick = now;
 
-    function draw() {
-      frame = 0;
+      // frame-rate independent easing (≈ the original 0.26 / 0.18 per 60 fps frame)
       if (target) {
-        x += (target.x - x) * 0.26;
-        y += (target.y - y) * 0.26;
+        const k = 1 - Math.exp(-18 * dt);
+        x += (target.x - x) * k;
+        y += (target.y - y) * k;
       }
-      power += ((target ? 1 : 0) - power) * 0.18;
+      power += ((target ? 1 : 0) - power) * (1 - Math.exp(-12 * dt));
       if (!target && power < 0.003) power = 0;
 
+      const sx = t * SWAY_SPEED_X;
+      const sy = t * SWAY_SPEED_Y;
       for (const strand of strands) {
         const c = strand.coords;
-        if (!power) {
-          if (strand.dirty) {
-            strand.el.setAttribute('d', strand.original);
-            strand.dirty = false;
-          }
-          continue;
-        }
-        let changed = false;
         const out: string[] = [];
         for (let k = 0; k < c.length; k += 2) {
-          const dx = c[k] - x;
-          const dy = c[k + 1] - y;
-          const d = Math.hypot(dx, dy);
-          const f = power * Math.max(0, 1 - d / 145) ** 2;
-          if (f) changed = true;
-          out.push(`${(c[k] + f * (26 + dx * 0.44)).toFixed(1)} ${(c[k + 1] + f * (dy * 0.32 - 10)).toFixed(1)}`);
+          let px = c[k] + SWAY * Math.sin(sx + c[k + 1] * 0.0042 + c[k] * 0.0021);
+          let py = c[k + 1] + SWAY * 0.6 * Math.cos(sy + c[k] * 0.0033 + c[k + 1] * 0.0027);
+          if (power) {
+            const dx = px - x;
+            const dy = py - y;
+            const f = power * Math.max(0, 1 - Math.hypot(dx, dy) / 145) ** 2;
+            if (f) {
+              px += f * (26 + dx * 0.44);
+              py += f * (dy * 0.32 - 10);
+            }
+          }
+          out.push(`${px.toFixed(1)} ${py.toFixed(1)}`);
         }
-        if (changed) {
-          strand.el.setAttribute('d', `M${out[0]} Q${out.slice(1, -1).join(' ')} T${out[out.length - 1]}`);
-        } else if (strand.dirty) {
-          strand.el.setAttribute('d', strand.original);
-        }
-        strand.dirty = changed;
+        strand.el.setAttribute('d', `M${out[0]} Q${out.slice(1, -1).join(' ')} T${out[out.length - 1]}`);
       }
-
-      const settling = target ? Math.hypot(target.x - x, target.y - y) > 0.1 || power < 0.998 : power;
-      if (settling) schedule();
     }
 
+    const loop = (now: number) => {
+      raf = requestAnimationFrame(loop);
+      if (now - lastDraw < FRAME_MS) return;
+      lastDraw = now;
+      draw(now);
+    };
+    const start = () => {
+      if (running || !isAnimationActive()) return;
+      running = true;
+      lastTick = 0;
+      raf = requestAnimationFrame(loop);
+    };
+    const stop = () => {
+      running = false;
+      cancelAnimationFrame(raf);
+      target = null; // let the pointer effect relax when we wake up again
+      power = 0;
+    };
+
     const onMove = (e: PointerEvent) => {
-      if (!isAnimationActive()) return;
+      if (!running) return;
       const ctm = svg.getScreenCTM();
       if (!ctm) return;
       target = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
@@ -93,24 +120,24 @@ export function PatternBackground({ dimmed = false }: { dimmed?: boolean }) {
         x = target.x;
         y = target.y;
       }
-      schedule();
     };
     const onLeave = () => {
       target = null;
-      schedule();
     };
 
+    draw(performance.now()); // first frame immediately (also shown while unfocused)
+    start();
+    const unsubscribeGate = subscribeAnimationGate((active) => (active ? start() : stop()));
     window.addEventListener('pointermove', onMove, { passive: true });
     window.addEventListener('pointerleave', onLeave);
     window.addEventListener('pointercancel', onLeave);
-    window.addEventListener('blur', onLeave);
     return () => {
+      unsubscribeGate();
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerleave', onLeave);
       window.removeEventListener('pointercancel', onLeave);
-      window.removeEventListener('blur', onLeave);
-      if (frame) cancelAnimationFrame(frame);
-      for (const s of strands) if (s.dirty) s.el.setAttribute('d', s.original);
+      cancelAnimationFrame(raf);
+      for (const s of strands) s.el.setAttribute('d', s.original);
     };
   }, []);
 

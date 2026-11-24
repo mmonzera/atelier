@@ -361,9 +361,29 @@ export function App() {
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
+          position: 'relative',
           zIndex: 10,
         }}
       >
+        {/* Solid band behind the chat column, fading out sideways, so background cables never run
+            behind message text. Sits at z-index -1 inside <main>'s own stacking context. */}
+        {!dimmedBackground && !showOnboarding && (
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              top: -12,
+              bottom: -12,
+              left: '50%',
+              width: 'min(100%, 940px)',
+              transform: 'translateX(-50%)',
+              zIndex: -1,
+              pointerEvents: 'none',
+              background:
+                'linear-gradient(to right, transparent 0%, var(--bg-base) 17%, var(--bg-base) 83%, transparent 100%)',
+            }}
+          />
+        )}
         {showOnboarding ? (
           <OnboardingView
             activeProject={activeProject}
