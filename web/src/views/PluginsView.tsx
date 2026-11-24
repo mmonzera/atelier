@@ -58,6 +58,14 @@ const pillBase: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+const pageTitleStyle: CSSProperties = {
+  fontSize: 22,
+  fontWeight: 500,
+  lineHeight: '28px',
+  color: 'var(--text-primary)',
+  margin: '0 0 22px',
+};
+
 const ghostBtn: CSSProperties = {
   height: 28,
   padding: '0 12px',
@@ -492,6 +500,49 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
     );
   };
 
+  // Adding a plugin is a step inside this page (no dialog): back returns to the list.
+  if (addDialog) {
+    const preset = addDialog.presetId
+      ? MCP_PRESETS.find((p) => p.id === addDialog.presetId)
+      : undefined;
+    const title = preset
+      ? `Add ${preset.name}`
+      : addDialog.mode === 'json'
+        ? 'Paste MCP JSON'
+        : 'Custom connector';
+    return (
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 4px 40px' }}>
+        <div style={{ maxWidth: 620, margin: '0 auto', padding: '8px 12px 0' }}>
+          <button
+            type="button"
+            onClick={() => setAddDialog(null)}
+            className="transition-atelier"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 12.5,
+              color: 'var(--text-secondary)',
+              marginBottom: 18,
+            }}
+          >
+            <ArrowLeft size={14} strokeWidth={1.5} />
+            Back to plugins
+          </button>
+          <h1 style={pageTitleStyle}>{title}</h1>
+          <McpModal
+            inline
+            addOnly
+            settings={settings}
+            initialMode={addDialog.mode}
+            initialPresetId={addDialog.presetId}
+            onClose={() => setAddDialog(null)}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 4px 40px' }}>
       <div style={{ maxWidth: 820, margin: '0 auto', padding: '8px 12px 0' }}>
@@ -512,18 +563,7 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
           Back to chat
         </button>
 
-        <h1
-          style={{
-            fontFamily: "'Source Serif 4', 'Iowan Old Style', Georgia, serif",
-            fontSize: 30,
-            fontWeight: 500,
-            letterSpacing: '-0.01em',
-            color: 'var(--text-primary)',
-            margin: '0 0 22px',
-          }}
-        >
-          Plugins
-        </h1>
+        <h1 style={pageTitleStyle}>Plugins</h1>
 
         {/* Toolbar */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 30 }}>
@@ -714,15 +754,6 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
         </section>
       </div>
 
-      {addDialog && (
-        <McpModal
-          addOnly
-          settings={settings}
-          initialMode={addDialog.mode}
-          initialPresetId={addDialog.presetId}
-          onClose={() => setAddDialog(null)}
-        />
-      )}
     </div>
   );
 }

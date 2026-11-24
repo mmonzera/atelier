@@ -56,11 +56,14 @@ export function McpModal({
   settings,
   onClose,
   addOnly = false,
+  inline = false,
   initialMode = 'preset',
   initialPresetId,
 }: {
   settings: Settings;
   onClose: () => void;
+  /** Render the add form in the page itself (no dialog); the page already chose preset/custom/json. */
+  inline?: boolean;
   /** Hide the configured-servers list (the Plugins page shows it already). */
   addOnly?: boolean;
   initialMode?: AddMode;
@@ -347,17 +350,7 @@ export function McpModal({
     (p) => p.id !== 'custom-stdio' && p.id !== 'custom-http',
   );
 
-  return (
-    <ModalShell
-      title={addOnly ? 'Add plugin' : 'MCP connections'}
-      subtitle={
-        addOnly
-          ? 'Pick a connector, add a custom command or URL, or paste MCP JSON.'
-          : 'Connect external MCP tools via presets, custom stdio/HTTP, or JSON import, then attach them per agent.'
-      }
-      width={620}
-      onClose={onClose}
-    >
+  const body = (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {/* Configured MCP servers */}
         <div style={{ display: addOnly ? 'none' : 'flex', flexDirection: 'column', gap: 8 }}>
@@ -587,8 +580,8 @@ export function McpModal({
         {/* Add Mode Tabs */}
         <div
           style={{
-            paddingTop: 12,
-            borderTop: '1px solid var(--border-subtle)',
+            paddingTop: inline ? 0 : 12,
+            borderTop: inline ? 'none' : '1px solid var(--border-subtle)',
             display: 'flex',
             flexDirection: 'column',
             gap: 12,
@@ -596,7 +589,7 @@ export function McpModal({
         >
           <div
             style={{
-              display: 'grid',
+              display: inline ? 'none' : 'grid',
               gridTemplateColumns: 'repeat(3, 1fr)',
               gap: 2,
               padding: 3,
@@ -642,7 +635,7 @@ export function McpModal({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div
                 style={{
-                  display: 'grid',
+                  display: inline ? 'none' : 'grid',
                   gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
                   gap: 8,
                 }}
@@ -871,7 +864,7 @@ export function McpModal({
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                     <button
                       type="button"
-                      onClick={() => setSelectedPreset(null)}
+                      onClick={() => (inline ? onClose() : setSelectedPreset(null))}
                       style={secondaryBtnStyle}
                     >
                       Cancel
@@ -1026,6 +1019,21 @@ export function McpModal({
           {error && <div style={{ fontSize: 12, color: 'var(--agent-red)' }}>{error}</div>}
         </div>
       </div>
+  );
+
+  if (inline) return body;
+  return (
+    <ModalShell
+      title={addOnly ? 'Add plugin' : 'MCP connections'}
+      subtitle={
+        addOnly
+          ? 'Pick a connector, add a custom command or URL, or paste MCP JSON.'
+          : 'Connect external MCP tools via presets, custom stdio/HTTP, or JSON import, then attach them per agent.'
+      }
+      width={620}
+      onClose={onClose}
+    >
+      {body}
     </ModalShell>
   );
 }
