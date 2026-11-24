@@ -5,13 +5,18 @@
 //! and auto-update. All app logic stays in the TypeScript server and web UI.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod meeting_audio;
+mod meeting_detect;
+
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use serde_json::json;
 
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -31,6 +36,12 @@ struct Sidecar {
     stdin: Mutex<Option<ChildStdin>>,
     quitting: AtomicBool,
     hint_shown: AtomicBool,
+    /// Meeting audio being recorded (at most one meeting at a time).
+    recorder: Mutex<Option<meeting_audio::Recorder>>,
+    /// Serialises start/stop requests so a stop never overtakes a start that is still opening devices.
+    audio_ops: Mutex<()>,
+    /// Watch for Zoom / Teams / browser meetings; the server switches it from Settings.
+    detect: Arc<AtomicBool>,
 }
 
 impl Sidecar {
@@ -40,6 +51,63 @@ impl Sidecar {
             let _ = stdin.flush();
         }
     }
+}
+
+/// A line sender to the server for background threads (audio capture, meeting detection).
+fn server_out(app: &AppHandle) -> meeting_audio::Out {
+    let app = app.clone();
+    Arc::new(move |line: String| app.state::<Sidecar>().send(&line))
+}
+
+/// `ATELIER_AUDIO {"action":"start"|"stop",…}` from the server. Runs off the stdout reader
+/// thread because opening devices and flushing the last chunk take a moment.
+fn handle_audio(app: &AppHandle, v: serde_json::Value) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<Sidecar>();
+        let _serial = state.audio_ops.lock().unwrap();
+        let id = v["meetingId"].as_str().unwrap_or_default().to_string();
+        match v["action"].as_str() {
+            Some("start") => {
+                let previous = state.recorder.lock().unwrap().take();
+                if let Some(rec) = previous {
+                    rec.stop();
+                }
+                let dir = PathBuf::from(v["dir"].as_str().unwrap_or_default());
+                match meeting_audio::Recorder::start(id.clone(), dir, server_out(&app)) {
+                    Ok((rec, warnings)) => {
+                        *state.recorder.lock().unwrap() = Some(rec);
+                        state.send(&format!("audio-started {}", json!({ "meetingId": id })));
+                        for message in warnings {
+                            state.send(&format!(
+                                "audio-error {}",
+                                json!({ "meetingId": id, "message": message, "fatal": false })
+                            ));
+                        }
+                    }
+                    Err(message) => state.send(&format!(
+                        "audio-error {}",
+                        json!({ "meetingId": id, "message": message, "fatal": true })
+                    )),
+                }
+            }
+            Some("stop") => {
+                let rec = {
+                    let mut guard = state.recorder.lock().unwrap();
+                    if guard.as_ref().is_some_and(|r| id.is_empty() || r.meeting_id == id) {
+                        guard.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(rec) = rec {
+                    rec.stop();
+                }
+                state.send(&format!("audio-stopped {}", json!({ "meetingId": id })));
+            }
+            _ => {}
+        }
+    });
 }
 
 fn data_root() -> PathBuf {
@@ -182,7 +250,23 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                         true,
                     );
                 }
+            } else if let Some(rest) = line.strip_prefix("ATELIER_AUDIO ") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                    handle_audio(&handle, v);
+                }
+            } else if let Some(rest) = line.strip_prefix("ATELIER_DETECT ") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                    let on = v["enabled"].as_bool().unwrap_or(false);
+                    handle.state::<Sidecar>().detect.store(on, Ordering::SeqCst);
+                }
             }
+        }
+        // No server to send chunks to any more: stop recording (written files are adopted on restart).
+        let state = handle.state::<Sidecar>();
+        state.detect.store(false, Ordering::SeqCst);
+        let recorder = state.recorder.lock().unwrap().take();
+        if let Some(rec) = recorder {
+            rec.stop();
         }
         // Server exited on its own (crash): tell the user instead of leaving a blank window.
         if !handle.state::<Sidecar>().quitting.load(Ordering::SeqCst) {
@@ -269,6 +353,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         app,
         &[
             &MenuItem::with_id(app, "open", "Buka Atelier", true, None::<&str>)?,
+            &MenuItem::with_id(app, "meeting", "Mulai / selesai catat meeting", true, None::<&str>)?,
             &MenuItem::with_id(app, "lock", "Kunci sekarang", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "data", "Buka folder data", true, None::<&str>)?,
@@ -285,6 +370,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_main(app),
+            "meeting" => app.state::<Sidecar>().send("meeting-toggle"),
             "lock" => app.state::<Sidecar>().send("lock"),
             "data" => {
                 let mut cmd = Command::new("explorer.exe");
@@ -337,6 +423,7 @@ fn main() {
                 return Ok(());
             }
             build_tray(&handle)?;
+            meeting_detect::spawn(handle.state::<Sidecar>().detect.clone(), server_out(&handle));
 
             // Closing the window keeps agents running in the tray.
             if let Some(win) = app.get_webview_window("main") {

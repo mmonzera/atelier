@@ -25,6 +25,7 @@ export function createMeetingRoutes(deps: { meetingService: MeetingService }): H
     return c.json({
       meetings: meetingService.listMeetings(),
       active: meetingService.getActiveMeetingStatus(),
+      captureAvailable: meetingService.captureAvailable,
     });
   });
 

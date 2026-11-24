@@ -2,7 +2,6 @@ import {
   DEFAULT_MEETING_SETTINGS,
   type MeetingMode,
   type MeetingSettings,
-  type ModelProvider,
   type Settings,
   type SttBenchmarkRecommendation,
   type SttDownloadProgressEvent,
@@ -17,12 +16,13 @@ import {
   Gauge,
   HardDrive,
   Mic,
+  Radar,
   Star,
   Trash2,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, sttApi } from '../api';
+import { api, meetingsApi, sttApi } from '../api';
 import {
   inputStyle,
   primaryBtnStyle,
@@ -32,20 +32,13 @@ import { Select } from '../components/Select';
 import { Switch } from '../components/Switch';
 import { toast } from '../components/Toast';
 import { useLang, useT } from '../i18n';
+import {
+  DEFAULT_NOTICE_EN,
+  DEFAULT_NOTICE_ID,
+  PROVIDER_DISPLAY_NAMES,
+  buildMeetingNotice,
+} from '../meetingNotice';
 
-const DEFAULT_NOTICE_ID =
-  'Info: saya memakai asisten AI di laptop saya untuk mencatat poin penting meeting ini. Kalau ada yang keberatan, kabari saya.';
-const DEFAULT_NOTICE_EN =
-  "Heads-up: I'm using an AI assistant on my laptop to take notes during this meeting. Let me know if you'd rather I didn't.";
-
-const PROVIDER_DISPLAY_NAMES: Record<ModelProvider, string> = {
-  claude: 'Claude (Anthropic)',
-  openai: 'ChatGPT (OpenAI)',
-  antigravity: 'Antigravity',
-  deepseek: 'DeepSeek',
-  openrouter: 'OpenRouter',
-  opencode: 'OpenCode',
-};
 
 const cardStyle: React.CSSProperties = {
   padding: 14,
@@ -113,6 +106,19 @@ export function MeetingSettingsPanel({
   const [selectedEngineId, setSelectedEngineId] = useState('cpu-x64');
   const [benchmarking, setBenchmarking] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  /** Audio is recorded by the desktop app; a browser tab on the dev server cannot record. */
+  const [captureAvailable, setCaptureAvailable] = useState<boolean | null>(null);
+  const [recording, setRecording] = useState(false);
+
+  useEffect(() => {
+    meetingsApi
+      .list()
+      .then((res) => {
+        setCaptureAvailable(res.captureAvailable);
+        setRecording(res.active?.meeting.status === 'recording');
+      })
+      .catch(() => setCaptureAvailable(false));
+  }, []);
   const [noticeDraft, setNoticeDraft] = useState(
     lang === 'id'
       ? (meeting.noticeTextId ?? DEFAULT_NOTICE_ID)
@@ -274,17 +280,33 @@ export function MeetingSettingsPanel({
     }
   };
 
-  const handleCopyNotice = async () => {
-    const providerLabel = PROVIDER_DISPLAY_NAMES[settings.provider] ?? settings.provider;
-    const isExternal = settings.provider !== 'opencode';
-    const baseText = noticeDraft.trim() || (lang === 'id' ? DEFAULT_NOTICE_ID : DEFAULT_NOTICE_EN);
-    const disclosure = isExternal
-      ? lang === 'id'
-        ? `\nAudio diproses di laptop saya. Teks transkrip dikirim ke ${providerLabel} untuk membuat ringkasan.`
-        : `\nAudio is processed on my laptop. Transcript text is sent to ${providerLabel} to create the summary.`
-      : '';
+  const handleStartMeeting = async () => {
+    setBusyAction('start-meeting');
     try {
-      await navigator.clipboard.writeText(`${baseText}${disclosure}`);
+      await meetingsApi.start();
+      setRecording(true);
+      toast.success(t('Taking meeting notes'));
+      if (meeting.remindParticipants) {
+        await navigator.clipboard.writeText(buildMeetingNotice(settings, lang)).catch(() => undefined);
+        toast.info(t('Notice message copied: paste it into the meeting chat'));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('Failed to start meeting notes'));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleUnignoreApp = (appId: string) =>
+    void updateMeeting({ ignoredMeetingApps: meeting.ignoredMeetingApps.filter((id) => id !== appId) });
+
+  const installedEngineHasGpu = Boolean(
+    status?.installedEngine && status.engines.find((e) => e.id === status.installedEngine!.id)?.gpu,
+  );
+
+  const handleCopyNotice = async () => {
+    try {
+      await navigator.clipboard.writeText(buildMeetingNotice(settings, lang, noticeDraft));
       toast.success(t('Notification message copied'));
     } catch {
       toast.error(t('Failed to copy message'));
@@ -337,6 +359,93 @@ export function MeetingSettingsPanel({
             {!engineInstalled
               ? t('Install the whisper.cpp engine below before starting meeting transcription.')
               : t('Download the selected Whisper model below (or switch to an installed model) to enable local transcription.')}
+          </div>
+        )}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            paddingTop: 10,
+            borderTop: '1px solid var(--border-subtle)',
+          }}
+        >
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.45 }}>
+            {captureAvailable === false
+              ? t('Recording needs the Atelier desktop app; this window cannot reach the microphone.')
+              : recording
+                ? t('A meeting is being recorded. Stop it from the pill at the top of the window.')
+                : t('Records your microphone and the laptop sound (the other participants). Also from the tray icon.')}
+          </div>
+          <button
+            type="button"
+            disabled={
+              !captureAvailable ||
+              recording ||
+              busyAction !== null ||
+              (!status?.ready && meeting.mode === 'live')
+            }
+            onClick={() => void handleStartMeeting()}
+            style={{
+              ...primaryBtnStyle,
+              padding: '6px 11px',
+              fontSize: 12,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              flexShrink: 0,
+              opacity: !captureAvailable || recording || (!status?.ready && meeting.mode === 'live') ? 0.5 : 1,
+            }}
+          >
+            <Mic size={13} strokeWidth={1.6} />
+            {busyAction === 'start-meeting' ? t('Starting…') : t('Start taking notes')}
+          </button>
+        </div>
+      </div>
+
+      {/* Automatic meeting detection */}
+      <div style={cardStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <Radar size={14} strokeWidth={1.6} style={{ color: 'var(--text-secondary)', marginTop: 2 }} />
+            <div>
+              <div style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>
+                {t('Offer to take notes when a meeting starts')}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2, lineHeight: 1.45 }}>
+                {t('When Zoom, Teams, Webex, Slack or a browser (Google Meet) starts using the microphone, Atelier asks whether to take notes. It never records without your click.')}
+              </div>
+            </div>
+          </div>
+          <Switch
+            checked={meeting.detectMeetingApps}
+            onChange={(detectMeetingApps) => void updateMeeting({ detectMeetingApps })}
+            label={t('Offer to take notes when a meeting starts')}
+          />
+        </div>
+        {meeting.ignoredMeetingApps.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{t('Not asked for:')}</span>
+            {meeting.ignoredMeetingApps.map((appId) => (
+              <button
+                key={appId}
+                type="button"
+                onClick={() => handleUnignoreApp(appId)}
+                title={t('Ask again for this app')}
+                style={{
+                  ...secondaryBtnStyle,
+                  padding: '2px 8px',
+                  fontSize: 11,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                {meetingAppLabel(t, appId)}
+                <X size={11} strokeWidth={1.7} />
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -427,6 +536,8 @@ export function MeetingSettingsPanel({
           <DownloadProgressRow progress={activeDownload} onCancel={handleCancelDownload} />
         )}
 
+        {/* Only GPU builds of the engine can use it; the CPU and BLAS builds ignore the flag. */}
+        {installedEngineHasGpu && (
         <div
           style={{
             display: 'flex',
@@ -463,6 +574,7 @@ export function MeetingSettingsPanel({
             label={t('Use GPU (Vulkan)')}
           />
         </div>
+        )}
       </div>
 
       {/* §6.2 Whisper Models */}
@@ -670,7 +782,7 @@ export function MeetingSettingsPanel({
           <div>
             <div style={eyebrowStyle}>{t('Speed Test')}</div>
             <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              {t('Measures 20s sample transcription speed with the active model and thread count.')}
+              {t('Transcribes a short spoken sample with the active model and thread count.')}
             </div>
           </div>
           <button
@@ -825,6 +937,25 @@ export function MeetingSettingsPanel({
       </div>
     </div>
   );
+}
+
+export function meetingAppLabel(t: (k: string) => string, appId: string): string {
+  switch (appId) {
+    case 'zoom':
+      return 'Zoom';
+    case 'teams':
+      return 'Microsoft Teams';
+    case 'browser':
+      return t('Browser (Google Meet)');
+    case 'webex':
+      return 'Webex';
+    case 'slack':
+      return 'Slack';
+    case 'skype':
+      return 'Skype';
+    default:
+      return appId;
+  }
 }
 
 function DownloadProgressRow({

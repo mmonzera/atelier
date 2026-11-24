@@ -13,6 +13,7 @@ import { Plus, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import { FloatingComposer } from './components/FloatingComposer';
+import { MeetingAppPrompt } from './components/MeetingAppPrompt';
 import { MeetingRecordingPill } from './components/MeetingRecordingPill';
 import { PatternBackground } from './components/PatternBackground';
 import { LeftRail } from './components/LeftRail';
@@ -85,6 +86,8 @@ export function App() {
     browserTakeovers,
     sttDownload,
     activeMeeting,
+    meetingApp,
+    dismissMeetingApp,
   } = useWorkspace();
 
   // the saved interface language (when one was chosen) follows the user across devices
@@ -796,6 +799,15 @@ export function App() {
               >
                 <MeetingRecordingPill event={activeMeeting} />
               </div>
+            )}
+
+            {meetingApp && (
+              <MeetingAppPrompt
+                event={meetingApp}
+                settings={state.settings}
+                onDismiss={dismissMeetingApp}
+                onOpenSettings={() => setModal({ type: 'settings', initialTab: 'meeting' })}
+              />
             )}
 
             {pluginsOpen && (

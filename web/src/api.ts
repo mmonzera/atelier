@@ -591,7 +591,10 @@ export const sttApi = {
 };
 
 export const meetingsApi = {
-  list: () => request<{ meetings: MeetingSession[]; active: MeetingStatusEvent | null }>('/api/meetings'),
+  list: () =>
+    request<{ meetings: MeetingSession[]; active: MeetingStatusEvent | null; captureAvailable: boolean }>(
+      '/api/meetings',
+    ),
   get: (id: string) => request<MeetingStatusEvent>(`/api/meetings/${encodeURIComponent(id)}`),
   start: (body?: {
     title?: string;

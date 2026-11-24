@@ -3,6 +3,7 @@ import type {
   BrowserFrameEvent,
   BrowserSessionInfo,
   BrowserTakeoverEvent,
+  MeetingAppEvent,
   MeetingStatusEvent,
   ServerEvent,
   SttDownloadProgressEvent,
@@ -21,6 +22,8 @@ export function useWorkspace() {
   const [browserTakeovers, setBrowserTakeovers] = useState<Record<string, BrowserTakeoverEvent>>({});
   const [sttDownload, setSttDownload] = useState<SttDownloadProgressEvent | null>(null);
   const [activeMeeting, setActiveMeeting] = useState<MeetingStatusEvent | null>(null);
+  /** A meeting app started (offer to take notes) or ended (offer to stop) — from the desktop shell. */
+  const [meetingApp, setMeetingApp] = useState<MeetingAppEvent | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -149,6 +152,15 @@ export function useWorkspace() {
             setActiveMeeting(st === 'completed' || st === 'error' ? null : parsed.payload);
             return;
           }
+          if (parsed.type === 'meeting-app') {
+            const ev = parsed.payload;
+            setMeetingApp((prev) => {
+              if (ev.state === 'started' || ev.meetingId) return ev;
+              // The app ended without a recording: withdraw an offer still on screen for it.
+              return prev && prev.appId === ev.appId ? null : prev;
+            });
+            return;
+          }
 
           dispatch(parsed);
           if (parsed.type === 'snapshot') {
@@ -221,5 +233,7 @@ export function useWorkspace() {
     browserTakeovers,
     sttDownload,
     activeMeeting,
+    meetingApp,
+    dismissMeetingApp: () => setMeetingApp(null),
   };
 }

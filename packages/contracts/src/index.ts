@@ -1101,6 +1101,10 @@ export interface MeetingSettings {
   remindParticipants: boolean;
   noticeTextId?: string;
   noticeTextEn?: string;
+  /** Desktop app: offer to take notes when Zoom, Teams or a browser meeting starts using the mic. */
+  detectMeetingApps: boolean;
+  /** App ids ("zoom", "teams", "browser", …) the user said not to ask about again. */
+  ignoredMeetingApps: string[];
 }
 
 export const DEFAULT_MEETING_SETTINGS: MeetingSettings = {
@@ -1111,7 +1115,20 @@ export const DEFAULT_MEETING_SETTINGS: MeetingSettings = {
   language: 'auto',
   keepAudio: false,
   remindParticipants: true,
+  detectMeetingApps: true,
+  ignoredMeetingApps: [],
 };
+
+/** A meeting app started or stopped using the microphone (detected by the desktop shell). */
+export interface MeetingAppEvent {
+  state: 'started' | 'ended';
+  /** Stable id used for "don't ask again": zoom, teams, browser, webex, slack, … */
+  appId: string;
+  /** Display name, e.g. "Zoom" or "Google Chrome". */
+  appName: string;
+  /** Set on "ended" when a meeting is being recorded, so the UI can offer to stop it. */
+  meetingId?: string | null;
+}
 
 export interface WhisperEngineInfo {
   id: string;
@@ -1416,7 +1433,8 @@ export type ServerEvent =
   | { type: 'browser-approval-resolved'; payload: BrowserApprovalResolvedEvent }
   | { type: 'browser-takeover'; payload: BrowserTakeoverEvent }
   | { type: 'stt-download-progress'; payload: SttDownloadProgressEvent }
-  | { type: 'meeting-status'; payload: MeetingStatusEvent };
+  | { type: 'meeting-status'; payload: MeetingStatusEvent }
+  | { type: 'meeting-app'; payload: MeetingAppEvent };
 
 export interface OnboardingStatus {
   hostname: string;

@@ -1,5 +1,5 @@
 import type { MeetingStatusEvent } from '@atelier/contracts';
-import { Mic, Pause, Play, Square, Zap } from 'lucide-react';
+import { AlertTriangle, Mic, Pause, Play, Square, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { meetingsApi } from '../api';
 import { toast } from '../components/Toast';
@@ -65,6 +65,25 @@ export function MeetingRecordingPill({ event }: { event: MeetingStatusEvent }) {
       />
       <Mic size={13} strokeWidth={1.7} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
       <span>{label}</span>
+
+      {event.warning && (
+        <span
+          title={event.warning}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            maxWidth: 280,
+            color: 'var(--agent-amber)',
+            fontSize: 11.5,
+          }}
+        >
+          <AlertTriangle size={12} strokeWidth={1.7} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {event.warning}
+          </span>
+        </span>
+      )}
 
       {isLagging && canSwitchSmallerModel && smallerModelId && (
         <button

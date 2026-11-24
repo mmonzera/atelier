@@ -17,6 +17,7 @@ import { createBrowserRoutes } from './browser/routes.js';
 import { type AppConfig, loadConfig } from './config.js';
 import { AtelierDb } from './db.js';
 import { createHttpRouter } from './http.js';
+import type { MeetingAudioCapture } from './meetings/capture.js';
 import { createMeetingRoutes } from './meetings/routes.js';
 import { MeetingService } from './meetings/service.js';
 import { AtelierStore } from './store.js';
@@ -65,6 +66,11 @@ export async function startAtelierServer(opts?: {
     idleTimeoutMs?: number;
     readyTimeoutMs?: number;
     buildSpawnSpec?: (cfg: LocalWhisperConfig, port: number) => { command: string; args: string[] };
+  };
+  /** Desktop shell hooks: audio capture and native notifications for meetings. */
+  meetingOptions?: {
+    capture?: MeetingAudioCapture;
+    notify?: (title: string, body: string) => void;
   };
 }): Promise<AtelierServerHandle> {
   const config = loadConfig(opts?.configOverrides);
@@ -116,6 +122,8 @@ export async function startAtelierServer(opts?: {
     bus,
     sttProvider,
     installer: sttInstaller,
+    capture: opts?.meetingOptions?.capture,
+    notify: opts?.meetingOptions?.notify,
     summarize: (transcript, signal) =>
       runtime.summarizeText(
         `Create concise structured meeting notes in Markdown from the transcript below:\n\n${transcript}`,

@@ -848,6 +848,11 @@ export function createHttpRouter(deps: {
             remindParticipants: z.boolean().optional(),
             noticeTextId: z.string().max(1000).optional(),
             noticeTextEn: z.string().max(1000).optional(),
+            detectMeetingApps: z.boolean().optional(),
+            ignoredMeetingApps: z
+              .array(z.string().trim().min(1).max(40).regex(/^[a-z0-9_-]+$/))
+              .max(50)
+              .optional(),
           })
           .optional(),
       })

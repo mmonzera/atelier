@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DEFAULT_MEETING_SETTINGS,
+  type MeetingAppEvent,
   type MeetingMode,
   type MeetingSession,
   type MeetingStatus,
@@ -17,7 +18,12 @@ import type { AtelierStore } from '../store.js';
 import { getSmallerInstalledModel } from '../stt/catalog.js';
 import type { SttInstaller } from '../stt/installer.js';
 import { WhisperFatalCrashError } from '../stt/local-whisper.js';
+import type { MeetingAudioCapture } from './capture.js';
 import type { SttProvider } from './stt.js';
+
+/** 16 kHz, 16-bit mono PCM: bytes per second of audio in a chunk WAV. */
+const WAV_BYTES_PER_SEC = 16_000 * 2;
+const NOMINAL_CHUNK_SEC = 20;
 
 export class MeetingServiceError extends Error {
   constructor(
@@ -72,10 +78,26 @@ export class MeetingService {
       sttProvider: SttProvider;
       installer: SttInstaller;
       summarize?: SummarizeMeetingFn;
+      /** Desktop-shell audio capture; absent in tests and plain dev servers (audio comes over HTTP). */
+      capture?: MeetingAudioCapture;
+      /** Native notification (desktop shell only), shown when the window is not focused. */
+      notify?: (title: string, body: string) => void;
     },
   ) {
     this.meetingsDir = path.join(deps.config.dataDir, 'meetings');
+    deps.capture?.setHandlers({
+      onChunk: (meetingId, filePath) => this.enqueueChunkFile(meetingId, filePath),
+      onError: (meetingId, message, fatal) => this.handleCaptureError(meetingId, message, fatal),
+    });
     this.recoverInterruptedMeetings();
+  }
+
+  public get captureAvailable(): boolean {
+    return Boolean(this.deps.capture?.available);
+  }
+
+  private getIncomingDir(meetingId: string): string {
+    return path.join(this.meetingsDir, meetingId, 'incoming');
   }
 
   private recoverInterruptedMeetings(): void {
@@ -100,8 +122,28 @@ export class MeetingService {
             .prepare(`UPDATE meetings SET data = ? WHERE id = ?`)
             .run(JSON.stringify(updated), row.id);
         }
+        // Chunk files the shell wrote but the server never registered (app closed mid-meeting).
+        if (rec.status !== 'completed') this.adoptIncomingFiles(row.id);
       } catch {
         // ignore malformed row
+      }
+    }
+  }
+
+  private adoptIncomingFiles(meetingId: string): void {
+    const dir = this.getIncomingDir(meetingId);
+    if (!fs.existsSync(dir)) return;
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.toLowerCase().endsWith('.wav'))
+      .sort();
+    for (const file of files) {
+      const full = path.join(dir, file);
+      try {
+        this.insertChunk(meetingId, fs.readFileSync(full));
+        fs.rmSync(full, { force: true });
+      } catch {
+        // leave it for the next start
       }
     }
   }
@@ -141,9 +183,11 @@ export class MeetingService {
     const completedChunks = completed.length;
     const pendingChunks = pending.length;
 
+    // Chunks are cut at pauses (~15–25 s), so measure the queued audio instead of assuming 20 s.
+    // The chunk currently being transcribed is not "behind" yet.
     const lagSeconds =
       rec.mode === 'live' && rec.status === 'recording' && pendingChunks > 1
-        ? (pendingChunks - 1) * 20
+        ? Math.round(pending.slice(1).reduce((sum, c) => sum + this.chunkSeconds(c), 0))
         : 0;
     const isLagging = rec.mode === 'live' && rec.status === 'recording' && pendingChunks > 3;
 
@@ -196,6 +240,18 @@ export class MeetingService {
       smallerModelId,
       warning,
     };
+  }
+
+  private chunkSeconds(chunk: ChunkRow): number {
+    try {
+      if (chunk.audio_path) {
+        const size = fs.statSync(chunk.audio_path).size;
+        if (size > 44) return (size - 44) / WAV_BYTES_PER_SEC;
+      }
+    } catch {
+      // file gone: fall back to the nominal length
+    }
+    return NOMINAL_CHUNK_SEC;
   }
 
   private broadcastStatus(rec: StoredMeetingRecord): MeetingStatusEvent {
@@ -283,13 +339,17 @@ export class MeetingService {
     fs.mkdirSync(this.getPendingDir(id), { recursive: true });
     this.saveRecord(rec);
 
+    // Clean up a failed start so the user can fix the engine, model or microphone and retry.
+    const discard = () => {
+      this.deps.db.sqlite.prepare(`DELETE FROM meetings WHERE id = ?`).run(id);
+      fs.rmSync(path.join(this.meetingsDir, id), { recursive: true, force: true });
+    };
+
     if (mode === 'live') {
       try {
         await this.deps.sttProvider.prepare();
       } catch (err) {
-        // Clean up failed start so user can adjust engine/model
-        this.deps.db.sqlite.prepare(`DELETE FROM meetings WHERE id = ?`).run(id);
-        fs.rmSync(path.join(this.meetingsDir, id), { recursive: true, force: true });
+        discard();
         throw new MeetingServiceError(
           'stt_prepare_failed',
           err instanceof Error ? err.message : 'Failed to start Whisper engine.',
@@ -298,7 +358,83 @@ export class MeetingService {
       }
     }
 
+    if (this.deps.capture?.available) {
+      const incomingDir = this.getIncomingDir(id);
+      fs.mkdirSync(incomingDir, { recursive: true });
+      try {
+        await this.deps.capture.start(id, incomingDir);
+      } catch (err) {
+        discard();
+        if (mode === 'live') await this.deps.sttProvider.release().catch(() => undefined);
+        throw new MeetingServiceError(
+          'capture_failed',
+          err instanceof Error ? err.message : 'Failed to start audio capture.',
+          400,
+        );
+      }
+    }
+
     return this.broadcastStatus(rec);
+  }
+
+  /** Tray "Catat meeting": start a meeting, or stop the one being recorded. */
+  public async toggleRecording(): Promise<MeetingStatusEvent> {
+    const active = this.getActiveMeetingStatus();
+    if (active?.meeting.status === 'recording') {
+      return this.stopMeeting(active.meeting.id);
+    }
+    return this.startMeeting();
+  }
+
+  /** Called when the desktop shell sees a meeting app start or stop using the microphone. */
+  public handleMeetingApp(ev: MeetingAppEvent): void {
+    const settings = this.deps.store.getSettings().meeting ?? DEFAULT_MEETING_SETTINGS;
+    const active = this.getActiveMeetingStatus();
+    const recordingId = active?.meeting.status === 'recording' ? active.meeting.id : null;
+
+    if (ev.state === 'started') {
+      if (!settings.detectMeetingApps || settings.ignoredMeetingApps.includes(ev.appId)) return;
+      if (recordingId) return; // already taking notes
+      this.deps.bus.broadcast({ type: 'meeting-app', payload: { ...ev, meetingId: null } });
+      const lang = this.deps.store.getSettings().language;
+      this.deps.notify?.(
+        lang === 'en' ? `${ev.appName} is using the microphone` : `${ev.appName} sedang memakai mikrofon`,
+        lang === 'en'
+          ? 'Open Atelier to take notes for this meeting.'
+          : 'Buka Atelier untuk mencatat meeting ini.',
+      );
+      return;
+    }
+
+    // "ended": let the UI dismiss its offer, or ask whether to stop the running recording.
+    this.deps.bus.broadcast({ type: 'meeting-app', payload: { ...ev, meetingId: recordingId } });
+    if (recordingId) {
+      const lang = this.deps.store.getSettings().language;
+      this.deps.notify?.(
+        lang === 'en' ? 'Meeting finished?' : 'Meeting sudah selesai?',
+        lang === 'en'
+          ? `${ev.appName} released the microphone. Open Atelier to stop taking notes.`
+          : `${ev.appName} sudah melepas mikrofon. Buka Atelier untuk menyelesaikan catatan.`,
+      );
+    }
+  }
+
+  private handleCaptureError(meetingId: string, message: string, fatal: boolean): void {
+    const rec = this.readRecord(meetingId);
+    if (!rec || rec.status !== 'recording') return;
+    rec.warning = fatal
+      ? `Audio capture stopped: ${message}. Press Stop to transcribe what was recorded.`
+      : `Audio capture: ${message}`;
+    rec.updatedAt = new Date().toISOString();
+    this.saveRecord(rec);
+    this.broadcastStatus(rec);
+    if (fatal) {
+      const lang = this.deps.store.getSettings().language;
+      this.deps.notify?.(
+        lang === 'en' ? 'Meeting recording stopped' : 'Rekaman meeting berhenti',
+        message,
+      );
+    }
   }
 
   public enqueueChunk(meetingId: string, wav: Buffer): MeetingStatusEvent {
@@ -314,6 +450,42 @@ export class MeetingService {
       );
     }
 
+    const now = this.insertChunk(meetingId, wav);
+    rec.updatedAt = now;
+    this.saveRecord(rec);
+    const statusEvent = this.broadcastStatus(rec);
+
+    if (rec.mode === 'live') {
+      this.ensureLiveWorker(meetingId);
+    }
+    return statusEvent;
+  }
+
+  /** A chunk WAV written by the desktop shell. The file is moved into the queue and removed. */
+  public enqueueChunkFile(meetingId: string, filePath: string): void {
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(path.resolve(this.getIncomingDir(meetingId)) + path.sep)) {
+      return; // only files inside this meeting's incoming folder
+    }
+    let wav: Buffer;
+    try {
+      wav = fs.readFileSync(resolved);
+    } catch {
+      return;
+    }
+    const rec = this.readRecord(meetingId);
+    if (!rec) return;
+    if (rec.status === 'recording') {
+      this.enqueueChunk(meetingId, wav);
+    } else {
+      // Arrived after Stop began (last flush): keep it so the drain still transcribes it.
+      this.insertChunk(meetingId, wav);
+    }
+    fs.rmSync(resolved, { force: true });
+  }
+
+  /** Stores a chunk WAV under the next sequence number and returns the timestamp used. */
+  private insertChunk(meetingId: string, wav: Buffer): string {
     const row = this.deps.db.sqlite
       .prepare(`SELECT COALESCE(MAX(seq), 0) AS maxSeq FROM meeting_chunks WHERE meeting_id = ?`)
       .get(meetingId) as { maxSeq: number };
@@ -331,15 +503,7 @@ export class MeetingService {
          VALUES (?, ?, 'pending', NULL, ?, ?, ?)`,
       )
       .run(meetingId, seq, audioPath, now, now);
-
-    rec.updatedAt = now;
-    this.saveRecord(rec);
-    const statusEvent = this.broadcastStatus(rec);
-
-    if (rec.mode === 'live') {
-      this.ensureLiveWorker(meetingId);
-    }
-    return statusEvent;
+    return now;
   }
 
   private ensureLiveWorker(meetingId: string): void {
@@ -486,6 +650,11 @@ export class MeetingService {
       return this.buildStatusEvent(rec);
     }
 
+    // Let the shell flush the audio since the last pause before the queue is drained.
+    if (rec.status === 'recording' && this.deps.capture?.available) {
+      await this.deps.capture.stop(meetingId).catch(() => undefined);
+    }
+
     this.stoppingMeetings.add(meetingId);
     try {
       const runningWorker = this.workers.get(meetingId);
@@ -629,6 +798,11 @@ export class MeetingService {
   }
 
   public async shutdown(): Promise<void> {
+    // Stop capture first: the shell writes its last chunk to disk, which is adopted on next start.
+    const active = this.getActiveMeetingStatus();
+    if (active?.meeting.status === 'recording' && this.deps.capture?.available) {
+      await this.deps.capture.stop(active.meeting.id).catch(() => undefined);
+    }
     for (const id of this.workers.keys()) {
       this.stoppingMeetings.add(id);
     }

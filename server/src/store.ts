@@ -493,6 +493,11 @@ export class AtelierStore {
       ...(typeof raw.noticeTextEn === 'string' && raw.noticeTextEn.trim()
         ? { noticeTextEn: raw.noticeTextEn }
         : {}),
+      detectMeetingApps:
+        typeof raw.detectMeetingApps === 'boolean' ? raw.detectMeetingApps : base.detectMeetingApps,
+      ignoredMeetingApps: Array.isArray(raw.ignoredMeetingApps)
+        ? [...new Set(raw.ignoredMeetingApps.filter((id): id is string => typeof id === 'string'))]
+        : [],
     };
   }
 
