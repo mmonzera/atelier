@@ -525,8 +525,46 @@ export interface ProjectRepo {
   localPath: string;
 }
 
+export interface CanonEntry {
+  id: string;
+  scopeKey: string;
+  projectId: string | null;
+  kind: 'decision' | 'asset' | 'rule';
+  key: string;
+  title: string;
+  value: string;
+  artifactId?: string;
+  path?: string;
+  source: 'user_pick' | 'agent_recorded' | 'user_edited';
+  createdAt: string;
+  updatedAt: string;
+  supersededBy?: string;
+}
+
+export interface Artifact {
+  id: string;
+  projectId: string | null;
+  kind: 'svg' | 'html' | 'image' | 'file';
+  label: string;
+  mime: string;
+  /** Relative to the configured data directory. */
+  path: string;
+  sizeBytes: number;
+  sourceMessageId?: string;
+  createdAt: string;
+}
+
+export interface StructuredMemory {
+  goal: string;
+  decisions: string[];
+  done: { text: string; paths?: string[] }[];
+  open: string[];
+  artifacts: { id: string; label: string; path?: string }[];
+}
+
 export interface ThreadCompaction {
   summary: string;
+  structured?: StructuredMemory;
   compactedMessageCount: number;
   lastCompactedMessageId: string;
   compactedAt: string;
@@ -536,6 +574,9 @@ export interface ThreadCompaction {
 
 export interface AutoCompactSettings {
   enabled: boolean;
+  settingsVersion?: 2;
+  tailTokens?: number;
+  summarizerModel?: string;
   maxMessages: number;
   keepRecentMessages: number;
   maxContextTokens: number;
@@ -543,9 +584,11 @@ export interface AutoCompactSettings {
 
 export const DEFAULT_AUTO_COMPACT_SETTINGS: AutoCompactSettings = {
   enabled: true,
-  maxMessages: 20,
-  keepRecentMessages: 6,
-  maxContextTokens: 40000,
+  settingsVersion: 2,
+  maxMessages: 60,
+  keepRecentMessages: 14,
+  maxContextTokens: 24000,
+  tailTokens: 6000,
 };
 
 export interface Project {
@@ -580,6 +623,7 @@ export interface Agent {
   currentTask: string | null;
   sessionId: string | null;
   sessions?: Record<string, string>;
+  sessionCanon?: Record<string, { sessionId: string; version: string }>;
   contextCompactions?: Record<string, ThreadCompaction>;
   scopeTokens?: Record<string, number>;
   lastError: string | null;
@@ -599,6 +643,8 @@ export interface MessageActivitySummary {
 }
 
 export interface MessageMetadata {
+  designArtifacts?: Record<string, string>;
+  designPick?: { messageId: string; optionId: string; segmentIndex?: number; canonId?: string };
   taskId?: string;
   taskIdentifier?: string;
   taskTitle?: string;
@@ -759,6 +805,7 @@ export interface RollingWindowUsage {
 }
 
 export interface UsageLogEntry {
+  memoryTokens?: { canon: number; summary: number; tail: number };
   id: string;
   provider: ModelProvider;
   model: string;
@@ -854,6 +901,7 @@ export interface QueueItem {
 }
 
 export interface WorkspaceState {
+  canon?: CanonEntry[];
   projects: Project[];
   agents: Agent[];
   messages: Message[];
@@ -973,6 +1021,9 @@ export type ServerEvent =
   | { type: 'agent-upserted'; payload: Agent }
   | { type: 'agent-deleted'; payload: { id: string; projectId?: string | null } }
   | { type: 'message-upserted'; payload: Message }
+  | { type: 'canon-upserted'; payload: CanonEntry }
+  | { type: 'canon-deleted'; payload: { id: string } }
+  | { type: 'artifact-created'; payload: Artifact }
   | {
       type: 'message-delta';
       payload: { id: string; projectId: string | null; agentId: string; delta: string };
@@ -1235,13 +1286,25 @@ export function parseMessageSegments(text: string): MessageSegment[] {
 }
 
 /** Replaces design blocks with a one-line summary so heavy HTML never re-enters model context. */
-export function summarizeDesignBlocks(text: string): string {
+export function summarizeDesignBlocks(
+  text: string,
+  artifacts?: Record<string, string>,
+  picks?: ReadonlyMap<number, string>,
+): string {
   if (!text.includes(DESIGN_OPEN)) return text;
   return parseMessageSegments(text)
-    .map((s) => {
+    .map((s, index) => {
       if (s.type === 'text') return s.text;
       if (s.type === 'design-pending') return '[Design options block (incomplete)]';
       const list = s.block.options.map((o) => `${o.id} "${o.label}"`).join(', ');
+      if (artifacts && Object.keys(artifacts).length) {
+        const references = s.block.options.map((option) => {
+          const id = artifacts[`${index}:${option.id}`] ?? artifacts[option.id];
+          return `${option.id} ${JSON.stringify(option.label)}${id ? ` (${id})` : ''}`;
+        }).join(', ');
+        const pick = picks?.get(index);
+        return `[Design options shown: ${references}.${pick ? ` User picked: ${pick}` : ''}]`;
+      }
       return `[Design options shown to the user — ${list}. They can pick one.]`;
     })
     .join('\n\n');

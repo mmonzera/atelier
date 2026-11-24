@@ -4,6 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 export class AtelierDb {
   public readonly sqlite: DatabaseSync;
+  public readonly hasMessageFts: boolean;
+  private backfill?: NodeJS.Immediate;
 
   constructor(dbPath: string) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -11,6 +13,7 @@ export class AtelierDb {
     this.sqlite.exec('PRAGMA journal_mode = WAL;');
     this.sqlite.exec('PRAGMA foreign_keys = ON;');
     this.initSchema();
+    this.hasMessageFts = this.initMessageFts();
   }
 
   private initSchema(): void {
@@ -52,6 +55,26 @@ export class AtelierDb {
         created_at TEXT NOT NULL,
         data TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS canon (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        data TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_canon_project ON canon(project_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_canon_active_key
+        ON canon(json_extract(data, '$.scopeKey'), json_extract(data, '$.key'))
+        WHERE json_extract(data, '$.supersededBy') IS NULL;
+
+      CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        data TEXT NOT NULL,
+        content BLOB NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);
 
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
@@ -124,6 +147,57 @@ export class AtelierDb {
     `);
 
     this.migrateGlobalAgentsSchema();
+    this.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_messages_scope_agent ON messages(project_id, agent_id, created_at)');
+  }
+
+  private initMessageFts(): boolean {
+    try {
+      this.sqlite.exec('CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text, message_id UNINDEXED, scope UNINDEXED)');
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.includes('no such module: fts5')) throw err;
+      console.warn('SQLite FTS5 unavailable; memory search uses the recent archive window.');
+      return false;
+    }
+    const insert = `
+      INSERT INTO messages_fts(rowid, text, message_id, scope)
+      SELECT new.rowid, json_extract(new.data, '$.text'), new.id, coalesce(new.project_id, 'direct')
+      WHERE coalesce(json_extract(new.data, '$.streaming'), 0) = 0
+        AND coalesce(json_extract(new.data, '$.metadata.compacted'), 0) = 0;
+    `;
+    this.sqlite.exec(`
+      CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+        ${insert}
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+        DELETE FROM messages_fts WHERE rowid = old.rowid;
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages
+      WHEN coalesce(json_extract(old.data, '$.streaming'), 0) = 0
+        OR coalesce(json_extract(new.data, '$.streaming'), 0) = 0
+      BEGIN
+        DELETE FROM messages_fts WHERE rowid = old.rowid;
+        ${insert}
+      END;
+    `);
+    let cursor = 0;
+    const nextBatch = () => {
+      const rows = this.sqlite.prepare('SELECT rowid FROM messages WHERE rowid > ? ORDER BY rowid LIMIT 250')
+        .all(cursor) as { rowid: number }[];
+      const next = rows.at(-1)?.rowid;
+      if (next === undefined) return;
+      this.sqlite.prepare(`
+        INSERT INTO messages_fts(rowid, text, message_id, scope)
+        SELECT m.rowid, json_extract(m.data, '$.text'), m.id, coalesce(m.project_id, 'direct')
+        FROM messages m WHERE m.rowid > ? AND m.rowid <= ?
+          AND coalesce(json_extract(m.data, '$.streaming'), 0) = 0
+          AND coalesce(json_extract(m.data, '$.metadata.compacted'), 0) = 0
+          AND NOT EXISTS (SELECT 1 FROM messages_fts f WHERE f.rowid = m.rowid)
+      `).run(cursor, next);
+      cursor = next;
+      if (rows.length === 250) this.backfill = setImmediate(nextBatch).unref();
+    };
+    this.backfill = setImmediate(nextBatch).unref();
+    return true;
   }
 
   private migrateGlobalAgentsSchema(): void {
@@ -214,6 +288,7 @@ export class AtelierDb {
   }
 
   public close(): void {
+    if (this.backfill) clearImmediate(this.backfill);
     this.sqlite.close();
   }
 }

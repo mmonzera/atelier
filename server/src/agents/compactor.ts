@@ -2,14 +2,15 @@ import type {
   Agent,
   AutoCompactSettings,
   Message,
+  StructuredMemory,
   ThreadCompaction,
 } from '@atelier/contracts';
 import { summarizeDesignBlocks } from '@atelier/contracts';
+import { z } from 'zod';
 import type { AtelierStore } from '../store.js';
 
-const MAX_SUMMARY_CHARS = 2400;
-const MAX_LINE_CHARS = 180;
-const TASK_ID_RE = /\bAT-\d+\b/g;
+const MAX_SUMMARY_CHARS = 8000;
+export const DEFAULT_TAIL_TOKENS = 6000;
 
 export function getScopeKey(projectId: string | null | undefined): string {
   return projectId || 'direct';
@@ -45,33 +46,79 @@ export function getUncompactedMessages(
  * Formats recent uncompacted messages into a compact conversational tail for turns
  * running without a native provider resume session.
  */
-/** Message text as the model should see it in history: no bulky design HTML, attachments listed. */
-function historyText(m: Message, attachmentNote?: (m: Message) => string): string {
-  return `${summarizeDesignBlocks(m.text)}${attachmentNote?.(m) ?? ''}`;
+function designPicks(messages: Message[]) {
+  const picks = new Map<string, Map<number, string>>();
+  for (const message of messages) {
+    const pick = message.metadata?.designPick;
+    if (!pick) continue;
+    const options = picks.get(pick.messageId) ?? new Map<number, string>();
+    options.set(pick.segmentIndex ?? 0, pick.optionId);
+    picks.set(pick.messageId, options);
+  }
+  return picks;
+}
+
+function archiveText(message: Message, picks?: ReadonlyMap<number, string>): string {
+  return summarizeDesignBlocks(message.text, message.metadata?.designArtifacts, picks);
+}
+
+function trimHistory(text: string, id: string, head: number, tail: number): string {
+  if (text.length <= head + tail) return text;
+  return `${text.slice(0, head)}\n… [trimmed, full text in archive ${id}]\n${tail ? text.slice(-tail) : ''}`;
+}
+
+export function conversationTail(
+  messages: Message[],
+  compaction: ThreadCompaction | null | undefined,
+  currentPrompt: string,
+  budget = DEFAULT_TAIL_TOKENS,
+  attachmentNote?: (m: Message) => string,
+  currentMessageId?: string | null,
+): string {
+  const history = getUncompactedMessages(messages, compaction);
+  const last = history.at(-1);
+  const current = currentMessageId ?? (last?.author === 'user' &&
+    (currentPrompt === last.text || currentPrompt.startsWith(last.text + (attachmentNote?.(last) || '\n')))
+    ? last.id : undefined);
+  const picks = designPicks(messages);
+  const header = 'Recent conversation context:';
+  let remaining = Math.min(DEFAULT_TAIL_TOKENS, Math.max(0, budget)) * 4 - header.length;
+  const lines: string[] = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const message = history[i]!;
+    if (message.id === current) continue;
+    const text = archiveText(message, picks.get(message.id));
+    const body = message.author === 'user'
+      ? trimHistory(text, message.id, 4800, 0)
+      : trimHistory(text, message.id, 1200, 600);
+    const author = `${message.author.toUpperCase()}: `;
+    const attachment = (attachmentNote?.(message) ?? '').slice(0, 1200);
+    let line = author + body + attachment;
+    if (!lines.length && line.length + 1 > remaining) {
+      const available = remaining - author.length - attachment.length - 60 - message.id.length;
+      if (available > 0) {
+        const tail = message.author === 'user' ? 0 : Math.min(600, Math.floor(available / 3));
+        line = author + trimHistory(text, message.id, available - tail, tail) + attachment;
+      }
+    }
+    remaining -= line.length + 1;
+    if (remaining < 0) break;
+    lines.push(line);
+  }
+  return lines.length ? [header, ...lines.reverse()].join('\n') : '';
 }
 
 export function formatUncompactedConversation(
   messages: Message[],
   compaction: ThreadCompaction | null | undefined,
   currentPrompt: string,
-  maxRecent = 12,
+  tailTokens = DEFAULT_TAIL_TOKENS,
   /** Appends the attached-file list for messages that had attachments. */
   attachmentNote?: (m: Message) => string,
+  currentMessageId?: string | null,
 ): string {
-  const history = getUncompactedMessages(messages, compaction).slice(-maxRecent);
-  const last = history[history.length - 1];
-  // The current message is already in history; its prompt may carry extra attachment text.
-  const prior =
-    last && currentPrompt.startsWith(`${last.text}${attachmentNote?.(last) ?? ''}`)
-      ? history.slice(0, -1)
-      : history;
-
-  if (prior.length === 0) return currentPrompt;
-
-  const lines = prior.map((m) => `${m.author.toUpperCase()}: ${historyText(m, attachmentNote)}`);
-  return ['Recent conversation context:', ...lines, '', `CURRENT MESSAGE: ${currentPrompt}`].join(
-    '\n',
-  );
+  const tail = conversationTail(messages, compaction, currentPrompt, tailTokens, attachmentNote, currentMessageId);
+  return tail ? `${tail}\n\nCURRENT MESSAGE: ${currentPrompt}` : currentPrompt;
 }
 
 export function estimateActiveContextTokens(
@@ -81,7 +128,7 @@ export function estimateActiveContextTokens(
 ): number {
   const uncompacted = getUncompactedMessages(messages, compaction);
   const summaryTokens = estimateTokens(compaction?.summary ?? '');
-  const messageTokens = uncompacted.reduce((acc, m) => acc + estimateTokens(summarizeDesignBlocks(m.text)), 0);
+  const messageTokens = uncompacted.reduce((acc, m) => acc + estimateTokens(archiveText(m)), 0);
   const estimated = summaryTokens + messageTokens;
   return Math.max(estimated, reportedScopeTokens ?? 0);
 }
@@ -94,7 +141,9 @@ export function shouldAutoCompact(
 ): boolean {
   if (!config.enabled) return false;
   const uncompacted = getUncompactedMessages(messages, compaction);
-  if (uncompacted.length <= Math.max(2, config.keepRecentMessages)) {
+  if (uncompacted.length < 3) return false;
+  if ((reportedScopeTokens ?? 0) >= config.maxContextTokens) return true;
+  if (uncompacted.length <= config.keepRecentMessages) {
     return false;
   }
   if (uncompacted.length >= config.maxMessages) {
@@ -106,73 +155,100 @@ export function shouldAutoCompact(
   );
 }
 
-function summarizeLine(msg: Message): string {
-  const compactText = summarizeDesignBlocks(msg.text).replace(/\s+/g, ' ').trim();
-  const clipped =
-    compactText.length > MAX_LINE_CHARS
-      ? `${compactText.slice(0, MAX_LINE_CHARS - 1)}…`
-      : compactText;
-  const roleLabel =
-    msg.author === 'user'
-      ? 'User'
-      : msg.author === 'teammate'
-        ? 'Teammate'
-        : msg.author === 'system'
-          ? 'System'
-          : 'Agent';
-  return `- [${roleLabel}] ${clipped}`;
+const PATH_RE = /\b(?:[\w.@-]+\/)+[\w.@-]+\.[a-z0-9]+\b/gi;
+const DECISION_RE = /\b(?:decided|must|always|never|we(?:'ll| will| use| chose| choose)|use|pakai|pilih|jangan|harus)\b/i;
+const clean = (text: string, max: number) => text.replace(/\s+/g, ' ').trim().slice(0, max);
+
+function unique<T>(values: T[], key: (value: T) => string): T[] {
+  return [...new Map(values.map((value) => [key(value), value])).values()];
 }
 
-export function buildDeterministicSummary(
-  previousSummary: string | undefined,
-  messagesToCompact: Message[],
-): string {
-  const taskIds = new Set<string>();
-  const bullets: string[] = [];
-
-  for (const msg of messagesToCompact) {
-    const matches = msg.text.match(TASK_ID_RE);
-    if (matches) {
-      for (const id of matches) taskIds.add(id);
+export function buildDeterministicMemory(
+  previous: ThreadCompaction | null,
+  messages: Message[],
+  allMessages = messages,
+): StructuredMemory {
+  const previousMemory = previous?.structured;
+  const picks = designPicks(allMessages);
+  const decisions = [...(previousMemory?.decisions ?? [])];
+  const done = [...(previousMemory?.done ?? (previous?.summary ? [{ text: clean(previous.summary, 800) }] : []))];
+  const open = [...(previousMemory?.open ?? [])];
+  const artifacts = [...(previousMemory?.artifacts ?? [])];
+  let goal = previousMemory?.goal ?? '';
+  for (const message of messages) {
+    const text = archiveText(message, picks.get(message.id));
+    const short = clean(text, message.author === 'user' ? 400 : 180);
+    if (message.author === 'user') {
+      goal ||= short;
+      if (DECISION_RE.test(short) || message.metadata?.designPick) decisions.push(short);
+      else open.push(short);
+    } else {
+      const paths = [...new Set(text.match(PATH_RE) ?? [])].slice(0, 12);
+      done.push({ text: short, ...(paths.length ? { paths } : {}) });
     }
-    if (msg.metadata?.taskIdentifier) {
-      taskIds.add(msg.metadata.taskIdentifier);
+    for (const [option, id] of Object.entries(message.metadata?.designArtifacts ?? {})) {
+      artifacts.push({ id, label: `Design option ${option.split(':').at(-1)}` });
     }
-    bullets.push(summarizeLine(msg));
   }
+  return {
+    goal,
+    decisions: [...new Set(decisions)],
+    done: unique(done, (item) => item.text).slice(-100),
+    open: [...new Set(open)].slice(-40),
+    artifacts: unique(artifacts, (item) => item.id).slice(-100),
+  };
+}
 
-  // Extract individual memory bullets from prior summary so repeated compactions stay flat and bounded
-  const priorBullets: string[] = [];
-  if (previousSummary?.trim()) {
-    for (const line of previousSummary.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('- [')) {
-        priorBullets.push(trimmed);
-      }
+export function renderStructuredMemory(memory: StructuredMemory): string {
+  const sections = [
+    ['GOAL', clean(memory.goal, 400)],
+    ['DECISIONS'],
+    ['DONE'],
+    ['OPEN'],
+    ['ARTIFACTS'],
+  ];
+  let remaining = MAX_SUMMARY_CHARS - sections.flat().join('\n').length - 5;
+  const add = (section: number, lines: string[]) => {
+    for (const line of lines) {
+      if (line.length + 3 > remaining) continue;
+      sections[section]!.push('- ' + line);
+      remaining -= line.length + 3;
     }
-  }
+  };
+  add(1, memory.decisions.map((decision) => clean(decision, 400)));
+  add(4, memory.artifacts.slice().reverse().map((item) =>
+    clean(`${item.id} ${item.label}${item.path ? ' ' + item.path : ''}`, 350)));
+  add(2, memory.done.slice().reverse().map((item) =>
+    clean([item.text, ...(item.paths ?? [])].join(' · '), 550)));
+  add(3, memory.open.slice().reverse().map((item) => clean(item, 400)));
+  return sections.flat().join('\n');
+}
 
-  const combinedBullets = [...priorBullets, ...bullets];
-  const taskNote = taskIds.size > 0 ? ` · Tasks referenced: ${[...taskIds].join(', ')}` : '';
-  const header = `Compacted ${messagesToCompact.length} earlier messages${taskNote}:`;
+export function buildDeterministicSummary(previousSummary: string | undefined, messages: Message[]): string {
+  const previous = previousSummary ? { summary: previousSummary } as ThreadCompaction : null;
+  return renderStructuredMemory(buildDeterministicMemory(previous, messages));
+}
 
-  // Keep the most recent bullets that fit cleanly within MAX_SUMMARY_CHARS
-  const keptBullets: string[] = [];
-  let charBudget = MAX_SUMMARY_CHARS - header.length - 40;
-  for (let i = combinedBullets.length - 1; i >= 0; i--) {
-    const line = combinedBullets[i]!;
-    if (line.length + 1 > charBudget && keptBullets.length > 0) {
-      break;
-    }
-    keptBullets.unshift(line);
-    charBudget -= line.length + 1;
-  }
+const memoryLine = z.string().trim().max(550);
+const ModelMemorySchema = z.object({
+  goal: memoryLine,
+  decisions: z.array(memoryLine).max(50),
+  done: z.array(z.object({ text: memoryLine, paths: z.array(memoryLine).max(12).optional() })).max(50),
+  open: z.array(memoryLine).max(50),
+  artifacts: z.array(z.object({ id: z.string().regex(/^art_[a-z0-9-]+$/i), label: memoryLine, path: memoryLine.optional() })).max(50),
+});
 
-  const droppedCount = combinedBullets.length - keptBullets.length;
-  const truncationLine =
-    droppedCount > 0 ? `- [Earlier] (${droppedCount} older notes condensed)` : null;
-
-  return [header, ...(truncationLine ? [truncationLine] : []), ...keptBullets].join('\n');
+export function mergeModelMemory(output: string, fallback: StructuredMemory): StructuredMemory {
+  if (output.length > 32000) throw new Error('Invalid summary length.');
+  const payload = output.trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+  const model = ModelMemorySchema.parse(JSON.parse(payload));
+  return {
+    goal: model.goal || fallback.goal,
+    decisions: [...new Set([...fallback.decisions, ...model.decisions])],
+    done: unique([...fallback.done.filter((item) => item.paths?.length), ...model.done], (item) => item.text),
+    open: model.open,
+    artifacts: fallback.artifacts,
+  };
 }
 
 export interface CompactScopeResult {
@@ -180,6 +256,7 @@ export interface CompactScopeResult {
   compaction: ThreadCompaction | null;
   compactedCount: number;
   agent: Agent | null;
+  summarizerInput?: string;
 }
 
 export function compactAgentScope(
@@ -223,12 +300,15 @@ export function compactAgentScope(
     prevCompaction,
     agent.scopeTokens?.[scopeKey],
   );
-  const summary = buildDeterministicSummary(prevCompaction?.summary, toCompact);
+  const structured = buildDeterministicMemory(prevCompaction, toCompact, allMessages);
+  const picks = designPicks(allMessages);
+  const summary = renderStructuredMemory(structured);
   const estimatedTokensAfter =
-    estimateTokens(summary) + kept.reduce((acc, m) => acc + estimateTokens(summarizeDesignBlocks(m.text)), 0);
+    estimateTokens(summary) + estimateTokens(conversationTail(kept, null, '', settings.autoCompact.tailTokens));
 
   const compaction: ThreadCompaction = {
     summary,
+    structured,
     compactedMessageCount: (prevCompaction?.compactedMessageCount ?? 0) + toCompact.length,
     lastCompactedMessageId: toCompact[toCompact.length - 1]!.id,
     compactedAt: new Date().toISOString(),
@@ -236,14 +316,18 @@ export function compactAgentScope(
     estimatedTokensAfter,
   };
 
-  // Rotate native CLI / SDK session for this scope so the next turn starts lightweight
+  // Manual compaction explicitly resets the session. Automatic compaction only rotates near its budget.
   const prevScopeSession = agent.sessions?.[scopeKey];
+  const reportedTokens = agent.scopeTokens?.[scopeKey] ?? 0;
+  const rotate = opts?.reason !== 'auto' || (
+    reportedTokens >= settings.autoCompact.maxContextTokens && reportedTokens - estimatedTokensAfter >= 2000
+  );
   const nextSessions = { ...(agent.sessions ?? {}) };
-  delete nextSessions[scopeKey];
+  if (rotate) delete nextSessions[scopeKey];
 
-  const shouldClearLegacySession =
+  const shouldClearLegacySession = rotate && (
     Boolean(prevScopeSession && agent.sessionId === prevScopeSession) ||
-    (!prevScopeSession && projectId !== null && agent.projectId === projectId);
+    (!prevScopeSession && projectId !== null && agent.projectId === projectId));
 
   const nextCompactions = {
     ...(agent.contextCompactions ?? {}),
@@ -251,7 +335,7 @@ export function compactAgentScope(
   };
   const nextScopeTokens = {
     ...(agent.scopeTokens ?? {}),
-    [scopeKey]: estimatedTokensAfter,
+    [scopeKey]: rotate ? estimatedTokensAfter : reportedTokens,
   };
 
   const updatedAgent = store.updateAgent(agent.id, {
@@ -291,5 +375,13 @@ export function compactAgentScope(
     compaction,
     compactedCount: toCompact.length,
     agent: updatedAgent ?? store.getAgent(agent.id),
+    summarizerInput: JSON.stringify({
+      previous: prevCompaction?.summary.slice(0, MAX_SUMMARY_CHARS),
+      messages: toCompact.slice(-60).map((message) => ({
+        id: message.id,
+        author: message.author,
+        text: trimHistory(archiveText(message, picks.get(message.id)), message.id, 400, 200),
+      })),
+    }),
   };
 }

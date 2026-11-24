@@ -61,6 +61,8 @@ export function SettingsView({
     String(initialCompact.keepRecentMessages),
   );
   const [maxContextTokens, setMaxContextTokens] = useState(String(initialCompact.maxContextTokens));
+  const [tailTokens, setTailTokens] = useState(String(initialCompact.tailTokens ?? 6000));
+  const [summarizerModel, setSummarizerModel] = useState(initialCompact.summarizerModel ?? '');
   const [fallbackMode, setFallbackMode] = useState<FallbackMode>(settings.fallbackMode ?? 'ask');
   const [fallbackChain, setFallbackChain] = useState<ModelRef[]>(settings.fallbackChain ?? []);
   const [allowFullPermissions, setAllowFullPermissions] = useState(
@@ -128,6 +130,8 @@ export function SettingsView({
           maxMessages: parsedMaxMsgs,
           keepRecentMessages: parsedKeep,
           maxContextTokens: parsedTokens,
+          tailTokens: Math.min(6000, Math.max(1000, Math.round(Number(tailTokens) || 6000))),
+          summarizerModel: summarizerModel.trim(),
         },
         fallbackMode,
         fallbackChain,
@@ -343,7 +347,7 @@ export function SettingsView({
               Auto-compact long conversations
             </label>
             <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>
-              Automatically summarizes older turns into memory and rotates native CLI sessions to save tokens without deleting chat history.
+              Summarizes older turns and keeps native sessions while they fit the context budget. The full conversation stays searchable.
             </div>
 
             {autoCompactEnabled && (
@@ -373,7 +377,7 @@ export function SettingsView({
                   />
                 </div>
                 <div>
-                  <label style={labelStyle}>Token budget</label>
+                  <label style={labelStyle}>Context limit</label>
                   <input
                     type="number"
                     min={4000}
@@ -382,6 +386,30 @@ export function SettingsView({
                     value={maxContextTokens}
                     onChange={(e) => setMaxContextTokens(e.target.value)}
                     className="mono-num"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="memory-tail-tokens" style={labelStyle}>History tail tokens</label>
+                  <input
+                    id="memory-tail-tokens"
+                    type="number"
+                    min={1000}
+                    max={6000}
+                    step={500}
+                    value={tailTokens}
+                    onChange={(e) => setTailTokens(e.target.value)}
+                    style={inputStyle}
+                  />
+                </div>
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label htmlFor="memory-model" style={labelStyle}>Summarizer model</label>
+                  <input
+                    id="memory-model"
+                    value={summarizerModel}
+                    placeholder="Automatic for provider"
+                    maxLength={120}
+                    onChange={(e) => setSummarizerModel(e.target.value)}
                     style={inputStyle}
                   />
                 </div>

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   Agent,
   MessageActivitySummary,
@@ -20,6 +21,8 @@ import {
   estimateActiveContextTokens,
   estimateTokens,
   getScopeKey,
+  mergeModelMemory,
+  renderStructuredMemory,
   shouldAutoCompact,
 } from './compactor.js';
 import {
@@ -31,11 +34,13 @@ import {
 import type { AgentRunner } from './runner.js';
 import type { EnqueueTaskFn } from './studio-tools.js';
 import { estimateTurnCostUsd } from './usage.js';
+import { renderCanon } from './prompts.js';
 
 export class AgentRuntime {
   private readonly draining = new Set<string>();
   private readonly activeAborts = new Map<string, AbortController>();
   private readonly activeTurns = new Map<string, Promise<void>>();
+  private readonly memorySummaries = new Map<string, AbortController>();
   private readonly cooldowns = new ProviderCooldownTracker();
   private shuttingDown = false;
   private readonly runner: AgentRunner;
@@ -120,7 +125,8 @@ export class AgentRuntime {
 
     const projectId = input.projectId ?? null;
     const author = input.kind === 'user' ? 'user' : 'teammate';
-    const msg = this.store.createMessage({
+    const prompt = this.promptWithAttachments(input.prompt, input.attachments);
+    const { item, agent: updatedAgent } = this.store.enqueueMessage({
       projectId,
       agentId: agent.id,
       author,
@@ -131,15 +137,13 @@ export class AgentRuntime {
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         taskId: input.kind === 'task' ? (input.refId ?? undefined) : input.metadata?.taskId,
       },
-    });
-
-    const { item, agent: updatedAgent } = this.store.enqueueItem({
+    }, {
       agentId: agent.id,
       projectId,
       kind: input.kind,
       // The chat bubble shows the plain text; the model also gets the file list (+ small text files).
-      prompt: this.promptWithAttachments(input.prompt, input.attachments),
-      refId: input.refId ?? msg.id,
+      prompt,
+      refId: input.refId ?? null,
       replyToAgentId: input.replyToAgentId ?? null,
     });
 
@@ -280,14 +284,52 @@ export class AgentRuntime {
         'Agent is currently running a turn. Wait until it finishes or stop it first.',
       );
     }
-    return compactAgentScope(this.store, agent.id, projectId, {
-      force: true,
-      reason: 'manual',
+    return this.compactScope(agent, projectId, 'manual');
+  }
+
+  private compactScope(agent: Agent, projectId: string | null, reason: 'manual' | 'auto', providerOverride?: ModelProvider): CompactScopeResult {
+    const result = compactAgentScope(this.store, agent.id, projectId, {
+      force: reason === 'manual',
+      reason,
     });
+    const { compaction, summarizerInput } = result;
+    if (!compaction?.structured || !summarizerInput || !this.runner.summarize) return result;
+    const settings = this.store.getSettings();
+    const provider = providerOverride ?? agent.providerOverride ?? settings.provider;
+    const scope = getScopeKey(projectId);
+    const key = `${agent.id}:${scope}`;
+    this.memorySummaries.get(key)?.abort();
+    const controller = new AbortController();
+    this.memorySummaries.set(key, controller);
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    timer.unref();
+    void Promise.resolve().then(async () => {
+      const text = await this.runner.summarize!(provider, settings.autoCompact.summarizerModel, summarizerInput, controller.signal);
+      if (controller.signal.aborted) return;
+      const current = this.store.getAgent(agent.id);
+      const previous = current?.contextCompactions?.[scope];
+      if (!current || previous?.lastCompactedMessageId !== compaction.lastCompactedMessageId ||
+          previous.compactedAt !== compaction.compactedAt) return;
+      const structured = mergeModelMemory(text, compaction.structured!);
+      const summary = renderStructuredMemory(structured);
+      this.store.updateAgent(agent.id, {
+        contextCompactions: {
+          ...current.contextCompactions,
+          [scope]: { ...previous, summary, structured },
+        },
+      });
+    }).catch(() => {
+      // The deterministic summary is already saved and available to the next turn.
+    }).finally(() => {
+      clearTimeout(timer);
+      if (this.memorySummaries.get(key) === controller) this.memorySummaries.delete(key);
+    });
+    return result;
   }
 
   /** Stops every running turn (and clears their queues) but keeps the runtime usable. */
   public async stopAll(): Promise<void> {
+    for (const controller of this.memorySummaries.values()) controller.abort();
     const ids = [...this.activeAborts.keys()];
     await Promise.allSettled(ids.map((id) => this.stop(id)));
     const pending = [...this.activeTurns.values()];
@@ -296,6 +338,7 @@ export class AgentRuntime {
 
   public async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    for (const controller of this.memorySummaries.values()) controller.abort();
     for (const controller of this.activeAborts.values()) {
       controller.abort();
     }
@@ -353,7 +396,7 @@ export class AgentRuntime {
         settings.autoCompact,
       )
     ) {
-      const compactRes = compactAgentScope(this.store, agent.id, projectId, { reason: 'auto' });
+      const compactRes = this.compactScope(agent, projectId, 'auto', item.modelOverride?.provider);
       if (compactRes.agent) {
         agent = compactRes.agent;
       }
@@ -366,7 +409,32 @@ export class AgentRuntime {
       Boolean(item.modelOverride) && item.modelOverride!.provider !== primaryProvider;
     const initialResumeId = switchingProvider
       ? null
-      : (agent.sessions?.[scopeKey] ?? (project ? agent.sessionId : null));
+      : (agent.sessions?.[scopeKey] ?? (project && agent.projectId === project.id &&
+          !Object.values(agent.sessions ?? {}).includes(agent.sessionId ?? '') ? agent.sessionId : null));
+
+    const canon = renderCanon(this.store.listCanon(scopeKey), (id) => {
+      const artifact = this.store.getArtifact(id);
+      if (artifact?.kind === 'svg' && artifact.projectId === projectId && artifact.sizeBytes <= 2048) {
+        return this.store.readArtifact(artifact).toString('utf8');
+      }
+      return undefined;
+    });
+    this.store.restoreCanonWorkspaceAssets(projectId, agent.id);
+    const canonVersion = createHash('sha256').update(canon.text).digest('hex');
+    const previousCanon = agent.sessionCanon?.[scopeKey];
+    const canonChanged = !!initialResumeId &&
+      (previousCanon?.sessionId !== initialResumeId || previousCanon.version !== canonVersion);
+    const memoryTokens = {
+      canon: estimateTokens(canon.text),
+      summary: estimateTokens((agent.contextCompactions?.[scopeKey]?.summary ?? '').slice(0, 8000)),
+      tail: 0,
+    };
+    if (canon.omitted) {
+      this.store.addActivity({
+        projectId, agentId: agent.id, kind: 'status', label: 'Canon prompt budget reached',
+        detail: `${canon.omitted} entries remain available in the Canon panel.`,
+      });
+    }
 
     const startedAt = Date.now();
     const controller = new AbortController();
@@ -399,6 +467,7 @@ export class AgentRuntime {
     let sessionId: string | null = initialResumeId;
     let usageIn = 0;
     let usageOut = 0;
+    let providerContextTokens = 0;
 
     try {
       const { finalText } = await this.runner.run(
@@ -408,6 +477,9 @@ export class AgentRuntime {
           prompt: item.prompt,
           attachments: item.refId ? this.store.getMessage(item.refId)?.metadata?.attachments : undefined,
           resumeSessionId: initialResumeId,
+          currentMessageId: item.kind === 'user' ? item.refId : null,
+          canonText: canon.text,
+          canonChanged,
           providerOverride: item.modelOverride?.provider,
           modelOverride: item.modelOverride?.model,
           signal: controller.signal,
@@ -444,6 +516,8 @@ export class AgentRuntime {
             usageIn = inputTokens;
             usageOut = outputTokens;
           },
+          onMemoryTail: (tokens) => { memoryTokens.tail = tokens; },
+          onContextTokens: (tokens) => { providerContextTokens = Math.max(providerContextTokens, tokens); },
         },
       );
 
@@ -460,11 +534,13 @@ export class AgentRuntime {
         }
       }
 
+      const designArtifacts = this.store.captureDesignArtifacts({ ...replyMsg, text: finalText });
       this.store.finalizeMessage(replyMsg.id, {
         text: finalText,
         streaming: false,
         durationMs,
         metadata: {
+          ...(Object.keys(designArtifacts).length ? { designArtifacts } : {}),
           activities: turnActivities,
           taskId: linkedTask?.id,
           taskIdentifier: linkedTask?.identifier,
@@ -481,13 +557,13 @@ export class AgentRuntime {
       const latestAgent = this.store.getAgent(agent.id) ?? agent;
       const nextSessions = { ...(latestAgent.sessions ?? {}) };
       if (sessionId && !switchingProvider) nextSessions[scopeKey] = sessionId;
+      const sessionCanon = { ...(latestAgent.sessionCanon ?? {}) };
+      if (sessionId && !switchingProvider) sessionCanon[scopeKey] = { sessionId, version: canonVersion };
 
       const postMessages = this.store.listAgentMessages(agent.id, projectId);
       const activeCompaction = latestAgent.contextCompactions?.[scopeKey];
-      const activeScopeTokens =
-        usageIn > 0
-          ? usageIn
-          : estimateActiveContextTokens(postMessages, activeCompaction);
+      const activeScopeTokens = providerContextTokens || usageIn ||
+        estimateActiveContextTokens(postMessages, activeCompaction);
       const nextScopeTokens = {
         ...(latestAgent.scopeTokens ?? {}),
         [scopeKey]: activeScopeTokens,
@@ -498,6 +574,7 @@ export class AgentRuntime {
         currentTask: null,
         sessionId: (!switchingProvider ? sessionId : null) ?? latestAgent.sessionId,
         sessions: nextSessions,
+        sessionCanon,
         scopeTokens: nextScopeTokens,
         lastError: null,
         pendingFallback: null,
@@ -517,6 +594,7 @@ export class AgentRuntime {
         projectId,
         inputTokens: loggedIn,
         outputTokens: loggedOut,
+        memoryTokens,
         estimatedCostUsd: estimateTurnCostUsd(
           effectiveProvider,
           effectiveModel,
@@ -524,6 +602,9 @@ export class AgentRuntime {
           loggedOut,
         ),
       });
+      if (process.env.ATELIER_LOG_LEVEL === 'debug') {
+        console.debug('Atelier memory tokens', { scopeKey, agentId: agent.id, ...memoryTokens });
+      }
 
       if (
         shouldAutoCompact(
@@ -533,7 +614,7 @@ export class AgentRuntime {
           afterSettings.autoCompact,
         )
       ) {
-        compactAgentScope(this.store, agent.id, projectId, { reason: 'auto' });
+        this.compactScope(latestAgent, projectId, 'auto', effectiveProvider);
       }
 
       if (item.replyToAgentId && finalText) {

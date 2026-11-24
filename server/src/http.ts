@@ -36,6 +36,7 @@ import type { LocalVault } from './security/vault.js';
 import { ATTACHMENT_ONLY_TEXT } from '@atelier/contracts';
 import { AttachmentError, AttachmentStore } from './attachments.js';
 import { createAttachmentRoutes } from './attachments-routes.js';
+import { CanonInputSchema } from './memory-files.js';
 
 function apiError(code: string, message: string): ApiErrorResponse {
   return { error: { code, message } };
@@ -452,6 +453,74 @@ export function createHttpRouter(deps: {
     return c.json({ project: updated });
   });
 
+  // Project and direct-chat Canon.
+  api.post('/projects/:id/canon/pick', async (c) => {
+    const scope = c.req.param('id');
+    const projectId = scope === 'direct' ? null : scope;
+    const parsed = z.object({
+      messageId: z.string().min(1), optionId: z.string().min(1).max(12),
+      segmentIndex: z.number().int().nonnegative().optional(),
+    }).safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json(apiError('invalid_pick', 'Invalid design selection.'), 400);
+    const { messageId, optionId, segmentIndex } = parsed.data;
+    const message = store.getMessage(messageId);
+    if (!message || message.projectId !== projectId || (projectId && !store.getProject(projectId))) {
+      return c.json(apiError('not_found', 'Design message not found.'), 404);
+    }
+    try {
+      const { entry, option, notify } = store.pickDesign(projectId, message, optionId, segmentIndex);
+      if (notify) runtime.enqueue({
+        agentId: message.agentId,
+        projectId,
+        kind: 'user',
+        prompt: `Saya pilih opsi ${option.id} — ${option.label}. Lanjutkan dengan opsi ini.`,
+        metadata: { designPick: { messageId, optionId, segmentIndex, canonId: entry.id } },
+      });
+      return c.json({ entry });
+    } catch (err) {
+      return c.json(apiError('invalid_pick', err instanceof Error ? err.message : 'Could not save design selection.'), 400);
+    }
+  });
+
+  api.patch('/projects/:id/canon/:entryId', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json(apiError('invalid_canon', 'Invalid Canon update.'), 400);
+    }
+    const scope = c.req.param('id');
+    const entry = store.listCanon(scope).find((item) => item.id === c.req.param('entryId'));
+    if (!entry) return c.json(apiError('not_found', 'Canon entry not found.'), 404);
+    const parsed = CanonInputSchema.safeParse({
+      ...entry, ...body,
+      key: entry.key, kind: entry.kind,
+    });
+    if (!parsed.success) return c.json(apiError('invalid_canon', 'Invalid Canon title, value, or path.'), 400);
+    return c.json({ entry: store.upsertCanon(entry.projectId, {
+      ...parsed.data, artifactId: entry.artifactId, source: 'user_edited',
+    }) });
+  });
+
+  api.delete('/projects/:id/canon/:entryId', (c) => {
+    const entry = store.listCanon(c.req.param('id')).find((item) => item.id === c.req.param('entryId'));
+    if (!entry) return c.json(apiError('not_found', 'Canon entry not found.'), 404);
+    store.deleteCanon(entry.id);
+    return c.json({ ok: true });
+  });
+
+  api.get('/projects/:id/canon-artifacts/:artifactId', (c) => {
+    const artifact = store.getArtifact(c.req.param('artifactId'));
+    const scope = c.req.param('id');
+    if (!artifact || artifact.kind !== 'svg' || (artifact.projectId ?? 'direct') !== scope) {
+      return c.json(apiError('not_found', 'SVG artifact not found.'), 404);
+    }
+    return new Response(new Uint8Array(store.readArtifact(artifact)), { headers: {
+      'Content-Type': 'image/svg+xml',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      'X-Content-Type-Options': 'nosniff',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+    } });
+  });
+
   // Agent messaging, stop, retry
   api.post('/agents/:id/messages', async (c) => {
     const agentId = c.req.param('id');
@@ -692,6 +761,8 @@ export function createHttpRouter(deps: {
             maxMessages: z.number().int().min(4).max(200).optional(),
             keepRecentMessages: z.number().int().min(1).max(199).optional(),
             maxContextTokens: z.number().int().min(4000).max(500000).optional(),
+            tailTokens: z.number().int().min(1000).max(6000).optional(),
+            summarizerModel: z.string().max(120).regex(/^[a-zA-Z0-9._:/-]*$/).optional(),
           })
           .optional(),
         fallbackMode: z.enum(['ask', 'auto']).optional(),

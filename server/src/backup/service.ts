@@ -235,6 +235,17 @@ export class BackupService {
       const safetyCopy = this.writeSafetyCopy();
       await this.hooks.beforeImport?.();
       this.replaceContentsFrom(tmp, { keepLocalSecrets: !manifest.includesSecrets });
+      for (const scope of [null, ...this.store.listProjects().map((project) => project.id)]) {
+        for (const artifact of this.store.listArtifacts(scope)) {
+          try {
+            this.store.materializeArtifact(artifact);
+          } catch {
+            // The database retains the original bytes even if the local cache is unavailable.
+            console.warn('Could not restore artifact file', artifact.id);
+          }
+        }
+        this.store.restoreCanonWorkspaceAssets(scope, undefined, false);
+      }
       this.store.recoverOnStartup();
       this.store.broadcastSnapshot();
 
@@ -296,7 +307,8 @@ export class BackupService {
       sqlite.exec('BEGIN IMMEDIATE;');
       try {
         for (const table of mainTables) {
-          if (keep.has(table)) continue;
+          // Copy messages through their triggers so the local archive index stays consistent.
+          if (keep.has(table) || table === 'messages_fts' || table.startsWith('messages_fts_')) continue;
           const t = quoteIdent(table);
           sqlite.exec(`DELETE FROM main.${t};`);
           if (!impTables.has(table)) continue;

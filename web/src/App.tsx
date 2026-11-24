@@ -727,6 +727,7 @@ export function App() {
 
       {!showOnboarding && rightPanelOpen && (
         <RightPanel
+          canon={(state.canon ?? []).filter((entry) => entry.projectId === (scopedProject?.id ?? null))}
           mode={viewMode}
           project={scopedProject}
           allProjects={state.projects}

@@ -7,6 +7,11 @@ export interface Turn {
   /** Files the user attached to this turn's message (already listed in `prompt`). */
   attachments?: MessageAttachment[];
   resumeSessionId: string | null;
+  currentMessageId?: string | null;
+  canonText?: string;
+  canonChanged?: boolean;
+  memoryOnly?: boolean;
+  recallContinuation?: boolean;
   providerOverride?: ModelProvider;
   modelOverride?: string;
   signal: AbortSignal;
@@ -17,8 +22,11 @@ export interface TurnCallbacks {
   onTool(name: string, input: unknown): void;
   onSession(sessionId: string): void;
   onUsage?(inputTokens: number, outputTokens: number): void;
+  onContextTokens?(tokens: number): void;
+  onMemoryTail?(tokens: number): void;
 }
 
 export interface AgentRunner {
   run(turn: Turn, cb: TurnCallbacks): Promise<{ finalText: string }>;
+  summarize?(provider: ModelProvider, model: string | undefined, input: string, signal: AbortSignal): Promise<string>;
 }

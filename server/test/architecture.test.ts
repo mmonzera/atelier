@@ -1103,7 +1103,7 @@ describe('Global multi-project agents, Direct DM, and legacy DB migration', () =
 });
 
 describe('Auto-Compacting Context & Session Rotation', () => {
-  it('auto-compacts once uncompacted messages cross threshold, rotates CLI session, and preserves chat history', async () => {
+  it('auto-compacts at the message threshold, keeps a healthy CLI session, and preserves chat history', async () => {
     const dir = makeTempDir('atelier-autocompact-');
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'atelier.db');
@@ -1162,14 +1162,14 @@ describe('Auto-Compacting Context & Session Rotation', () => {
       expect(observedTurns[0]!.resumeSessionId).toBeNull();
       expect(store.getAgent(bot.id)?.sessions?.[project.id]).toBe('claude:sess-1');
 
-      // Turn 2 (messages reach 4 >= maxMessages 4) -> should resume sess-1 during Turn 2, then auto-compact post-turn & rotate session
+      // Turn 2 crosses the message threshold while the native session stays under its token budget.
       runtime.enqueue({ agentId: bot.id, projectId: project.id, kind: 'user', prompt: 'Turn 2 build' });
       await waitFor(() => store.getAgent(bot.id)?.contextCompactions?.[project.id] !== undefined);
       await waitFor(() => store.getAgent(bot.id)?.status === 'idle');
 
       expect(observedTurns[1]!.resumeSessionId).toBe('claude:sess-1');
       const afterCompact = store.getAgent(bot.id)!;
-      expect(afterCompact.sessions?.[project.id]).toBeUndefined();
+      expect(afterCompact.sessions?.[project.id]).toBe('claude:sess-2');
       const compaction = afterCompact.contextCompactions?.[project.id];
       expect(compaction).toBeDefined();
       expect(compaction!.compactedMessageCount).toBe(2);
@@ -1185,10 +1185,10 @@ describe('Auto-Compacting Context & Session Rotation', () => {
       expect(sysPrompt).toContain('Compacted Conversation Memory');
       expect(sysPrompt).toContain('AT-99');
 
-      // Turn 3 starts a fresh native CLI session (resumeSessionId: null) and skips compacted older messages
+      // Turn 3 resumes the healthy session. The stored tail still skips compacted older messages.
       runtime.enqueue({ agentId: bot.id, projectId: project.id, kind: 'user', prompt: 'Turn 3 verify' });
       await waitFor(() => observedTurns.length === 3 && store.getAgent(bot.id)?.status === 'idle');
-      expect(observedTurns[2]!.resumeSessionId).toBeNull();
+      expect(observedTurns[2]!.resumeSessionId).toBe('claude:sess-2');
       expect(observedTurns[2]!.summaryInCompaction).toContain('Turn 1 AT-99 goal');
       expect(observedTurns[2]!.uncompactedTexts).not.toContain('Turn 1 AT-99 goal');
       expect(observedTurns[2]!.uncompactedTexts).toContain('Turn 2 build');
@@ -1242,6 +1242,8 @@ describe('Auto-Compacting Context & Session Rotation', () => {
       };
       expect(settingsJson.settings.autoCompact).toEqual({
         enabled: true,
+        settingsVersion: 2,
+        tailTokens: 6000,
         maxMessages: 16,
         keepRecentMessages: 4,
         maxContextTokens: 32000,

@@ -1,4 +1,4 @@
-import type { Agent, PortEntry, Project, Settings, Task } from '@atelier/contracts';
+import type { Agent, CanonEntry, PortEntry, Project, Settings, Task } from '@atelier/contracts';
 import {
   ArrowLeftRight,
   Check,
@@ -20,6 +20,7 @@ import {
   getColorVar,
 } from './Atoms';
 import { BotMascot } from './mascot/BotMascot';
+import { CanonPanel } from './CanonPanel';
 
 interface RightPanelProps {
   mode: 'project' | 'agent';
@@ -32,6 +33,7 @@ interface RightPanelProps {
   ports: PortEntry[];
   settings: Settings;
   hostname: string;
+  canon: CanonEntry[];
   onSelectProject: (projectId: string) => void;
   onSelectAgent: (agentId: string) => void;
   onSelectDirectAgent: (agentId: string) => void;
@@ -76,6 +78,7 @@ export function RightPanel({
   ports,
   settings,
   hostname,
+  canon,
   onSelectProject,
   onSelectAgent,
   onSelectDirectAgent,
@@ -175,6 +178,7 @@ export function RightPanel({
         zIndex: 10,
       }}
     >
+      {(project || activeAgent) && <CanonPanel key={project?.id ?? 'direct'} entries={canon} />}
       {mode === 'agent' && activeAgent ? (
         <>
           {/* Direct Agent Profile */}

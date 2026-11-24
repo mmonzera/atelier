@@ -106,17 +106,31 @@ const labelStyle: React.CSSProperties = {
 export function DesignOptionsCard({
   block,
   onChoose,
+  chosen,
+  streaming,
 }: {
   block: DesignBlock;
-  onChoose: (option: DesignOption) => void;
+  onChoose: (option: DesignOption) => Promise<unknown>;
+  chosen?: string;
+  streaming: boolean;
 }) {
-  const [chosen, setChosen] = useState<string | null>(null);
   const [zoom, setZoom] = useState<DesignOption | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
-  const choose = (o: DesignOption) => {
-    setChosen(o.id);
-    setZoom(null);
-    onChoose(o);
+  const choose = async (o: DesignOption) => {
+    if (saving || streaming || chosen === o.id) return;
+    setSaving(true);
+    setError('');
+    try {
+      await onChoose(o);
+      setZoom(null);
+    } catch (err) {
+      setZoom(null);
+      setError(err instanceof Error ? err.message : 'Gagal menyimpan pilihan.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -132,6 +146,7 @@ export function DesignOptionsCard({
         </div>
       </div>
 
+      {error && <div role="alert" style={{ color: 'var(--agent-red)', fontSize: 12 }}>{error}</div>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
         {block.options.map((o) => {
           const isChosen = chosen === o.id;
@@ -193,7 +208,8 @@ export function DesignOptionsCard({
                 <div style={{ display: 'flex', gap: 6, marginTop: 'auto', paddingTop: 6 }}>
                   <button
                     type="button"
-                    onClick={() => choose(o)}
+                    onClick={() => void choose(o)}
+                    disabled={saving || streaming || isChosen}
                     style={{ ...primaryBtnStyle, height: 30, padding: '0 12px', fontSize: 12 }}
                   >
                     {isChosen ? (
@@ -229,7 +245,7 @@ export function DesignOptionsCard({
               <button type="button" onClick={() => setZoom(null)} style={secondaryBtnStyle}>
                 Tutup
               </button>
-              <button type="button" onClick={() => choose(zoom)} style={primaryBtnStyle}>
+              <button type="button" onClick={() => void choose(zoom)} disabled={saving || streaming || chosen === zoom.id} style={primaryBtnStyle}>
                 Pilih opsi {zoom.id}
               </button>
             </div>

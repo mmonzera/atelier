@@ -1,10 +1,16 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   AGENT_AVATAR_SHAPES,
   AGENT_COLORS,
   AGENT_TEMPLATES,
   BUILT_IN_SKILLS,
   DEFAULT_AUTO_COMPACT_SETTINGS,
+  parseMessageSegments,
+  type Artifact,
+  type CanonEntry,
+  type DesignOption,
   type Activity,
   type ActivityKind,
   type Agent,
@@ -42,6 +48,8 @@ import {
 import type { EventBus } from './bus.js';
 import type { AppConfig } from './config.js';
 import type { AtelierDb } from './db.js';
+import { getAgentWorkspacePath, getDirectAgentWorkspacePath, getProjectRepoPath } from './github.js';
+import { CanonInputSchema, memoryFilePath, readDesignImage, validateArtifactSize, writeMemoryFile } from './memory-files.js';
 
 const AGENT_COLOR_SET = new Set<string>(AGENT_COLORS);
 const AGENT_SHAPE_SET = new Set<string>(AGENT_AVATAR_SHAPES);
@@ -57,6 +65,7 @@ export function nowIso(): string {
 
 export class AtelierStore {
   private bus: EventBus | null = null;
+  private transactionEvents?: ServerEvent[];
 
   constructor(
     private readonly db: AtelierDb,
@@ -85,10 +94,15 @@ export class AtelierStore {
   }
 
   private runTx(fn: () => ServerEvent[]): void {
+    if (this.transactionEvents) {
+      this.transactionEvents.push(...fn());
+      return;
+    }
     this.db.sqlite.exec('BEGIN');
-    let events: ServerEvent[] = [];
+    const events: ServerEvent[] = [];
+    this.transactionEvents = events;
     try {
-      events = fn();
+      events.push(...fn());
       for (const ev of events) {
         this.appendEvent(ev);
       }
@@ -96,6 +110,8 @@ export class AtelierStore {
     } catch (err) {
       this.db.sqlite.exec('ROLLBACK');
       throw err;
+    } finally {
+      this.transactionEvents = undefined;
     }
     for (const ev of events) {
       this.broadcast(ev);
@@ -195,6 +211,7 @@ export class AtelierStore {
         raw.sessions && typeof raw.sessions === 'object'
           ? (raw.sessions as Record<string, string>)
           : {},
+      sessionCanon: raw.sessionCanon as Agent['sessionCanon'],
       contextCompactions:
         raw.contextCompactions && typeof raw.contextCompactions === 'object'
           ? (raw.contextCompactions as Record<string, ThreadCompaction>)
@@ -302,6 +319,7 @@ export class AtelierStore {
       projects,
       agents,
       messages: parseRows<Message>('messages'),
+      canon: parseRows<CanonEntry>('canon').filter((entry) => !entry.supersededBy),
       tasks: parseRows<Task>('tasks', 'created_at DESC'),
       activities: parseRows<Activity>('activities'),
       ports: parseRows<PortEntry>('ports', 'port ASC'),
@@ -331,6 +349,11 @@ export class AtelierStore {
 
   private normalizeAutoCompact(raw?: Partial<AutoCompactSettings>): AutoCompactSettings {
     const base = DEFAULT_AUTO_COMPACT_SETTINGS;
+    if (raw && raw.settingsVersion !== 2 &&
+        raw.maxMessages === 20 && raw.keepRecentMessages === 6 && raw.maxContextTokens === 40000) {
+      raw = { ...raw, maxMessages: base.maxMessages, keepRecentMessages: base.keepRecentMessages,
+        maxContextTokens: base.maxContextTokens };
+    }
     const rawMaxMsgs = Number(raw?.maxMessages ?? base.maxMessages);
     const maxMessages = Number.isFinite(rawMaxMsgs)
       ? Math.min(200, Math.max(4, Math.round(rawMaxMsgs)))
@@ -345,6 +368,11 @@ export class AtelierStore {
       : base.maxContextTokens;
     return {
       enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : base.enabled,
+      settingsVersion: 2,
+      ...(typeof raw?.tailTokens === 'number' && Number.isFinite(raw.tailTokens)
+        ? { tailTokens: Math.max(1000, Math.min(6000, Math.round(raw.tailTokens))) } : {}),
+      ...(typeof raw?.summarizerModel === 'string' && /^[a-zA-Z0-9._:/-]+$/.test(raw.summarizerModel)
+        ? { summarizerModel: raw.summarizerModel } : {}),
       maxMessages,
       keepRecentMessages,
       maxContextTokens,
@@ -452,6 +480,7 @@ export class AtelierStore {
       projectId: input.projectId ?? null,
       inputTokens: Math.max(0, Math.round(input.inputTokens)),
       outputTokens: Math.max(0, Math.round(input.outputTokens)),
+      memoryTokens: input.memoryTokens,
       estimatedCostUsd: Math.max(0, input.estimatedCostUsd),
       createdAt: input.createdAt ?? nowIso(),
     };
@@ -1023,6 +1052,7 @@ export class AtelierStore {
         | 'currentTask'
         | 'sessionId'
         | 'sessions'
+        | 'sessionCanon'
         | 'contextCompactions'
         | 'scopeTokens'
         | 'lastError'
@@ -1042,6 +1072,7 @@ export class AtelierStore {
         currentTask: patch.currentTask !== undefined ? patch.currentTask : existing.currentTask,
         sessionId: patch.sessionId !== undefined ? patch.sessionId : existing.sessionId,
         sessions: patch.sessions !== undefined ? patch.sessions : existing.sessions,
+        sessionCanon: patch.sessionCanon !== undefined ? patch.sessionCanon : existing.sessionCanon,
         contextCompactions:
           patch.contextCompactions !== undefined
             ? patch.contextCompactions
@@ -1063,7 +1094,271 @@ export class AtelierStore {
     return updated;
   }
 
+  public listCanon(scopeKey: string): CanonEntry[] {
+    const rows = this.db.sqlite.prepare(`
+      SELECT data FROM canon WHERE project_id IS ? AND json_extract(data, '$.supersededBy') IS NULL
+      ORDER BY created_at DESC, rowid DESC
+    `).all(scopeKey === 'direct' ? null : scopeKey) as { data: string }[];
+    return rows.map((row) => JSON.parse(row.data) as CanonEntry);
+  }
+
+  public upsertCanon(projectId: string | null, input: Pick<CanonEntry, 'kind' | 'key' | 'title' | 'value' | 'path' | 'artifactId' | 'source'>): CanonEntry {
+    const fields = CanonInputSchema.parse(input);
+    if (input.artifactId && this.getArtifact(input.artifactId)?.projectId !== projectId) {
+      throw new Error('Artifact does not belong to this scope.');
+    }
+    const oneLine = (value: string) => value.replace(/[\s\u2028\u2029]+/g, ' ').trim();
+    const scopeKey = projectId ?? 'direct';
+    const createdAt = nowIso();
+    const entry: CanonEntry = {
+      ...fields, id: newId('can'), scopeKey, projectId,
+      title: oneLine(fields.title), value: oneLine(fields.value),
+      artifactId: input.artifactId, source: input.source, createdAt, updatedAt: createdAt,
+    };
+    this.runTx(() => {
+      const previous = this.listCanon(scopeKey).find((item) => item.key === entry.key);
+      if (previous) {
+        this.db.sqlite.prepare('UPDATE canon SET data = ? WHERE id = ?')
+          .run(JSON.stringify({ ...previous, supersededBy: entry.id, updatedAt: createdAt }), previous.id);
+      }
+      this.db.sqlite.prepare('INSERT INTO canon (id, project_id, created_at, data) VALUES (?, ?, ?, ?)')
+        .run(entry.id, projectId, createdAt, JSON.stringify(entry));
+      return [
+        ...(previous ? [{ type: 'canon-deleted' as const, payload: { id: previous.id } }] : []),
+        { type: 'canon-upserted', payload: entry },
+      ];
+    });
+    return entry;
+  }
+
+  public deleteCanon(id: string): void {
+    this.runTx(() => {
+      const result = this.db.sqlite.prepare('DELETE FROM canon WHERE id = ?').run(id);
+      return result.changes ? [{ type: 'canon-deleted', payload: { id } }] : [];
+    });
+  }
+
+  public createArtifact(input: Omit<Artifact, 'id' | 'path' | 'createdAt' | 'sizeBytes'>, bytes: Buffer): Artifact {
+    validateArtifactSize(bytes);
+    const id = 'art_' + crypto.randomUUID();
+    const ext = input.kind === 'image' ? input.mime.split('/')[1] : input.kind === 'file' ? 'bin' : input.kind;
+    const artifact: Artifact = {
+      ...input, id, path: `artifacts/${input.projectId ?? 'direct'}/${id}.${ext}`,
+      createdAt: nowIso(), sizeBytes: bytes.length,
+    };
+    writeMemoryFile(this.config.dataDir, artifact.path, bytes);
+    try {
+      this.runTx(() => {
+        this.db.sqlite.prepare('INSERT INTO artifacts (id, project_id, created_at, data, content) VALUES (?, ?, ?, ?, ?)')
+          .run(id, artifact.projectId, artifact.createdAt, JSON.stringify(artifact), bytes);
+        return [{ type: 'artifact-created', payload: artifact }];
+      });
+    } catch (err) {
+      fs.rmSync(memoryFilePath(this.config.dataDir, artifact.path), { force: true });
+      throw err;
+    }
+    return artifact;
+  }
+
+  public getArtifact(id: string): Artifact | null {
+    const row = this.db.sqlite.prepare('SELECT data FROM artifacts WHERE id = ?').get(id) as { data: string } | undefined;
+    return row ? JSON.parse(row.data) as Artifact : null;
+  }
+
+  public listArtifacts(projectId: string | null): Artifact[] {
+    const rows = this.db.sqlite.prepare('SELECT data FROM artifacts WHERE project_id IS ? ORDER BY created_at DESC')
+      .all(projectId) as { data: string }[];
+    return rows.map((row) => JSON.parse(row.data) as Artifact);
+  }
+
+  public readArtifact(artifact: Artifact): Buffer {
+    const row = this.db.sqlite.prepare('SELECT content FROM artifacts WHERE id = ?')
+      .get(artifact.id) as { content: Uint8Array } | undefined;
+    if (!row) throw new Error('Artifact was removed.');
+    return Buffer.from(row.content);
+  }
+
+  public materializeArtifact(artifact: Artifact): string {
+    const root = this.config.dataDir;
+    const relative = artifact.path;
+    const scope = artifact.projectId ?? 'direct';
+    if (!/^art_[a-f0-9-]+$/.test(artifact.id) ||
+        path.posix.dirname(relative) !== `artifacts/${scope}` ||
+        !path.posix.basename(relative).startsWith(artifact.id + '.')) throw new Error('Invalid artifact path.');
+    writeMemoryFile(root, relative, this.readArtifact(artifact));
+    return memoryFilePath(root, relative);
+  }
+
+  public artifactDirectory(projectId: string | null): string {
+    return memoryFilePath(this.config.dataDir, `artifacts/${projectId ?? 'direct'}`);
+  }
+
+  private managedWorkspace(target: string): string {
+    return memoryFilePath(this.config.workspacesDir,
+      path.relative(this.config.workspacesDir, target).split(path.sep).join('/'));
+  }
+
+  public restoreCanonWorkspaceAssets(projectId: string | null, agentId?: string, includeLinkedRepo = true): void {
+    const project = projectId ? this.getProject(projectId) : null;
+    if (project?.repo && (!includeLinkedRepo || !fs.existsSync(project.repo.localPath))) return;
+    for (const entry of this.listCanon(projectId ?? 'direct')) {
+      if (entry.kind !== 'asset' || !entry.path || !entry.artifactId) continue;
+      const artifact = this.getArtifact(entry.artifactId);
+      if (!artifact || artifact.projectId !== projectId) continue;
+      const sourceAgentId = artifact.sourceMessageId ? this.getMessage(artifact.sourceMessageId)?.agentId : undefined;
+      const directAgentId = agentId ?? sourceAgentId;
+      try {
+        const root = project
+          ? project.repo?.localPath ?? this.managedWorkspace(getProjectRepoPath(this.config.workspacesDir, project.id))
+          : directAgentId ? this.managedWorkspace(getDirectAgentWorkspacePath(this.config.workspacesDir, directAgentId)) : null;
+        if (!root) continue;
+        if (!fs.existsSync(memoryFilePath(root, entry.path))) {
+          writeMemoryFile(root, entry.path, this.readArtifact(artifact));
+        }
+      } catch {
+        // A broken local path must not hide the saved asset from the agent.
+      }
+    }
+  }
+
+  private designRoots(message: Message): string[] {
+    if (!message.projectId) return [this.managedWorkspace(getDirectAgentWorkspacePath(this.config.workspacesDir, message.agentId))];
+    return [
+      this.getProject(message.projectId)?.repo?.localPath ||
+        this.managedWorkspace(getProjectRepoPath(this.config.workspacesDir, message.projectId)),
+      this.managedWorkspace(getAgentWorkspacePath(this.config.workspacesDir, message.projectId, message.agentId)),
+    ];
+  }
+
+  private saveDesignOption(message: Message, option: DesignOption): Artifact {
+    const { bytes, mime } = option.kind === 'image'
+      ? readDesignImage(option.src ?? '', this.designRoots(message))
+      : { bytes: Buffer.from(option.content), mime: option.kind === 'svg' ? 'image/svg+xml' : 'text/html' };
+    return this.createArtifact({
+      projectId: message.projectId ?? null, sourceMessageId: message.id, kind: option.kind,
+      label: option.label, mime,
+    }, bytes);
+  }
+
+  public captureDesignArtifacts(message: Message): Record<string, string> {
+    const artifacts = new Map(Object.entries(message.metadata?.designArtifacts ?? {}));
+    for (const [index, segment] of parseMessageSegments(message.text).entries()) {
+      if (segment.type !== 'design') continue;
+      for (const option of segment.block.options) {
+        const key = index + ':' + option.id;
+        if (artifacts.has(key)) continue;
+        try {
+          const id = this.saveDesignOption(message, option).id;
+          artifacts.set(key, id);
+          if (!artifacts.has(option.id)) artifacts.set(option.id, id);
+        } catch (err) {
+          console.warn('Could not archive design option', message.id, option.id, err instanceof Error ? err.message : err);
+        }
+      }
+    }
+    return Object.fromEntries(artifacts);
+  }
+
+  public pickDesign(projectId: string | null, message: Message, optionId: string, segmentIndex?: number) {
+    const segments = parseMessageSegments(message.text);
+    const index = segmentIndex ?? segments.findIndex((segment) => segment.type === 'design' &&
+      segment.block.options.some((option) => option.id === optionId));
+    const segment = segments[index];
+    const option = segment?.type === 'design' ? segment.block.options.find((item) => item.id === optionId) : undefined;
+    if (!option || message.projectId !== projectId || message.author !== 'agent' || message.streaming) {
+      throw new Error('This design option is unavailable.');
+    }
+    const optionKey = index + ':' + optionId;
+    const artifactId = message.metadata?.designArtifacts?.[optionKey] ?? (segmentIndex === undefined
+      ? message.metadata?.designArtifacts?.[optionId] : undefined);
+    let artifact = artifactId ? this.getArtifact(artifactId) : null;
+    if (!artifact || artifact.projectId !== projectId || artifact.sourceMessageId !== message.id) {
+      artifact = this.saveDesignOption(message, option);
+      this.finalizeMessage(message.id, {
+        streaming: false,
+        metadata: {
+          ...message.metadata,
+          designArtifacts: { ...message.metadata?.designArtifacts, [optionKey]: artifact.id, [optionId]: artifact.id },
+        },
+      });
+    }
+    const thread = this.listAgentMessages(message.agentId, projectId);
+    const context = thread.slice(0, thread.findIndex((item) => item.id === message.id))
+      .filter((item) => item.author === 'user').at(-1);
+    const isLogo = option.kind === 'svg' && /\b(?:logo|logomark|wordmark)\b/i.test(
+      [option.label, option.summary, segment?.type === 'design' ? segment.block.title : '', context?.text].join(' '),
+    );
+    const key = isLogo ? 'brand.logo' : `design.${message.id}.${index}.chosen`;
+    const previous = this.listCanon(projectId ?? 'direct').find((item) => item.key === key);
+    const slug = option.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'option';
+    const relative = isLogo ? 'brand/logo.svg' : option.kind === 'svg' ? `brand/${slug}.svg` : undefined;
+    const fields = CanonInputSchema.parse({
+      kind: 'asset', key, title: option.label, value: option.summary?.trim().slice(0, 300) || option.label,
+      path: relative,
+    });
+    let undo: (() => void) | undefined;
+    if (relative) {
+      const root = this.designRoots(message)[0]!;
+      const target = memoryFilePath(root, relative);
+      const old = previous?.path === relative && previous.artifactId ? this.getArtifact(previous.artifactId) : null;
+      const replaced = old && old.projectId === projectId && fs.existsSync(target) ? this.readArtifact(old) : undefined;
+      const bytes = this.readArtifact(artifact);
+      const existed = fs.existsSync(target);
+      const written = writeMemoryFile(root, relative, bytes, replaced);
+      if (written) undo = () => {
+        const file = memoryFilePath(root, relative);
+        if (!fs.existsSync(file) || !bytes.equals(fs.readFileSync(file))) return;
+        if (!existed) fs.rmSync(file, { force: true });
+        else if (replaced) writeMemoryFile(root, relative, replaced, bytes);
+      };
+    }
+    if (previous?.artifactId === artifact.id) return {
+      entry: previous, option,
+      notify: !thread.some((item) => item.metadata?.designPick?.canonId === previous.id),
+    };
+    try {
+      const entry = this.upsertCanon(projectId, { ...fields, artifactId: artifact.id, source: 'user_pick' });
+      return { entry, option, notify: true };
+    } catch (err) {
+      undo?.();
+      throw err;
+    }
+  }
+
   // Messages
+  public searchHistory(projectId: string | null, query: string, limit: number) {
+    const words = query.match(/[\p{L}\p{N}_]+/gu)?.slice(0, 12) ?? [];
+    if (!words.length) return [];
+    const cappedLimit = Math.min(8, Math.max(1, limit));
+    type Match = { id: string; author: string; createdAt: string; snippet: string };
+    let rows: Match[];
+    if (this.db.hasMessageFts) {
+      rows = this.db.sqlite.prepare(`
+        SELECT m.id, json_extract(m.data, '$.author') AS author, m.created_at AS createdAt,
+          snippet(messages_fts, 0, '', '', '…', 24) AS snippet
+        FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid
+        WHERE messages_fts MATCH ? AND scope = ? AND m.project_id IS ?
+        ORDER BY rank, m.created_at DESC LIMIT ?
+      `).all(words.map((word) => '"' + word + '"').join(' AND '), projectId ?? 'direct', projectId, cappedLimit) as Match[];
+    } else {
+      const matches = words.map(() => "text LIKE ? ESCAPE '!'").join(' AND ');
+      rows = this.db.sqlite.prepare(`
+        WITH recent AS (
+          SELECT id, created_at, json_extract(data, '$.author') AS author, json_extract(data, '$.text') AS text
+          FROM messages WHERE project_id IS ? AND coalesce(json_extract(data, '$.streaming'), 0) = 0
+            AND coalesce(json_extract(data, '$.metadata.compacted'), 0) = 0
+          ORDER BY created_at DESC LIMIT 1500
+        )
+        SELECT id, author, created_at AS createdAt,
+          substr(text, max(1, instr(lower(text), lower(?)) - 80), 300) AS snippet
+        FROM recent WHERE ${matches} LIMIT ?
+      `).all(projectId, words[0]!, ...words.map((word) => `%${word.replaceAll('_', '!_')}%`), cappedLimit) as Match[];
+    }
+    return rows.map(({ id, author, createdAt, snippet }) => ({
+      messageId: id, author, createdAt, snippet: snippet.slice(0, 300),
+    }));
+  }
+
   public getMessage(id: string): Message | null {
     const row = this.db.sqlite.prepare(`SELECT data FROM messages WHERE id = ?`).get(id) as
       | { data: string }
@@ -1080,14 +1375,11 @@ export class AtelierStore {
   }
 
   public listAgentMessages(agentId: string, projectId?: string | null): Message[] {
-    const rows = (
-      this.db.sqlite
-        .prepare(`SELECT data FROM messages WHERE agent_id = ? ORDER BY created_at ASC`)
-        .all(agentId) as Array<{ data: string }>
-    ).map((r) => JSON.parse(r.data) as Message);
-
-    if (projectId === undefined) return rows;
-    return rows.filter((m) => (m.projectId ?? null) === projectId);
+    const rows = projectId === undefined
+      ? this.db.sqlite.prepare('SELECT data FROM messages WHERE agent_id = ? ORDER BY created_at, rowid').all(agentId)
+      : this.db.sqlite.prepare('SELECT data FROM messages WHERE project_id IS ? AND agent_id = ? ORDER BY created_at, rowid')
+        .all(projectId, agentId);
+    return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as Message);
   }
 
   public createMessage(input: {
@@ -1367,6 +1659,19 @@ export class AtelierStore {
   }
 
   // Persistent FIFO Queue
+  public enqueueMessage(
+    message: Parameters<AtelierStore['createMessage']>[0],
+    queue: Parameters<AtelierStore['enqueueItem']>[0],
+  ): ReturnType<AtelierStore['enqueueItem']> {
+    let result!: ReturnType<AtelierStore['enqueueItem']>;
+    this.runTx(() => {
+      const created = this.createMessage(message);
+      result = this.enqueueItem({ ...queue, refId: queue.refId ?? created.id });
+      return [];
+    });
+    return result;
+  }
+
   public enqueueItem(input: {
     agentId: string;
     projectId: string | null;

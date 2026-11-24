@@ -1,5 +1,6 @@
 import type {
   Agent,
+  CanonEntry,
   AuthStatus,
   AutoBackupConfig,
   AutoBackupConfigInput,
@@ -238,6 +239,18 @@ export const api = {
       },
     ),
 
+  pickDesign: (scope: string | null, messageId: string, optionId: string, segmentIndex: number) =>
+    request<{ entry: CanonEntry }>(`/api/projects/${encodeURIComponent(scope ?? 'direct')}/canon/pick`, {
+      method: 'POST', body: JSON.stringify({ messageId, optionId, segmentIndex }),
+    }),
+  editCanon: (entry: CanonEntry, patch: Pick<CanonEntry, 'title' | 'value' | 'path'>) =>
+    request<{ entry: CanonEntry }>(`/api/projects/${encodeURIComponent(entry.scopeKey)}/canon/${encodeURIComponent(entry.id)}`, {
+      method: 'PATCH', body: JSON.stringify(patch),
+    }),
+  deleteCanon: (entry: CanonEntry) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(entry.scopeKey)}/canon/${encodeURIComponent(entry.id)}`, {
+      method: 'DELETE',
+    }),
   sendMessage: (agentId: string, text: string, projectId?: string | null, attachmentIds?: string[]) =>
     request<{ ok: boolean }>(`/api/agents/${agentId}/messages`, {
       method: 'POST',

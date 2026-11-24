@@ -52,6 +52,7 @@ export function workspaceReducer(state: WorkspaceState, event: ServerEvent): Wor
       return {
         ...state,
         projects: state.projects.filter((p) => p.id !== event.payload.id),
+        canon: state.canon?.filter((entry) => entry.projectId !== event.payload.id),
         messages: state.messages.filter((m) => m.projectId !== event.payload.id),
         tasks: state.tasks.filter((t) => t.projectId !== event.payload.id),
         activities: state.activities.filter((a) => a.projectId !== event.payload.id),
@@ -68,6 +69,10 @@ export function workspaceReducer(state: WorkspaceState, event: ServerEvent): Wor
       };
     case 'message-upserted':
       return { ...state, messages: upsertById<Message>(state.messages, event.payload) };
+    case 'canon-upserted':
+      return { ...state, canon: upsertById(state.canon ?? [], event.payload, true) };
+    case 'canon-deleted':
+      return { ...state, canon: state.canon?.filter((entry) => entry.id !== event.payload.id) };
     case 'message-delta': {
       const idx = state.messages.findIndex((m) => m.id === event.payload.id);
       if (idx === -1) return state;

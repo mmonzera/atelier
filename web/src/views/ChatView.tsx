@@ -25,6 +25,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api';
 import {
   DotMatrixGrid,
   FormattedText,
@@ -137,6 +138,14 @@ export function ChatView({
       ),
     [messages, project?.id, agent.id],
   );
+  const savedDesignPicks = useMemo(() => {
+    const picks = new Map<string, string>();
+    for (const message of threadMessages) {
+      const pick = message.metadata?.designPick;
+      if (pick) picks.set(`${pick.messageId}:${pick.segmentIndex ?? -1}`, pick.optionId);
+    }
+    return picks;
+  }, [threadMessages]);
 
   const enabledSkills = useMemo(() => agent.skills.filter((s) => s.enabled), [agent.skills]);
 
@@ -691,7 +700,9 @@ export function ChatView({
                         <DesignOptionsCard
                           key={`${msg.id}-d${i}`}
                           block={seg.block}
-                          onChoose={(o) => void onQuickSend(`Saya pilih opsi ${o.id} — ${o.label}. Lanjutkan dengan opsi ini.`)}
+                          chosen={savedDesignPicks.get(`${msg.id}:${i}`) ?? savedDesignPicks.get(`${msg.id}:-1`)}
+                          streaming={msg.streaming}
+                          onChoose={(o) => api.pickDesign(msg.projectId, msg.id, o.id, i)}
                         />
                       );
                     }

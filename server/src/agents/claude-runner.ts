@@ -10,8 +10,8 @@ import { toLaunchSpec } from '../mcp/config.js';
 import type { AtelierStore } from '../store.js';
 import { resolveMcpAuth } from '../mcp/oauth.js';
 import { AttachmentStore } from '../attachments.js';
-import { formatUncompactedConversation, getScopeKey } from './compactor.js';
-import { buildAgentSystemPrompt } from './prompts.js';
+import { conversationTail, estimateTokens, getScopeKey } from './compactor.js';
+import { buildAgentSystemPrompt, renderCanon } from './prompts.js';
 import type { AgentRunner, Turn, TurnCallbacks } from './runner.js';
 import {
   type EnqueueTaskFn,
@@ -88,17 +88,24 @@ export class ClaudeAgentRunner implements AgentRunner {
       settings.mcpServers,
       agentProjects,
       compaction,
+      [],
+      turn.canonText ?? renderCanon(this.store.listCanon(scopeKey)).text,
     );
     const attachmentStore = new AttachmentStore(this.config.dataDir);
-    const promptText = turn.resumeSessionId
-      ? turn.prompt
-      : formatUncompactedConversation(
+    const artifactDirectory = this.store.artifactDirectory(turn.project?.id ?? null);
+    const tail = turn.resumeSessionId || turn.recallContinuation ? '' : conversationTail(
           this.store.listAgentMessages(turn.agent.id, turn.project?.id ?? null),
           compaction,
           turn.prompt,
-          12,
+          settings.autoCompact.tailTokens,
           (m) => attachmentStore.describe(m.metadata?.attachments),
+          turn.currentMessageId,
         );
+    cb.onMemoryTail?.(estimateTokens(tail));
+    const promptText = tail ? `${tail}\n\nCURRENT MESSAGE: ${turn.prompt}`
+      : turn.resumeSessionId && turn.canonChanged && turn.canonText
+        ? `Canon update since last turn (replaces previous Canon):\n${turn.canonText}\n\n${turn.prompt}`
+        : turn.prompt;
 
     const tools = createStudioTools({
       store: this.store,
@@ -109,7 +116,7 @@ export class ClaudeAgentRunner implements AgentRunner {
     });
     const atelierMcp = await createAtelierSdkMcpServer(tools);
 
-    const model = turn.agent.modelOverride || settings.model;
+    const model = turn.modelOverride || turn.agent.modelOverride || settings.model;
 
     const mcpServers: Record<string, unknown> = {};
     if (atelierMcp) {
@@ -163,7 +170,7 @@ export class ClaudeAgentRunner implements AgentRunner {
               ? 'bypassPermissions'
               : 'acceptEdits',
           allowedTools,
-          additionalDirectories: [attachmentStore.directory],
+          additionalDirectories: [attachmentStore.directory, ...(fs.existsSync(artifactDirectory) ? [artifactDirectory] : [])],
           canUseTool: async (toolName: string, input: Record<string, unknown>) => {
             if (!turn.agent.allowShell && toolName === 'Bash') {
               return { behavior: 'deny', message: 'Shell execution is disabled for this agent.' };
@@ -172,10 +179,12 @@ export class ClaudeAgentRunner implements AgentRunner {
               (typeof input.file_path === 'string' && input.file_path) ||
               (typeof input.path === 'string' && input.path) ||
               null;
-            // User attachments live outside the workspace; reading them is fine, writing is not.
+            // Archived files and user attachments can be read outside the workspace.
             const isRead = ['Read', 'Glob', 'Grep'].includes(toolName);
-            const insideAttachments = isRead && fileCandidate && isPathInside(fileCandidate, attachmentStore.directory);
-            if (fileCandidate && !insideAttachments && !isPathInside(fileCandidate, cwd)) {
+            const insideArchive = isRead && fileCandidate && (
+              isPathInside(fileCandidate, attachmentStore.directory) || isPathInside(fileCandidate, artifactDirectory)
+            );
+            if (fileCandidate && !insideArchive && !isPathInside(fileCandidate, cwd)) {
               return {
                 behavior: 'deny',
                 message: `Access denied outside project workspace: ${cwd}`,
@@ -226,6 +235,8 @@ export class ClaudeAgentRunner implements AgentRunner {
           if (event.usage && typeof event.usage === 'object') {
             const u = event.usage as Record<string, unknown>;
             cb.onUsage?.(Number(u.input_tokens ?? 0), Number(u.output_tokens ?? 0));
+            cb.onContextTokens?.(Number(u.input_tokens ?? 0) +
+              Number(u.cache_read_input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0));
           }
         }
       }
@@ -233,6 +244,25 @@ export class ClaudeAgentRunner implements AgentRunner {
       return { finalText: finalText || 'Completed turn.' };
     } finally {
       turn.signal.removeEventListener('abort', onAbort);
+    }
+  }
+  public async summarizeWithSdk(prompt: string, systemPrompt: string, cwd: string, model: string, signal: AbortSignal): Promise<string> {
+    const packageName = '@anthropic-ai/claude-agent-sdk';
+    const sdk = await import(packageName);
+    signal.throwIfAborted();
+    const abortController = new AbortController();
+    const abort = () => abortController.abort();
+    signal.addEventListener('abort', abort, { once: true });
+    try {
+      for await (const event of sdk.query({
+        prompt,
+        options: { cwd, model, systemPrompt, tools: [], mcpServers: {}, maxTurns: 1, persistSession: false, abortController },
+      })) {
+        if (event.type === 'result' && event.subtype === 'success') return event.result as string;
+      }
+      throw new Error('Claude returned no memory summary.');
+    } finally {
+      signal.removeEventListener('abort', abort);
     }
   }
 }

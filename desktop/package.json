@@ -5,7 +5,7 @@
   "description": "Atelier Windows desktop shell (Tauri + Node sidecar)",
   "type": "module",
   "scripts": {
-    "icons": "node scripts/make-icons.mjs && tauri icon assets/icon.png",
+    "icons": "tauri icon assets/icon.svg",
     "stage": "node scripts/stage.mjs",
     "dev": "node scripts/stage.mjs && tauri dev",
     "build": "node scripts/stage.mjs && tauri build",

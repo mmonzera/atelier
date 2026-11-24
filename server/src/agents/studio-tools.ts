@@ -11,6 +11,23 @@ import {
 import { z } from 'zod';
 import { runBrowserQa } from '../qa/browser-qa.js';
 import { type AtelierStore, newId } from '../store.js';
+import { CANON_KEY, CanonInputFields, CanonInputSchema } from '../memory-files.js';
+
+const CanonKeySchema = z.object({ key: z.string().regex(CANON_KEY) });
+const SearchHistorySchema = z.object({
+  query: z.string().trim().min(1).max(200),
+  limit: z.number().int().min(1).max(8).optional(),
+});
+const ArchiveIdSchema = z.object({ id: z.string().min(1).max(80) });
+
+export const MEMORY_ACTIONS = {
+  record_decision: CanonInputSchema,
+  forget_decision: CanonKeySchema,
+  search_history: SearchHistorySchema,
+  get_message: ArchiveIdSchema,
+  get_artifact: ArchiveIdSchema,
+};
+export type MemoryAction = keyof typeof MEMORY_ACTIONS;
 
 export type EnqueueTaskFn = (input: {
   agentId: string;
@@ -96,6 +113,7 @@ export const CreateAgentToolSchema = z.object({
 });
 
 export interface StudioTools {
+  memoryAction(name: MemoryAction, input: unknown): unknown;
   project_info(): {
     project: Project | null;
     projects?: Project[];
@@ -119,6 +137,49 @@ export function createStudioTools(deps: {
   const { store, projectId, actingAgentId, enqueue, dataDir = './data' } = deps;
 
   return {
+    memoryAction(name, rawInput) {
+      switch (name) {
+        case 'record_decision': {
+          const input = CanonInputSchema.parse(rawInput);
+          const existing = store.listCanon(projectId ?? 'direct').find((entry) => entry.key === input.key);
+          const artifactId = input.kind === 'asset' && existing?.path === input.path ? existing?.artifactId : undefined;
+          return store.upsertCanon(projectId, { ...input, artifactId, source: 'agent_recorded' });
+        }
+        case 'forget_decision': {
+          const { key } = CanonKeySchema.parse(rawInput);
+          const entry = store.listCanon(projectId ?? 'direct').find((item) => item.key === key);
+          if (entry) store.deleteCanon(entry.id);
+          return { forgotten: !!entry };
+        }
+        case 'search_history': {
+          const { query, limit } = SearchHistorySchema.parse(rawInput);
+          return store.searchHistory(projectId, query, limit ?? 5);
+        }
+        case 'get_message': {
+          const { id } = ArchiveIdSchema.parse(rawInput);
+          const message = store.getMessage(id);
+          if (!message || message.projectId !== projectId || message.streaming) return { found: false };
+          return { id, author: message.author, createdAt: message.createdAt, text: message.text.slice(0, 6000),
+            truncated: message.text.length > 6000 };
+        }
+        case 'get_artifact': {
+          const { id } = ArchiveIdSchema.parse(rawInput);
+          const artifact = store.getArtifact(id);
+          if (!artifact || artifact.projectId !== projectId) return { found: false };
+          if (artifact.kind === 'svg' || artifact.kind === 'html') {
+            const content = store.readArtifact(artifact).subarray(0, 6000).toString('utf8');
+            let path: string | undefined;
+            try {
+              path = store.materializeArtifact(artifact);
+            } catch {
+              // Text remains available even when the local file cache is inaccessible.
+            }
+            return { ...artifact, content, truncated: artifact.sizeBytes > 6000, path };
+          }
+          return { ...artifact, path: store.materializeArtifact(artifact) };
+        }
+      }
+    },
     project_info() {
       if (!projectId) {
         return {
@@ -466,6 +527,21 @@ export async function createAtelierSdkMcpServer(tools: StudioTools): Promise<unk
       name: 'atelier',
       version: '0.2.0',
       tools: [
+        ...(Object.keys(MEMORY_ACTIONS) as MemoryAction[]).map((name) =>
+          sdk.tool!(name, {
+            record_decision: 'Save a durable project decision, rule, or asset reference.',
+            forget_decision: 'Remove a Canon entry by key at the user’s request.',
+            search_history: 'Search archived messages within the current scope.',
+            get_message: 'Read an archived message by ID.',
+            get_artifact: 'Read an archived artifact by ID.',
+          }[name], name === 'record_decision' ? CanonInputFields.shape : MEMORY_ACTIONS[name].shape, async (args) => {
+            try {
+              return wrapResult(tools.memoryAction(name, args));
+            } catch {
+              return { ...wrapResult({ error: 'Invalid memory action or unavailable data.' }), isError: true };
+            }
+          }),
+        ),
         sdk.tool(
           'project_info',
           'Get project details, team agents, and tasklist.',

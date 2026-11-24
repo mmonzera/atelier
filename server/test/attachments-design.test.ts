@@ -219,7 +219,7 @@ describe('chat attachments', () => {
       mk('2', 'agent', 'ini <atelier-design title="t"><atelier-option id="A" label="x"><html>BIG</html></atelier-option></atelier-design>'),
       mk('3', 'user', 'pilih A', att),
     ];
-    const out = formatUncompactedConversation(history as never, null, `pilih A${note(history[2] as never)}\n\nexcerpt`, 12, note as never);
+    const out = formatUncompactedConversation(history as never, null, `pilih A${note(history[2] as never)}\n\nexcerpt`, 6000, note as never);
     expect(out).not.toContain('BIG');
     expect(out).toContain('Design options shown to the user');
     expect(out.match(/pilih A/g)).toHaveLength(1); // current message appears once (as CURRENT MESSAGE)
