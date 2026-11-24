@@ -538,7 +538,12 @@ export class SttInstaller {
 
     try {
       fs.mkdirSync(stagingDir, { recursive: true });
-      await execFileAsync('tar', ['-xf', archivePath, '-C', stagingDir], {
+      // Use Windows' bsdtar explicitly: a GNU tar earlier in PATH (e.g. Git) treats "C:" as a remote host.
+      const tarBin =
+        process.platform === 'win32'
+          ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+          : 'tar';
+      await execFileAsync(tarBin, ['-xf', archivePath, '-C', stagingDir], {
         windowsHide: true,
       });
 
