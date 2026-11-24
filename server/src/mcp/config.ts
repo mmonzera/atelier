@@ -71,6 +71,7 @@ export function buildClaudeMcpJson(
 export function buildCodexMcpArgs(
   servers: McpServerConfig[],
   platform: NodeJS.Platform = process.platform,
+  autoApproveTools?: Record<string, readonly string[]>,
 ): string[] {
   const out: string[] = [];
   for (const s of servers) {
@@ -89,6 +90,14 @@ export function buildCodexMcpArgs(
       out.push('-c', `mcp_servers.${keyName}.url=${JSON.stringify(s.url ?? '')}`);
       if (s.headers && Object.keys(s.headers).length > 0) {
         out.push('-c', `mcp_servers.${keyName}.http_headers=${formatTomlStringMap(s.headers)}`);
+      }
+    }
+    const approved = autoApproveTools?.[s.name] ?? autoApproveTools?.[keyName];
+    if (approved) {
+      for (const toolName of approved) {
+        if (/^[a-zA-Z0-9_-]+$/.test(toolName)) {
+          out.push('-c', `mcp_servers.${keyName}.tools.${toolName}.approval_mode="approve"`);
+        }
       }
     }
   }

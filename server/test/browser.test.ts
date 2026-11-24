@@ -6,10 +6,10 @@ import path from 'node:path';
 import type { ServerEvent, SiteCredential } from '@atelier/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { CliAgentRunner } from '../src/agents/cli-runners.js';
+import { applyBrowserAtelierActions, CliAgentRunner } from '../src/agents/cli-runners.js';
 import { executeBrowserTool } from '../src/browser/tools.js';
 import { type AtelierServerHandle, startAtelierServer } from '../src/index.js';
-import { buildOpenCodeMcpConfig } from '../src/mcp/config.js';
+import { buildCodexMcpArgs, buildOpenCodeMcpConfig } from '../src/mcp/config.js';
 import { detectLocalBrowser } from '../src/qa/browser-qa.js';
 
 const tempDirs: string[] = [];
@@ -613,6 +613,42 @@ describe.skipIf(!hasBrowser)('Remote Browser end-to-end with local Chromium/Edge
       expect(toolsUsed).toContain('browser_list_logins');
       expect(loopResult.finalText).toContain('Selesai memeriksa login.');
       expect(round).toBe(2);
+
+      // 13. Codex MCP auto-approval config and Antigravity <atelier-action> browser dispatch
+      const codexArgs = buildCodexMcpArgs(
+        [
+          {
+            id: 'atelier-browser',
+            name: 'atelier-browser',
+            transport: 'http',
+            url: `${base}/mcp/browser`,
+            headers: { Authorization: 'Bearer tok' },
+            enabled: true,
+          },
+        ],
+        'win32',
+        { 'atelier-browser': ['browser_open', 'browser_snapshot'] },
+      );
+      expect(codexArgs).toContain('mcp_servers.atelier-browser.tools.browser_open.approval_mode="approve"');
+      expect(codexArgs).toContain('mcp_servers.atelier-browser.tools.browser_snapshot.approval_mode="approve"');
+
+      const actionTools: string[] = [];
+      const actionRes = await applyBrowserAtelierActions(
+        'Checking logins:\n<atelier-action>{"tool":"browser_list_logins"}</atelier-action>\nDone.',
+        handle.browserManager,
+        ctx,
+        {
+          onTool(name) {
+            actionTools.push(name);
+          },
+        },
+      );
+      expect(actionTools).toEqual(['browser_list_logins']);
+      expect(actionRes.cleanText).toBe('Checking logins:\n\nDone.');
+      expect(actionRes.results).toHaveLength(1);
+      expect(actionRes.results[0]!.tool).toBe('browser_list_logins');
+      expect(actionRes.results[0]!.result).toContain('de…@example.com');
+      expect(actionRes.results[0]!.result).not.toContain(secretPass);
     },
     30_000,
   );
