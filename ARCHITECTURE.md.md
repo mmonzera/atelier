@@ -347,7 +347,7 @@ atelier-desktop.exe (Rust, ~28 MB RAM) --stdin/stdout--> atelier-node.exe server
 - **Notifikasi native** (agent selesai/error/butuh persetujuan, task `in_review`), hanya saat jendela tidak fokus.
 - **Folder picker**: dialog Windows asli lewat endpoint `/api/fs/pick-folder` yang sudah ada.
 - **Auto-update**: `tauri-plugin-updater` membaca `latest.json` dari GitHub Releases, diverifikasi tanda tangan minisign (public key ada di `tauri.conf.json`). Cek 30 dtk setelah start (hanya memberi tahu); pemasangan hanya saat user memilih "Periksa update" di tray. Private key ada di `~/.tauri/atelier-updater.key` (jangan di-commit, jangan sampai hilang).
-- **Animasi hemat GPU**: `web/src/state/animationGate.ts` menidurkan animasi dekoratif (api halftone WebGL, maskot, CSS glow) saat jendela tidak fokus atau tersembunyi ke tray (shell mengirim event `atelier-shell-hidden/shown`). Api halftone digambar sebagai satu draw call WebGL, bukan ~10 ribu busur 2D per frame.
+- **Animasi hemat GPU**: `web/src/state/animationGate.ts` menidurkan animasi dekoratif (maskot, efek kursor pada background) saat jendela tidak fokus atau tersembunyi ke tray (shell mengirim event `atelier-shell-hidden/shown`). Background adalah `web/src/assets/atelier-pattern.svg` (±40 path statis, di-inline oleh `PatternBackground.tsx`; garis hanya bergerak saat kursor lewat). Pengganti api halftone lama yang menggambar ~10 ribu titik per frame.
 
 Perintah:
 

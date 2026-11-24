@@ -11,7 +11,7 @@ import { Plus, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import { FloatingComposer } from './components/FloatingComposer';
-import { HalftoneBackground } from './components/HalftoneBackground';
+import { PatternBackground } from './components/PatternBackground';
 import { LeftRail } from './components/LeftRail';
 import { RightPanel } from './components/RightPanel';
 import { ThreadHeader } from './components/ThreadHeader';
@@ -320,7 +320,7 @@ export function App() {
     ? state.agents.filter((a) => modalEditTaskProject.agentIds.includes(a.id))
     : state.agents;
 
-  const dimmedHalftone =
+  const dimmedBackground =
     (viewMode === 'project' && (activeTab === 'tasks' || activeTab === 'preview')) ||
     (viewMode === 'agent' && agentTab === 'reports');
 
@@ -336,7 +336,7 @@ export function App() {
         background: 'var(--bg-base)',
       }}
     >
-      <HalftoneBackground dimmed={dimmedHalftone} />
+      <PatternBackground dimmed={dimmedBackground} />
 
       <LeftRail
         projects={state.projects}

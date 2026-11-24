@@ -1,5 +1,5 @@
 /**
- * One shared switch for every decorative animation (halftone fire, mascots).
+ * One shared switch for every decorative animation (mascots, pointer-reactive background).
  *
  * Animations only run while the window is actually being looked at: visible, focused, and not
  * tucked into the system tray. Background agents keep working; only the eye candy sleeps, which
@@ -21,7 +21,7 @@ function emit(): void {
   const now = isAnimationActive();
   if (now === last) return;
   last = now;
-  // CSS animations (fire glow) pause through this attribute; see tokens.css.
+  // Lets CSS pause its own animations: html[data-animations='off'] { ... }
   document.documentElement.dataset.animations = now ? 'on' : 'off';
   for (const l of listeners) l(now);
 }

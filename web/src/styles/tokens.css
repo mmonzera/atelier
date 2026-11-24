@@ -180,43 +180,6 @@ a {
   transform: scale(0.97);
 }
 
-/* ───────────── Halftone fire: breathing glow ───────────── */
-.fire-glow {
-  position: absolute;
-  border-radius: 50%;
-  /* No filter: blur() on a huge, endlessly animated element is re-blurred on the GPU every frame.
-     The radial-gradient below already fades to transparent, so the look is the same. */
-  will-change: opacity, transform;
-  pointer-events: none;
-}
-.fire-glow-left {
-  left: -8%;
-  bottom: 18%;
-  width: 32vw;
-  height: 46vh;
-  background: radial-gradient(closest-side, rgba(190, 45, 15, 0.34), transparent);
-  animation: fire-breathe 5.2s ease-in-out infinite;
-}
-.fire-glow-right {
-  right: -10%;
-  bottom: -6%;
-  width: 52vw;
-  height: 70vh;
-  background: radial-gradient(closest-side, rgba(215, 70, 20, 0.3), transparent);
-  animation: fire-breathe 6.4s ease-in-out -2.4s infinite;
-}
-@keyframes fire-breathe {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: scale(0.96) translateY(0);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.06) translateY(-1.5%);
-  }
-}
-
 /* ───────────── Glass (subtle, iOS-style) ───────────── */
 .glass {
   --glass-tint: 255, 255, 255;
@@ -266,7 +229,6 @@ a {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fire-glow,
   .msg-enter {
     animation: none;
   }
@@ -415,10 +377,4 @@ button:disabled {
   .mascot-shape-btn:active {
     transform: none;
   }
-}
-
-/* Decorative animations sleep while the window is unfocused / hidden (see state/animationGate.ts). */
-html[data-animations='off'] .fire-glow,
-html[data-animations='off'] .fire-glow * {
-  animation-play-state: paused;
 }
