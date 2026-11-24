@@ -1,6 +1,7 @@
 import type { AuthStatus } from '@atelier/contracts';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { LOCKED_EVENT, authApi } from '../api';
+import { setBootStage } from '../components/BootLoader';
 import { LockScreen } from '../components/LockScreen';
 
 interface AuthContextValue {
@@ -84,6 +85,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       window.clearInterval(timer);
     };
   }, [guarding, status, lockNow]);
+
+  // Start-up screen: lock checked → load the workspace (or hand over to the lock screen).
+  useEffect(() => {
+    if (!status) return;
+    setBootStage(locked ? 'ready' : 'loading');
+  }, [status, locked]);
 
   if (!status) return null;
 

@@ -13,6 +13,7 @@ import { Plus, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import { FloatingComposer } from './components/FloatingComposer';
+import { setBootStage } from './components/BootLoader';
 import { MeetingAppPrompt } from './components/MeetingAppPrompt';
 import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingRecordingPill } from './components/MeetingRecordingPill';
@@ -351,6 +352,11 @@ export function App() {
   };
 
   const showOnboarding = !loading && state.settings.onboardingCompleted === false;
+
+  // Workspace state is in: let the start-up screen fade out.
+  useEffect(() => {
+    if (!loading) setBootStage('ready');
+  }, [loading]);
 
   const handleCreateSampleProject = async () => {
     setCreatingSample(true);
@@ -815,21 +821,24 @@ export function App() {
             />
             </div>
 
-            {activeMeeting && (
+            {/* While recording: the recorder floats at the bottom centre of the window, above every
+                page; on the chat it sits just above the composer so typing stays possible. */}
+            {activeMeeting?.meeting.status === 'recording' && (
+              <MeetingRecorder event={activeMeeting} bottomOffset={pageOpen ? 24 : 112} />
+            )}
+
+            {/* After Stop: a small status pill at the top, also above full pages. */}
+            {activeMeeting && activeMeeting.meeting.status !== 'recording' && (
               <div
                 style={{
                   position: 'absolute',
                   top: 54,
                   left: '50%',
                   transform: 'translateX(-50%)',
-                  zIndex: 25,
+                  zIndex: 35,
                 }}
               >
-                {activeMeeting.meeting.status === 'recording' ? (
-                  <MeetingRecorder event={activeMeeting} />
-                ) : (
-                  <MeetingRecordingPill event={activeMeeting} />
-                )}
+                <MeetingRecordingPill event={activeMeeting} />
               </div>
             )}
 

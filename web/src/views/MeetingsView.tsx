@@ -191,7 +191,9 @@ export function MeetingsView({
   const selected = selectedId ? (meetings ?? []).find((m) => m.id === selectedId) ?? null : null;
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 4px 40px' }}>
+    // While recording, the recorder floats at the bottom: leave room so the end of the page
+    // (the growing transcript) can scroll above it.
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `0 4px ${recording ? 300 : 40}px` }}>
       <div style={{ maxWidth: 760, margin: '0 auto', padding: '8px 12px 0' }}>
         {selectedId ? (
           <>

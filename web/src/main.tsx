@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { BootLoader } from './components/BootLoader';
 import { Toaster } from './components/Toast';
 import { AuthGate } from './state/auth';
 import { subscribeAnimationGate } from './state/animationGate';
@@ -14,6 +15,7 @@ createRoot(document.getElementById('root')!).render(
     <AuthGate>
       <App />
     </AuthGate>
+    <BootLoader />
     <Toaster />
   </StrictMode>,
 );

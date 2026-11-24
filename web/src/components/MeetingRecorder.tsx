@@ -32,7 +32,26 @@ function levelToHeight(rms: number): number {
  * being captured, and three round buttons (discard · pause/resume · finish). Collapses to a
  * small pill so it never hides the chat.
  */
-export function MeetingRecorder({ event }: { event: MeetingStatusEvent }) {
+export function MeetingRecorder({ event, bottomOffset = 24 }: { event: MeetingStatusEvent; bottomOffset?: number }) {
+  // Bottom centre of the main column (lined up with the composer). Its z-index is above full
+  // pages (Meeting notes, Plugins, z-index 30), which used to cover it.
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: '50%',
+        bottom: bottomOffset,
+        transform: 'translateX(-50%)',
+        zIndex: 40,
+        transition: 'bottom 200ms ease',
+      }}
+    >
+      <RecorderPanel event={event} />
+    </div>
+  );
+}
+
+function RecorderPanel({ event }: { event: MeetingStatusEvent }) {
   const t = useT();
   const { meeting, canSwitchSmallerModel, smallerModelId, warning } = event;
   const [now, setNow] = useState(() => Date.now());

@@ -986,6 +986,10 @@ export const id: Record<string, string> = {
   "Writing notes…": "Menulis catatan…",
   "{count} parts": "{count} bagian",
   "{count} pieces of audio are still waiting to be transcribed.": "{count} potongan audio masih menunggu ditranskrip.",
+  // Start-up screen
+  "Starting Atelier…": "Memulai Atelier…",
+  "Still starting. The first start after an update can take a little longer.": "Masih memulai. Start pertama setelah update bisa sedikit lebih lama.",
+  "Waking up your agents…": "Membangunkan para agent…",
   // Meeting recorder
   "Discard": "Buang",
   "Discard recording": "Buang rekaman",
