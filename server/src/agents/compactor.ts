@@ -156,7 +156,12 @@ export function shouldAutoCompact(
 }
 
 const PATH_RE = /\b(?:[\w.@-]+\/)+[\w.@-]+\.[a-z0-9]+\b/gi;
-const DECISION_RE = /\b(?:decided|must|always|never|we(?:'ll| will| use| chose| choose)|use|pakai|pilih|jangan|harus)\b/i;
+// Explicit decision phrasing only. Bare words like "use", "pakai", "harus", "jangan" appear in
+// nearly every message and flooded DECISIONS; real decisions belong in Canon (record_decision).
+const DECISION_RE = /\b(?:decided|diputuskan|from now on|mulai sekarang|always|never|we(?:'ll| will| use| chose| choose)|kita pakai|fix(?:ed)? pakai)\b/i;
+const MAX_DECISIONS = 30;
+// Per-section char budgets (sum ≈ MAX_SUMMARY_CHARS) so DECISIONS can't starve DONE/OPEN.
+const SECTION_BUDGET = [0, 2000, 2800, 1800, 1200] as const;
 const clean = (text: string, max: number) => text.replace(/\s+/g, ' ').trim().slice(0, max);
 
 function unique<T>(values: T[], key: (value: T) => string): T[] {
@@ -192,7 +197,7 @@ export function buildDeterministicMemory(
   }
   return {
     goal,
-    decisions: [...new Set(decisions)],
+    decisions: [...new Set(decisions)].slice(-MAX_DECISIONS),
     done: unique(done, (item) => item.text).slice(-100),
     open: [...new Set(open)].slice(-40),
     artifacts: unique(artifacts, (item) => item.id).slice(-100),
@@ -209,10 +214,13 @@ export function renderStructuredMemory(memory: StructuredMemory): string {
   ];
   let remaining = MAX_SUMMARY_CHARS - sections.flat().join('\n').length - 5;
   const add = (section: number, lines: string[]) => {
+    let budget = SECTION_BUDGET[section as 1 | 2 | 3 | 4];
     for (const line of lines) {
-      if (line.length + 3 > remaining) continue;
+      const cost = line.length + 3;
+      if (cost > remaining || cost > budget) continue;
       sections[section]!.push('- ' + line);
-      remaining -= line.length + 3;
+      remaining -= cost;
+      budget -= cost;
     }
   };
   add(1, memory.decisions.map((decision) => clean(decision, 400)));

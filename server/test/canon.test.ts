@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { CanonEntry, Message, Task } from '@atelier/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CliAgentRunner } from '../src/agents/cli-runners.js';
-import { compactAgentScope, conversationTail, estimateTokens, formatUncompactedConversation } from '../src/agents/compactor.js';
+import { CliAgentRunner, composeCliPrompt } from '../src/agents/cli-runners.js';
+import { buildDeterministicMemory, compactAgentScope, conversationTail, estimateTokens, formatUncompactedConversation } from '../src/agents/compactor.js';
 import { buildAgentSystemPrompt, renderCanon } from '../src/agents/prompts.js';
 import { AgentRuntime } from '../src/agents/runtime.js';
 import { createStudioTools } from '../src/agents/studio-tools.js';
@@ -206,6 +206,43 @@ describe('Project Canon and design assets', () => {
     const after = buildAgentSystemPrompt(agent, project, [agent], [task], [], [], [], null, [small]);
     expect(after).toContain('A new task');
     expect(before.split('Project Canon')[0]).toBe(after.split('Project Canon')[0]);
+  });
+});
+
+describe('Token efficiency', () => {
+  it('does not resend the system prompt on a resumed CLI session', () => {
+    const system = 'Atelier Harness Coordination Protocol ...';
+    const first = composeCliPrompt({}, system, 'hello', false);
+    expect(first).toContain('Atelier Harness Coordination Protocol');
+    expect(composeCliPrompt({}, system, 'hello', true)).toBe('hello');
+    const updated = composeCliPrompt({ canonChanged: true, canonText: 'CANON-V2' }, system, 'hello', true);
+    expect(updated).toContain('CANON-V2');
+    expect(updated).not.toContain('Atelier Harness Coordination Protocol');
+  });
+
+  it('keeps the system prompt prefix identical when only dynamic sections change', () => {
+    const { project, agent } = fixture();
+    const build = (canonText: string, tasks: Task[] = []) =>
+      buildAgentSystemPrompt(agent, project, [agent], tasks, [], [], [], null, [], canonText);
+    const a = build('Project Canon\n- decision one');
+    const b = build('Project Canon\n- decision two');
+    const rosterEnd = a.indexOf('Project Canon');
+    expect(rosterEnd).toBeGreaterThan(0);
+    expect(a.slice(0, rosterEnd)).toBe(b.slice(0, rosterEnd));
+  });
+
+  it('only treats explicit phrasing as decisions and caps their count', () => {
+    const msg = (id: number, text: string) => ({
+      id: `m${id}`, agentId: 'a', projectId: 'p', author: 'user', text, createdAt: new Date().toISOString(),
+    }) as unknown as Message;
+    const memory = buildDeterministicMemory(null, [
+      msg(1, 'tolong pakai tombol biru dan harus cepat'),
+      msg(2, 'We decided to ship on Friday'),
+      ...Array.from({ length: 60 }, (_, i) => msg(10 + i, `from now on rule ${i}`)),
+    ]);
+    expect(memory.decisions).not.toContain('tolong pakai tombol biru dan harus cepat');
+    expect(memory.open).toContain('tolong pakai tombol biru dan harus cepat');
+    expect(memory.decisions.length).toBeLessThanOrEqual(30);
   });
 });
 

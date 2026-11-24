@@ -231,9 +231,14 @@ export function buildAgentSystemPrompt(
           : 'Not assigned to any project yet.',
       ];
 
+  // Ordered most-stable first, most-volatile last, so provider prompt caches keep the longest
+  // possible identical prefix. Keep timestamps/random values out of the static sections.
   const parts = [
+    // Static (global)
     ATELIER_HARNESS_PROTOCOL,
     DESIGN_OPTIONS_GUIDE,
+    ...(/chief of staff/i.test(agent.role) ? [buildChiefOfStaffCatalog(allConfiguredMcp)] : []),
+    // Static (per agent / project)
     agent.allowShell
       ? 'Shell/file editing tools are enabled in your workspace. Never push directly to the default branch.'
       : 'Shell execution is disabled for this agent; focus on planning, specs, design, or analysis.',
@@ -244,26 +249,23 @@ export function buildAgentSystemPrompt(
     'Installed Skills:',
     skillsSection,
     '',
+    ...headerLines,
+    '',
+    'Connected MCP tools:',
+    mcpSection,
+    // Dynamic
+    '',
+    project ? 'Team Roster:' : 'All Available Teammate Agents (can message_agent directly):',
+    teamRoster,
+    '',
     canonText,
     ...(compaction?.summary?.trim()
       ? ['', 'Compacted Conversation Memory (earlier turns):', compaction.summary.trim().slice(0, 8000)]
       : []),
     '',
-    ...headerLines,
-    '',
-    'Connected MCP tools:',
-    mcpSection,
-    '',
-    project ? 'Team Roster:' : 'All Available Teammate Agents (can message_agent directly):',
-    teamRoster,
-    '',
     project ? 'Your Open Tasks:' : 'Your Project Tasks & Deliverables:',
     taskLines,
   ];
-
-  if (/chief of staff/i.test(agent.role)) {
-    parts.push(buildChiefOfStaffCatalog(allConfiguredMcp));
-  }
 
   return parts.join('\n');
 }

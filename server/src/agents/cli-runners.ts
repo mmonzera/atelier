@@ -164,6 +164,23 @@ function readJsonLines(
   });
 }
 
+/**
+ * A natively resumed CLI session already holds the system prompt from its first turn, so a
+ * resumed turn sends only the prompt body (plus a Canon update when it changed).
+ */
+export function composeCliPrompt(
+  turn: Pick<Turn, 'canonChanged' | 'canonText'>,
+  systemPrompt: string,
+  promptBody: string,
+  resumed: boolean,
+): string {
+  if (!resumed) return `${systemPrompt}\n\n---\n\n${promptBody}`;
+  if (turn.canonChanged && turn.canonText) {
+    return `Canon update since last turn (replaces previous Canon):\n${turn.canonText}\n\n${promptBody}`;
+  }
+  return promptBody;
+}
+
 export class CliAgentRunner implements AgentRunner {
   private readonly sdkFallback: ClaudeAgentRunner;
 
@@ -189,6 +206,15 @@ export class CliAgentRunner implements AgentRunner {
       this.store.getSettings().autoCompact.tailTokens, (m) => files.describe(m.metadata?.attachments), turn.currentMessageId);
     cb.onMemoryTail?.(estimateTokens(tail));
     return tail ? `${tail}\n\nCURRENT MESSAGE: ${turn.prompt}` : turn.prompt;
+  }
+
+  /**
+   * A natively resumed CLI session already holds the system prompt from its first turn,
+   * so only send the prompt body (plus a Canon update when it changed) instead of
+   * re-sending the whole system prompt every turn.
+   */
+  private composeCliPrompt(turn: Turn, systemPrompt: string, promptBody: string, resumed: boolean): string {
+    return composeCliPrompt(turn, systemPrompt, promptBody, resumed);
   }
 
   async run(turn: Turn, cb: TurnCallbacks): Promise<{ finalText: string }> {
@@ -403,7 +429,7 @@ export class CliAgentRunner implements AgentRunner {
     }
 
     const promptBody = this.buildConversationContext(turn, cb, Boolean(nativeResumeId));
-    const fullPrompt = `${opts.systemPrompt}\n\n---\n\n${promptBody}`;
+    const fullPrompt = this.composeCliPrompt(turn, opts.systemPrompt, promptBody, Boolean(nativeResumeId));
 
     try {
       return await this.execStreaming(binPath, args, opts.cwd, fullPrompt, turn.signal, (line, acc) => {
@@ -766,7 +792,7 @@ export class CliAgentRunner implements AgentRunner {
     ];
 
     const promptBody = this.buildConversationContext(turn, cb, Boolean(nativeResumeId));
-    const fullPrompt = `${opts.systemPrompt}\n\n---\n\n${promptBody}`;
+    const fullPrompt = this.composeCliPrompt(turn, opts.systemPrompt, promptBody, Boolean(nativeResumeId));
 
     return this.execStreaming(binPath, args, opts.cwd, fullPrompt, turn.signal, (line, acc) => {
       try {
