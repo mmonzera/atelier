@@ -16,7 +16,8 @@
         "minHeight": 600,
         "center": true,
         "dragDropEnabled": false,
-        "backgroundColor": "#0d0d11"
+        "backgroundColor": "#0d0d11",
+        "theme": "Dark"
       }
     ],
     "security": { "csp": null }
