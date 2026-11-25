@@ -33,20 +33,13 @@ import { conversationTail, estimateTokens, getScopeKey } from './compactor.js';
 import { resolveMcpAuth } from '../mcp/oauth.js';
 import { buildAgentSystemPrompt, renderCanon } from './prompts.js';
 import type { AgentRunner, Turn, TurnCallbacks } from './runner.js';
+import { ACTION_TAG_RE, applyAtelierActions } from './atelier-actions.js';
+export { applyAtelierActions };
 import {
-  CreateAgentToolSchema,
-  CreateTaskToolSchema,
   type EnqueueTaskFn,
-  MessageAgentToolSchema,
-  MEMORY_ACTIONS,
-  type MemoryAction,
-  RunBrowserQaToolSchema,
-  type StudioTools,
-  UpdateTaskToolSchema,
   createStudioTools,
 } from './studio-tools.js';
 
-const ACTION_TAG_RE = /<atelier-action>\s*([\s\S]*?)\s*<\/atelier-action>/g;
 const MEMORY_MODELS: Record<ModelProvider, string> = {
   claude: 'haiku', openai: 'gpt-6.2-sol', antigravity: 'gemini-4-hydrogen',
   deepseek: 'deepseek-chat', opencode: 'opencode/big-pickle', openrouter: 'openrouter/auto',
@@ -76,63 +69,6 @@ export function discoverLocalCodexModels(): ModelEntry[] {
   } catch {
     return [];
   }
-}
-
-export function applyAtelierActions(
-  rawText: string,
-  tools: StudioTools,
-  cb: Pick<TurnCallbacks, 'onTool'>,
-): { cleanText: string; actionsExecuted: number; recall: Array<{ tool: string; result: unknown }> } {
-  let actionsExecuted = 0;
-  const recall: Array<{ tool: string; result: unknown }> = [];
-
-  const cleanText = rawText
-    .replace(ACTION_TAG_RE, (_full, jsonPayload: string) => {
-      try {
-        const obj = JSON.parse(jsonPayload) as Record<string, unknown>;
-        const toolName = typeof obj.tool === 'string' ? obj.tool : '';
-        if (Object.hasOwn(MEMORY_ACTIONS, toolName)) {
-          const isRecall =
-            toolName === 'search_history' || toolName === 'get_message' || toolName === 'get_artifact' || toolName === 'get_skill';
-          if (isRecall && recall.length >= 2) return '';
-          const result = tools.memoryAction(toolName as MemoryAction, obj);
-          if (isRecall) recall.push({ tool: toolName, result });
-          cb.onTool(`atelier.${toolName}`, { key: obj.key, id: obj.id });
-          actionsExecuted += 1;
-        } else if (toolName === 'create_agent') {
-          const parsed = CreateAgentToolSchema.parse(obj);
-          const { agent } = tools.create_agent(parsed);
-          cb.onTool('atelier.create_agent', { name: agent.name, role: agent.role });
-          actionsExecuted += 1;
-        } else if (toolName === 'create_task') {
-          const parsed = CreateTaskToolSchema.parse(obj);
-          const { task } = tools.create_task(parsed);
-          cb.onTool('atelier.create_task', { identifier: task.identifier, title: task.title });
-          actionsExecuted += 1;
-        } else if (toolName === 'update_task') {
-          const parsed = UpdateTaskToolSchema.parse(obj);
-          const { task } = tools.update_task(parsed);
-          cb.onTool('atelier.update_task', { identifier: task.identifier, status: task.status });
-          actionsExecuted += 1;
-        } else if (toolName === 'message_agent') {
-          const parsed = MessageAgentToolSchema.parse(obj);
-          tools.message_agent(parsed);
-          cb.onTool('atelier.message_agent', { targetAgentId: parsed.targetAgentId });
-          actionsExecuted += 1;
-        } else if (toolName === 'run_browser_qa') {
-          const parsed = RunBrowserQaToolSchema.parse(obj);
-          const { url } = tools.run_browser_qa(parsed);
-          cb.onTool('atelier.run_browser_qa', { url, watchLive: parsed.watchLive });
-          actionsExecuted += 1;
-        }
-      } catch {
-        // Ignore malformed action blocks
-      }
-      return '';
-    })
-    .trim();
-
-  return { cleanText, actionsExecuted, recall };
 }
 
 export async function applyBrowserAtelierActions(
@@ -169,6 +105,13 @@ export async function applyBrowserAtelierActions(
     results.push({ tool: m.toolName, result: execRes.text });
   }
   return { cleanText: cleanText.trim(), results };
+}
+
+function idleTimeoutMs(): number {
+  const min = Number(process.env.ATELIER_AGENT_IDLE_TIMEOUT_MIN);
+  return Number.isFinite(min) && min >= 0 && process.env.ATELIER_AGENT_IDLE_TIMEOUT_MIN !== undefined
+    ? min * 60_000
+    : 30 * 60_000;
 }
 
 function validateModelId(model: string): string {
@@ -1536,7 +1479,11 @@ export class CliAgentRunner implements AgentRunner {
     stdinPayload: string,
     signal: AbortSignal,
     onLine: (line: string, accumulated: string) => string,
-    timeoutMs = 15 * 60_000,
+    // Idle watchdog, not a wall-clock cap: the timer restarts on every byte of
+    // stdout/stderr, so a long task that keeps producing output never times out.
+    // Only a silent (hung) CLI is killed. Override with ATELIER_AGENT_IDLE_TIMEOUT_MIN
+    // (0 = disable entirely).
+    timeoutMs = idleTimeoutMs(),
     env?: NodeJS.ProcessEnv,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -1549,13 +1496,19 @@ export class CliAgentRunner implements AgentRunner {
       let timedOut = false;
       const onParentAbort = () => turnController.abort();
       signal.addEventListener('abort', onParentAbort, { once: true });
-      const timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        turnController.abort();
-      }, timeoutMs);
+      let timeoutTimer: NodeJS.Timeout | undefined;
+      const armTimer = () => {
+        if (timeoutMs <= 0) return;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          turnController.abort();
+        }, timeoutMs);
+      };
+      armTimer();
 
       const cleanupTimers = () => {
-        clearTimeout(timeoutTimer);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
         signal.removeEventListener('abort', onParentAbort);
       };
 
@@ -1568,11 +1521,13 @@ export class CliAgentRunner implements AgentRunner {
       let accumulated = '';
       let stderrText = '';
 
+      child.stdout?.on('data', armTimer);
       readJsonLines(child.stdout, (line) => {
         accumulated = onLine(line, accumulated);
       });
 
       child.stderr?.on('data', (chunk: Buffer | string) => {
+        armTimer();
         stderrText += chunk.toString();
       });
 
@@ -1592,7 +1547,7 @@ export class CliAgentRunner implements AgentRunner {
       child.once('close', (code) => {
         cleanupTimers();
         if (timedOut) {
-          reject(new Error(`Agent CLI timed out after ${Math.round(timeoutMs / 60_000)}m`));
+          reject(new Error(`Agent CLI timed out after ${Math.round(timeoutMs / 60_000)}m of no output`));
           return;
         }
         if (signal.aborted) {

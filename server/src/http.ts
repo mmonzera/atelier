@@ -553,6 +553,7 @@ export function createHttpRouter(deps: {
         projectId: z.string().trim().min(1).nullable().optional(),
         attachmentIds: z.array(z.string()).max(8).optional(),
         skillIds: z.array(z.string().trim().min(1).max(120)).max(5).optional(),
+        mentionAgentIds: z.array(z.string().trim().min(1)).max(5).optional(),
       })
       .safeParse(body);
 
@@ -575,6 +576,26 @@ export function createHttpRouter(deps: {
       );
     }
 
+    const mentionIds = parsed.data.mentionAgentIds?.length
+      ? Array.from(new Set(parsed.data.mentionAgentIds))
+      : [];
+    if (mentionIds.length > 0) {
+      const projectAgentIds = parsed.data.projectId
+        ? new Set(store.listProjectAgents(parsed.data.projectId).map((a) => a.id))
+        : null;
+      for (const targetId of mentionIds) {
+        if (!store.getAgent(targetId)) {
+          return c.json(apiError('agent_not_found', `Agent ${targetId} not found.`), 404);
+        }
+        if (projectAgentIds && !projectAgentIds.has(targetId)) {
+          return c.json(
+            apiError('invalid_mention', `Agent ${targetId} does not belong to project ${parsed.data.projectId}.`),
+            400,
+          );
+        }
+      }
+    }
+
     // Skills invoked by hand with /skill must be installed on this agent (enabled or not).
     const invokedSkills: AgentSkill[] = [];
     if (parsed.data.skillIds?.length) {
@@ -588,15 +609,26 @@ export function createHttpRouter(deps: {
     }
 
     try {
-      const { agent, item } = runtime.enqueue({
-        skills: invokedSkills,
-        agentId,
-        projectId: parsed.data.projectId ?? null,
-        kind: 'user',
-        prompt: parsed.data.text || ATTACHMENT_ONLY_TEXT,
-        attachments,
-      });
-      return c.json({ ok: true, agentId: agent.id, queueItemId: item.id }, 202);
+      const targetIds = mentionIds.length > 0 ? mentionIds : [agentId];
+      const results = targetIds.map((targetId) =>
+        runtime.enqueue({
+          skills: targetId === agentId ? invokedSkills : [],
+          agentId: targetId,
+          projectId: parsed.data.projectId ?? null,
+          kind: 'user',
+          prompt: parsed.data.text || ATTACHMENT_ONLY_TEXT,
+          attachments,
+        }),
+      );
+      return c.json(
+        {
+          ok: true,
+          agentId: results[0]!.agent.id,
+          ...(mentionIds.length > 0 ? { dispatchedAgentIds: results.map((r) => r.agent.id) } : {}),
+          queueItemId: results[0]!.item.id,
+        },
+        202,
+      );
     } catch (err) {
       return c.json(
         apiError('agent_not_found', err instanceof Error ? err.message : 'Agent not found.'),

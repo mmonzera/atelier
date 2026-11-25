@@ -240,7 +240,12 @@ export function App() {
     setAgentTab('chat');
   };
 
-  const handleSend = async (text: string, attachments?: MessageAttachment[], skillIds?: string[]) => {
+  const handleSend = async (
+    text: string,
+    attachments?: MessageAttachment[],
+    skillIds?: string[],
+    mentionAgentIds?: string[],
+  ) => {
     if (!activeAgent) return;
     const quoted = replyTo?.replace(/\s+/g, ' ').trim().slice(0, 400);
     setReplyTo(null);
@@ -251,7 +256,20 @@ export function App() {
       scopedProject?.id ?? null,
       attachments?.map((a) => a.id),
       skillIds,
+      mentionAgentIds,
     );
+    if (mentionAgentIds?.length && scopedProject) {
+      handleSelectProjectAgent(mentionAgentIds[0]!);
+      if (mentionAgentIds.length > 1) {
+        const names = mentionAgentIds
+          .map((id) => projectAgents.find((a) => a.id === id)?.name)
+          .filter(Boolean)
+          .join(', ');
+        if (names) {
+          toast.info(tr('Sent to {names}', { names }));
+        }
+      }
+    }
   };
 
   const handleStop = async () => {
@@ -831,6 +849,7 @@ export function App() {
             <FloatingComposer
               project={scopedProject}
               agent={activeAgent}
+              projectAgents={scopedProject ? projectAgents : undefined}
               settings={state.settings}
               discoveredModels={discoveredModels}
               draftText={draftText}

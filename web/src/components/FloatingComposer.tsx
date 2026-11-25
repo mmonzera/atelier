@@ -37,7 +37,7 @@ import { api } from '../api';
 import { useMcpOAuth } from '../state/useMcpOAuth';
 import { type PendingUpload, PendingAttachments } from './AttachmentViews';
 import { toast } from './Toast';
-import { TokenRing } from './Atoms';
+import { TokenRing, getColorVar } from './Atoms';
 import { McpIcon } from './modals/McpIcon';
 import { PluginsPopover, needsAttention, setPluginAttached } from './PluginsPopover';
 import { ProviderIcon } from './ProviderIcon';
@@ -45,13 +45,19 @@ import { ProviderIcon } from './ProviderIcon';
 interface FloatingComposerProps {
   project: Project | null;
   agent: Agent | null;
+  projectAgents?: Agent[];
   settings: Settings;
   discoveredModels?: ModelEntry[];
   draftText: string;
   replyTo?: string | null;
   onClearReply?: () => void;
   onChangeDraft: (val: string) => void;
-  onSend: (text: string, attachments?: MessageAttachment[], skillIds?: string[]) => Promise<void>;
+  onSend: (
+    text: string,
+    attachments?: MessageAttachment[],
+    skillIds?: string[],
+    mentionAgentIds?: string[],
+  ) => Promise<void>;
   onStop: () => Promise<void>;
   onUpdateReasoning: (effort: ReasoningEffort) => Promise<void>;
   onSelectModel: (entry: ModelEntry) => Promise<void>;
@@ -196,6 +202,7 @@ function formatActiveModelLabel(
 export function FloatingComposer({
   project,
   agent,
+  projectAgents,
   settings,
   discoveredModels = [],
   draftText,
@@ -221,6 +228,7 @@ export function FloatingComposer({
   const [pluginsMenuOpen, setPluginsMenuOpen] = useState(false);
   const oauth = useMcpOAuth();
   const [pickedPlugins, setPickedPlugins] = useState<McpServerConfig[]>([]);
+  const [pickedAgents, setPickedAgents] = useState<Agent[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [effortMenuOpen, setEffortMenuOpen] = useState(false);
   const [usageData, setUsageData] = useState<UsageDashboardResponse | null>(null);
@@ -258,12 +266,25 @@ export function FloatingComposer({
     inputRef.current?.focus();
   };
 
-  // Plugins picked with "@" belong to one agent's message, like skills.
-  useEffect(() => setPickedPlugins([]), [agent?.id]);
+  // Plugins & agents picked with "@" belong to the current message.
+  useEffect(() => {
+    setPickedPlugins([]);
+    setPickedAgents([]);
+  }, [agent?.id, project?.id]);
 
-  // Typing "@" (at the start of a word, at the end of the draft) opens the plugin picker.
+  // Typing "@" (at the start of a word, at the end of the draft) opens the agent + plugin picker.
   const mentionQuery = agent ? (/(?:^|\s)@(\S*)$/.exec(draftText)?.[1] ?? null) : null;
-  const mentionOptions =
+  const hasTeammates = Boolean(project && (projectAgents?.length ?? 0) > 1);
+  const agentMentionOptions =
+    mentionQuery === null || !hasTeammates
+      ? []
+      : (projectAgents ?? []).filter((a) => {
+          if (a.id === agent?.id) return false;
+          if (pickedAgents.some((p) => p.id === a.id)) return false;
+          const needle = mentionQuery.toLowerCase();
+          return !needle || `${a.name} ${a.role}`.toLowerCase().includes(needle);
+        });
+  const pluginMentionOptions =
     mentionQuery === null
       ? []
       : settings.mcpServers.filter((s) => {
@@ -272,8 +293,21 @@ export function FloatingComposer({
           const needle = mentionQuery.toLowerCase();
           return !needle || `${s.name} ${s.description ?? ''}`.toLowerCase().includes(needle);
         });
+  const mentionItems: Array<
+    { kind: 'agent'; agent: Agent } | { kind: 'plugin'; server: McpServerConfig }
+  > = [
+    ...agentMentionOptions.map((a) => ({ kind: 'agent' as const, agent: a })),
+    ...pluginMentionOptions.map((server) => ({ kind: 'plugin' as const, server })),
+  ];
   const mentionOpen = mentionQuery !== null && !slashOpen;
-  const activeMentionIndex = Math.min(mentionIndex, Math.max(0, mentionOptions.length - 1));
+  const activeMentionIndex = Math.min(mentionIndex, Math.max(0, mentionItems.length - 1));
+
+  const pickAgent = (target: Agent) => {
+    setPickedAgents((prev) => (prev.some((p) => p.id === target.id) ? prev : [...prev, target].slice(0, 5)));
+    onChangeDraft(draftText.replace(/(^|\s)@\S*$/, '$1'));
+    setMentionIndex(0);
+    inputRef.current?.focus();
+  };
 
   const pickPlugin = (server: McpServerConfig) => {
     setPickedPlugins((prev) => (prev.some((p) => p.id === server.id) ? prev : [...prev, server].slice(0, 5)));
@@ -387,9 +421,16 @@ export function FloatingComposer({
   }, []);
 
   const attentionCount = settings.mcpServers.filter((s) => needsAttention(s, oauth.status)).length;
+  const atHint = hasTeammates
+    ? settings.mcpServers.length > 0
+      ? t('@ for agents & plugins')
+      : t('@ for agents')
+    : settings.mcpServers.length > 0
+      ? t('@ for plugins')
+      : null;
   const hintParts = [
     agent && agent.skills.length > 0 ? t('/ for skills') : null,
-    settings.mcpServers.length > 0 ? t('@ for plugins') : null,
+    atHint,
   ].filter(Boolean);
   const placeholderHint = hintParts.length > 0 ? ` (${t('type {hints}', { hints: hintParts.join(', ') })})` : '';
   const isWorking = agent?.status === 'working';
@@ -419,6 +460,8 @@ export function FloatingComposer({
       // plugins called with "@": make sure the agent can use them, then name them in the message
       const plugins = pickedPlugins;
       setPickedPlugins([]);
+      const mentionedAgents = pickedAgents;
+      setPickedAgents([]);
       for (const plugin of plugins) {
         if (agent.mcpServerIds?.includes(plugin.id) && plugin.enabled) continue;
         try {
@@ -427,10 +470,18 @@ export function FloatingComposer({
           toast.error(err instanceof Error ? err.message : t('Could not attach {name}', { name: plugin.name }));
         }
       }
-      const finalText = plugins.length
+      const withPlugins = plugins.length
         ? `${plugins.map((p) => `@${p.name}`).join(' ')} ${text}`.trim()
         : text;
-      await onSend(finalText, sent.length > 0 ? sent : undefined, skillIds.length > 0 ? skillIds : undefined);
+      const finalText = mentionedAgents.length
+        ? `${mentionedAgents.map((a) => `@${a.name}`).join(' ')} ${withPlugins}`.trim()
+        : withPlugins;
+      await onSend(
+        finalText,
+        sent.length > 0 ? sent : undefined,
+        skillIds.length > 0 ? skillIds : undefined,
+        mentionedAgents.length > 0 ? mentionedAgents.map((a) => a.id) : undefined,
+      );
     } finally {
       setSending(false);
       inputRef.current?.focus();
@@ -515,6 +566,47 @@ export function FloatingComposer({
                 type="button"
                 aria-label={t('Remove skill {name}', { name: skill.name })}
                 onClick={() => setPickedSkills((prev) => prev.filter((p) => p.id !== skill.id))}
+                style={{ display: 'inline-flex', color: 'var(--text-tertiary)' }}
+              >
+                <X size={12} strokeWidth={1.75} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {pickedAgents.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 6px 6px' }}>
+          {pickedAgents.map((tagged) => (
+            <span
+              key={tagged.id}
+              title={tagged.role}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '3px 6px 3px 9px',
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border-default)',
+                fontSize: 12,
+                color: 'var(--text-primary)',
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: '9999px',
+                  background: getColorVar(tagged.color),
+                  flexShrink: 0,
+                }}
+              />
+              @{tagged.name}
+              <button
+                type="button"
+                aria-label={t('Remove agent {name}', { name: tagged.name })}
+                onClick={() => setPickedAgents((prev) => prev.filter((p) => p.id !== tagged.id))}
                 style={{ display: 'inline-flex', color: 'var(--text-tertiary)' }}
               >
                 <X size={12} strokeWidth={1.75} />
@@ -681,14 +773,14 @@ export function FloatingComposer({
         {mentionOpen && (
           <div
             role="listbox"
-            aria-label={t('Plugins')}
+            aria-label={hasTeammates ? t('Agents & plugins') : t('Plugins')}
             className="popover-shadow"
             style={{
               position: 'absolute',
               bottom: 58,
               left: 0,
               right: 0,
-              maxHeight: 260,
+              maxHeight: 280,
               overflowY: 'auto',
               background: 'var(--surface-1)',
               border: '1px solid var(--border-default)',
@@ -700,50 +792,141 @@ export function FloatingComposer({
               gap: 2,
             }}
           >
-            {mentionOptions.length === 0 ? (
+            {mentionItems.length === 0 ? (
               <div style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-                {settings.mcpServers.length === 0 ? t('No plugins yet. Add some from the + menu → Plugins.') : t('No matching plugin ready to use.')}
+                {hasTeammates
+                  ? t('No matching agent or plugin.')
+                  : settings.mcpServers.length === 0
+                    ? t('No plugins yet. Add some from the + menu → Plugins.')
+                    : t('No matching plugin ready to use.')}
               </div>
             ) : (
-              mentionOptions.map((server, index) => (
-                <button
-                  key={server.id}
-                  type="button"
-                  role="option"
-                  aria-selected={index === activeMentionIndex}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => pickPlugin(server)}
-                  onMouseEnter={() => setMentionIndex(index)}
-                  className="transition-atelier"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    textAlign: 'left',
-                    padding: '7px 10px',
-                    borderRadius: 'var(--radius-sm)',
-                    background: index === activeMentionIndex ? 'var(--surface-3)' : 'transparent',
-                  }}
-                >
-                  <McpIcon presetId={server.presetId} name={server.name} size={24} />
-                  <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                    <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{server.name}</span>
-                    {server.description && (
-                      <span
+              <>
+                {agentMentionOptions.length > 0 && (
+                  <>
+                    <div
+                      style={{
+                        padding: '4px 10px 2px',
+                        fontSize: 10.5,
+                        fontWeight: 600,
+                        letterSpacing: '0.04em',
+                        textTransform: 'uppercase',
+                        color: 'var(--text-tertiary)',
+                      }}
+                    >
+                      {t('Agents')}
+                    </div>
+                    {agentMentionOptions.map((tagged, idx) => (
+                      <button
+                        key={tagged.id}
+                        type="button"
+                        role="option"
+                        aria-selected={idx === activeMentionIndex}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickAgent(tagged)}
+                        onMouseEnter={() => setMentionIndex(idx)}
+                        className="transition-atelier"
                         style={{
-                          fontSize: 11.5,
-                          color: 'var(--text-tertiary)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          textAlign: 'left',
+                          padding: '7px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          background: idx === activeMentionIndex ? 'var(--surface-3)' : 'transparent',
                         }}
                       >
-                        {server.description}
-                      </span>
+                        <span
+                          aria-hidden
+                          style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: '9999px',
+                            background: getColorVar(tagged.color),
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                          <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{tagged.name}</span>
+                          {tagged.role && (
+                            <span
+                              style={{
+                                fontSize: 11.5,
+                                color: 'var(--text-tertiary)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {tagged.role}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    ))}
+                  </>
+                )}
+                {pluginMentionOptions.length > 0 && (
+                  <>
+                    {agentMentionOptions.length > 0 && (
+                      <div
+                        style={{
+                          padding: '6px 10px 2px',
+                          fontSize: 10.5,
+                          fontWeight: 600,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                          color: 'var(--text-tertiary)',
+                        }}
+                      >
+                        {t('Plugins')}
+                      </div>
                     )}
-                  </span>
-                </button>
-              ))
+                    {pluginMentionOptions.map((server, idx) => {
+                      const itemIndex = agentMentionOptions.length + idx;
+                      return (
+                        <button
+                          key={server.id}
+                          type="button"
+                          role="option"
+                          aria-selected={itemIndex === activeMentionIndex}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => pickPlugin(server)}
+                          onMouseEnter={() => setMentionIndex(itemIndex)}
+                          className="transition-atelier"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                            textAlign: 'left',
+                            padding: '7px 10px',
+                            borderRadius: 'var(--radius-sm)',
+                            background: itemIndex === activeMentionIndex ? 'var(--surface-3)' : 'transparent',
+                          }}
+                        >
+                          <McpIcon presetId={server.presetId} name={server.name} size={24} />
+                          <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                            <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{server.name}</span>
+                            {server.description && (
+                              <span
+                                style={{
+                                  fontSize: 11.5,
+                                  color: 'var(--text-tertiary)',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {server.description}
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+              </>
             )}
           </div>
         )}
@@ -919,13 +1102,15 @@ export function FloatingComposer({
           }}
           onKeyDown={(e) => {
             if (mentionOpen) {
-              if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && mentionOptions.length > 0) {
+              if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && mentionItems.length > 0) {
                 e.preventDefault();
                 const step = e.key === 'ArrowDown' ? 1 : -1;
-                setMentionIndex((activeMentionIndex + step + mentionOptions.length) % mentionOptions.length);
-              } else if ((e.key === 'Enter' || e.key === 'Tab') && mentionOptions.length > 0) {
+                setMentionIndex((activeMentionIndex + step + mentionItems.length) % mentionItems.length);
+              } else if ((e.key === 'Enter' || e.key === 'Tab') && mentionItems.length > 0) {
                 e.preventDefault();
-                pickPlugin(mentionOptions[activeMentionIndex]!);
+                const chosen = mentionItems[activeMentionIndex]!;
+                if (chosen.kind === 'agent') pickAgent(chosen.agent);
+                else pickPlugin(chosen.server);
               } else if (e.key === 'Escape') {
                 e.preventDefault();
                 onChangeDraft(draftText.replace(/(^|\s)@\S*$/, '$1'));

@@ -282,14 +282,16 @@ export const api = {
     projectId?: string | null,
     attachmentIds?: string[],
     skillIds?: string[],
+    mentionAgentIds?: string[],
   ) =>
-    request<{ ok: boolean }>(`/api/agents/${agentId}/messages`, {
+    request<{ ok: boolean; agentId?: string; dispatchedAgentIds?: string[] }>(`/api/agents/${agentId}/messages`, {
       method: 'POST',
       body: JSON.stringify({
         text,
         projectId: projectId ?? null,
         ...(attachmentIds?.length ? { attachmentIds } : {}),
         ...(skillIds?.length ? { skillIds } : {}),
+        ...(mentionAgentIds?.length ? { mentionAgentIds } : {}),
       }),
     }),
 

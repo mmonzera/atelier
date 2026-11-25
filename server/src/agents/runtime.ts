@@ -1,21 +1,23 @@
 import { createHash } from 'node:crypto';
-import type {
-  Agent,
-  AgentSkill,
-  MessageActivitySummary,
-  MessageAttachment,
-  MessageMetadata,
-  ModelProvider,
-  ModelRef,
-  PendingFallbackOffer,
-  QueueItem,
-  QueueKind,
-  Task,
+import {
+  type Agent,
+  type AgentSkill,
+  type MessageActivitySummary,
+  type MessageAttachment,
+  type MessageMetadata,
+  type ModelProvider,
+  type ModelRef,
+  type PendingFallbackOffer,
+  type QueueItem,
+  type QueueKind,
+  type Task,
+  stripAtelierActions,
 } from '@atelier/contracts';
 import { AttachmentStore } from '../attachments.js';
 import type { BrowserManager } from '../browser/manager.js';
 import type { AppConfig } from '../config.js';
 import type { AtelierStore } from '../store.js';
+import { createActionTagStreamFilter } from './action-stream-filter.js';
 import { CliAgentRunner } from './cli-runners.js';
 import {
   type CompactScopeResult,
@@ -531,8 +533,12 @@ export class AgentRuntime {
     let usageCostUsd: number | null = null;
     let providerContextTokens = 0;
 
+    const streamFilter = createActionTagStreamFilter((delta) => {
+      this.store.appendMessageDelta(replyMsg.id, delta);
+    });
+
     try {
-      const { finalText } = await this.runner.run(
+      const { finalText: rawFinalText } = await this.runner.run(
         {
           agent,
           project,
@@ -549,7 +555,7 @@ export class AgentRuntime {
         },
         {
           onText: (delta) => {
-            this.store.appendMessageDelta(replyMsg.id, delta);
+            streamFilter.push(delta);
           },
           onTool: (name, input) => {
             const rawDetail =
@@ -585,6 +591,11 @@ export class AgentRuntime {
           onContextTokens: (tokens) => { providerContextTokens = Math.max(providerContextTokens, tokens); },
         },
       );
+
+      streamFilter.flush();
+      const finalText =
+        stripAtelierActions(rawFinalText) ||
+        (turnActivities.length > 0 ? 'Completed turn.' : rawFinalText.trim());
 
       const durationMs = Math.max(100, Date.now() - startedAt);
       let linkedTask: Task | null = null;

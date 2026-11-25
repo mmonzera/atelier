@@ -1775,31 +1775,48 @@ function parseDesignBlock(attrs: Record<string, string>, inner: string): DesignB
   return { title: (attrs.title || 'Design options').slice(0, 120), ask: attrs.ask?.slice(0, 200), options };
 }
 
+const ACTION_BLOCK_RE = /<atelier-action>\s*[\s\S]*?<\/atelier-action>/gi;
+const ACTION_UNCLOSED_RE = /<atelier-action[\s\S]*$/i;
+
+/**
+ * Strips internal `<atelier-action>...</atelier-action>` tool/handoff blocks from message text
+ * so raw JSON/XML protocol tags never surface in user-facing UI or quotes.
+ */
+export function stripAtelierActions(text: string, options?: { streaming?: boolean }): string {
+  if (!text) return '';
+  let cleaned = text.replace(ACTION_BLOCK_RE, '');
+  if (options?.streaming) {
+    cleaned = cleaned.replace(ACTION_UNCLOSED_RE, '');
+  }
+  return cleaned.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /**
  * Splits an agent reply into plain text and design-option cards. An unterminated block (still
  * streaming) becomes a "design-pending" placeholder so half-written HTML never reaches the UI.
  */
 export function parseMessageSegments(text: string): MessageSegment[] {
-  if (!text.includes(DESIGN_OPEN)) return [{ type: 'text', text }];
+  const cleaned = stripAtelierActions(text, { streaming: true });
+  if (!cleaned.includes(DESIGN_OPEN)) return [{ type: 'text', text: cleaned }];
   const segments: MessageSegment[] = [];
   let pos = 0;
   const pushText = (t: string) => {
     if (t.trim()) segments.push({ type: 'text', text: t.replace(/^\n+|\n+$/g, '') });
   };
-  while (pos < text.length) {
-    const open = text.indexOf(DESIGN_OPEN, pos);
+  while (pos < cleaned.length) {
+    const open = cleaned.indexOf(DESIGN_OPEN, pos);
     if (open < 0) {
-      pushText(text.slice(pos));
+      pushText(cleaned.slice(pos));
       break;
     }
-    pushText(text.slice(pos, open));
-    const tag = readTag(text, open);
-    const close = tag ? text.indexOf(DESIGN_CLOSE, tag.end) : -1;
+    pushText(cleaned.slice(pos, open));
+    const tag = readTag(cleaned, open);
+    const close = tag ? cleaned.indexOf(DESIGN_CLOSE, tag.end) : -1;
     if (!tag || close < 0) {
       segments.push({ type: 'design-pending', title: tag?.attrs.title });
       break;
     }
-    const block = parseDesignBlock(tag.attrs, text.slice(tag.end, close));
+    const block = parseDesignBlock(tag.attrs, cleaned.slice(tag.end, close));
     if (block) segments.push({ type: 'design', block });
     pos = close + DESIGN_CLOSE.length;
   }

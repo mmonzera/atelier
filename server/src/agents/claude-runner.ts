@@ -14,6 +14,7 @@ import { AttachmentStore } from '../attachments.js';
 import { conversationTail, estimateTokens, getScopeKey } from './compactor.js';
 import { buildAgentSystemPrompt, renderCanon } from './prompts.js';
 import type { AgentRunner, Turn, TurnCallbacks } from './runner.js';
+import { applyAtelierActions } from './atelier-actions.js';
 import {
   type EnqueueTaskFn,
   createAtelierSdkMcpServer,
@@ -254,6 +255,11 @@ export class ClaudeAgentRunner implements AgentRunner {
               Number(u.cache_read_input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0));
           }
         }
+      }
+
+      if (/<atelier-action>/i.test(finalText)) {
+        const actionRes = applyAtelierActions(finalText, tools, cb);
+        finalText = actionRes.cleanText;
       }
 
       return { finalText: finalText || 'Completed turn.' };

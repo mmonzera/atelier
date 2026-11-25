@@ -2,6 +2,7 @@ import { useT } from '../i18n';
 import {
   BUILT_IN_MODELS,
   parseMessageSegments,
+  stripAtelierActions,
   type Activity,
   type Agent,
   type BrowserApprovalRequest,
@@ -48,6 +49,68 @@ import { ProviderIcon } from '../components/ProviderIcon';
 import { BotMascot } from '../components/mascot/BotMascot';
 import { QaReportCard } from '../components/QaReportCard';
 import { Select } from '../components/Select';
+
+function renderUserMessageText(text: string, agents: Agent[]): React.ReactNode {
+  const named = agents
+    .filter((a) => a.name.trim().length > 0)
+    .sort((a, b) => b.name.length - a.name.length);
+  if (named.length === 0 || !text.includes('@')) return text;
+
+  const escaped = named.map((a) => a.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const re = new RegExp(`(^|\\s)(@(?:${escaped.join('|')}))(?=$|[\\s.,!?:;)])`, 'g');
+  const byName = new Map(named.map((a) => [a.name, a]));
+  const parts: React.ReactNode[] = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  let keyIdx = 0;
+
+  while ((match = re.exec(text)) !== null) {
+    const lead = match[1] ?? '';
+    const mention = match[2] ?? '';
+    const mentionStart = match.index + lead.length;
+    if (mentionStart > lastIdx) {
+      parts.push(text.slice(lastIdx, mentionStart));
+    }
+    const target = byName.get(mention.slice(1));
+    if (target) {
+      parts.push(
+        <span
+          key={`m-${keyIdx++}`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '0 6px',
+            borderRadius: 'var(--radius-full)',
+            background: 'rgba(255, 255, 255, 0.08)',
+            border: '1px solid var(--border-subtle)',
+            fontWeight: 500,
+            color: 'var(--text-primary)',
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: '9999px',
+              background: getColorVar(target.color),
+              flexShrink: 0,
+            }}
+          />
+          {mention}
+        </span>,
+      );
+    } else {
+      parts.push(mention);
+    }
+    lastIdx = mentionStart + mention.length;
+  }
+
+  if (lastIdx === 0) return text;
+  if (lastIdx < text.length) parts.push(text.slice(lastIdx));
+  return parts;
+}
 
 interface ChatViewProps {
   project: Project | null;
@@ -444,7 +507,7 @@ export function ChatView({
                           wordBreak: 'break-word',
                         }}
                       >
-                        {msg.text}
+                        {renderUserMessageText(msg.text, agents)}
                       </div>
                     )}
                   </div>
@@ -895,7 +958,7 @@ export function ChatView({
                     <button
                       type="button"
                       title={tr('Copy reply')}
-                      onClick={() => void handleCopy(msg.id, msg.text)}
+                      onClick={() => void handleCopy(msg.id, stripAtelierActions(msg.text))}
                       style={{ display: 'inline-flex', alignItems: 'center' }}
                     >
                       {copiedId === msg.id ? (
@@ -908,7 +971,7 @@ export function ChatView({
                       <button
                         type="button"
                         title={tr('Create task from this reply')}
-                        onClick={() => onCreateTaskFromReply(msg.text.slice(0, 400))}
+                        onClick={() => onCreateTaskFromReply(stripAtelierActions(msg.text).slice(0, 400))}
                         style={{ display: 'inline-flex', alignItems: 'center' }}
                       >
                         <CheckSquare size={14} strokeWidth={1.5} />
@@ -917,7 +980,7 @@ export function ChatView({
                     <button
                       type="button"
                       title={tr('Follow up in composer')}
-                      onClick={() => onReplyText(msg.text)}
+                      onClick={() => onReplyText(stripAtelierActions(msg.text))}
                       style={{ display: 'inline-flex', alignItems: 'center' }}
                     >
                       <Reply size={14} strokeWidth={1.5} />
