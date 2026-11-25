@@ -3,7 +3,8 @@ import fallback from "../content/release.fallback.json";
 export interface ReleaseAsset { name: string; size: number; url: string; }
 export interface ReleaseInfo { version: string | null; publishedAt: string | null; assets: ReleaseAsset[]; source: "github" | "fallback"; }
 
-const REPO = import.meta.env.ATELIER_RELEASE_REPO ?? "mmonzera/atelier";
+export const RELEASE_REPO = import.meta.env.ATELIER_RELEASE_REPO ?? "mmonzera/atelier";
+const REPO = RELEASE_REPO;
 
 /** Dipanggil saat build. Gagal apa pun -> fallback, build tidak boleh putus. */
 export async function getRelease(): Promise<ReleaseInfo> {

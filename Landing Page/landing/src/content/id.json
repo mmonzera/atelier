@@ -131,5 +131,165 @@
         "body": "Hasil tetap di workspace, di samping percakapan yang menghasilkannya."
       }
     ]
+  },
+  "privacy": {
+    "eyebrow": "Privasi",
+    "title": "Milikmu, di mesinmu",
+    "body": "Lapisan perlindungan yang tidak bergantung pada server kami, karena server itu tidak ada.",
+    "points": [
+      {
+        "title": "Kunci aplikasi",
+        "body": "Password di-hash dengan scrypt, sesi HttpOnly, dan aplikasi terkunci sendiri saat idle."
+      },
+      {
+        "title": "Brankas login terenkripsi",
+        "body": "Password situs dienkripsi di perangkat ini dan tidak pernah dikirim ke model AI."
+      },
+      {
+        "title": "Meeting lokal",
+        "body": "Audio ditranskrip di perangkatmu dengan Whisper. Backup terenkripsi AES-256-GCM kalau kamu memasang passphrase."
+      }
+    ]
+  },
+  "download": {
+    "eyebrow": "Unduh",
+    "title": "Dapatkan Atelier",
+    "body": "Windows dulu. Platform lain saat sudah siap.",
+    "windows": "Windows 10/11",
+    "versionLabel": "Versi",
+    "sizeLabel": "Ukuran",
+    "releasedLabel": "Rilis",
+    "cta": "Unduh .exe",
+    "notPublished": "Belum dipublikasikan",
+    "releaseNotes": "Catatan rilis",
+    "note": "Windows bisa menampilkan peringatan SmartScreen kalau installer belum ditandatangani.",
+    "otherTitle": "Belum tersedia",
+    "otherBody": "Windows satu-satunya platform yang didukung untuk sekarang."
+  },
+  "faq": {
+    "eyebrow": "FAQ",
+    "title": "Pertanyaan, dijawab",
+    "body": "Jawaban singkat soal cara kerja Atelier.",
+    "items": [
+      {
+        "q": "Apa itu Atelier?",
+        "a": "Studio desktop Windows untuk menjalankan beberapa AI agent dengan memori bersama, browser, QA, dan catatan meeting."
+      },
+      {
+        "q": "Model apa saja yang bisa dipakai?",
+        "a": "Claude, OpenAI/Codex, Antigravity, DeepSeek, OpenCode, dan OpenRouter. Kamu memakai akun atau API key sendiri."
+      },
+      {
+        "q": "Di mana data saya disimpan?",
+        "a": "Di komputermu. Atelier tidak punya akun cloud. Provider AI yang kamu pilih tetap menerima apa yang kamu kirim di chat."
+      },
+      {
+        "q": "Apakah password ikut terkirim ke AI?",
+        "a": "Tidak. Password situs yang disimpan dienkripsi secara lokal dan tidak dikirim ke model."
+      },
+      {
+        "q": "Bagaimana transkripsi meeting bekerja?",
+        "a": "Whisper berjalan di perangkatmu. Kamu mengunduh engine dan model sekali, lalu audio ditranskrip secara lokal. Atelier bertanya dulu sebelum merekam."
+      },
+      {
+        "q": "Bisakah agent menjalankan perintah di komputer saya?",
+        "a": "Hanya kalau kamu mengaktifkan akses shell per proyek. Agent bertindak dengan izin user-mu."
+      },
+      {
+        "q": "Apakah ada versi Mac atau Linux?",
+        "a": "Belum. Windows satu-satunya platform yang didukung untuk sekarang."
+      },
+      {
+        "q": "Bagaimana update bekerja?",
+        "a": "Atelier mengecek GitHub Releases untuk versi baru."
+      }
+    ]
+  },
+  "closing": {
+    "title": "Masuk ke studimu",
+    "body": "Semua yang dibutuhkan agent-mu, di satu meja.",
+    "cta": "Unduh untuk Windows"
+  },
+  "footer": {
+    "columns": [
+      {
+        "title": "Navigasi",
+        "links": [
+          {
+            "label": "Fitur",
+            "href": "#features"
+          },
+          {
+            "label": "Alur kerja",
+            "href": "#workflow"
+          },
+          {
+            "label": "Privasi",
+            "href": "#privacy"
+          },
+          {
+            "label": "Unduh",
+            "href": "#download"
+          },
+          {
+            "label": "FAQ",
+            "href": "#faq"
+          }
+        ]
+      },
+      {
+        "title": "Sumber daya",
+        "links": [
+          {
+            "label": "Changelog",
+            "href": ""
+          },
+          {
+            "label": "GitHub",
+            "href": "https://github.com/mmonzera/atelier"
+          },
+          {
+            "label": "Catatan rilis",
+            "href": "https://github.com/mmonzera/atelier/releases"
+          },
+          {
+            "label": "Dokumentasi",
+            "href": ""
+          }
+        ]
+      },
+      {
+        "title": "Legal",
+        "links": [
+          {
+            "label": "Kebijakan privasi",
+            "href": "#privacy"
+          },
+          {
+            "label": "Ketentuan",
+            "href": ""
+          }
+        ]
+      },
+      {
+        "title": "Kontak",
+        "links": [
+          {
+            "label": "GitHub",
+            "href": "https://github.com/mmonzera/atelier"
+          },
+          {
+            "label": "X/Twitter",
+            "href": ""
+          },
+          {
+            "label": "Email",
+            "href": ""
+          }
+        ]
+      }
+    ],
+    "copyright": "© 2026 Atelier",
+    "navLabel": "Footer"
   }
 }

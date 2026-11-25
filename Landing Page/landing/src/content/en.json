@@ -131,5 +131,165 @@
         "body": "Outputs stay in the workspace, next to the conversation that produced them."
       }
     ]
+  },
+  "privacy": {
+    "eyebrow": "Privacy",
+    "title": "Yours, on your machine",
+    "body": "Layers of protection that don't depend on our servers, because there aren't any.",
+    "points": [
+      {
+        "title": "App lock",
+        "body": "Your password is hashed with scrypt, sessions are HttpOnly, and the app locks itself when idle."
+      },
+      {
+        "title": "Encrypted login vault",
+        "body": "Site passwords are encrypted on this device and are never sent to an AI model."
+      },
+      {
+        "title": "Local meetings",
+        "body": "Audio is transcribed on your device with Whisper. Backups are encrypted with AES-256-GCM when you set a passphrase."
+      }
+    ]
+  },
+  "download": {
+    "eyebrow": "Download",
+    "title": "Get Atelier",
+    "body": "Windows today. More platforms when they're ready.",
+    "windows": "Windows 10/11",
+    "versionLabel": "Version",
+    "sizeLabel": "Size",
+    "releasedLabel": "Released",
+    "cta": "Download .exe",
+    "notPublished": "Not published yet",
+    "releaseNotes": "Release notes",
+    "note": "Windows may show a SmartScreen prompt if the installer isn't code-signed yet.",
+    "otherTitle": "Not available yet",
+    "otherBody": "Windows is the only supported platform for now."
+  },
+  "faq": {
+    "eyebrow": "FAQ",
+    "title": "Questions, answered",
+    "body": "Short answers about how Atelier works.",
+    "items": [
+      {
+        "q": "What is Atelier?",
+        "a": "A Windows desktop studio where you run several AI agents with shared memory, a browser, QA and meeting notes."
+      },
+      {
+        "q": "Which models can I use?",
+        "a": "Claude, OpenAI/Codex, Antigravity, DeepSeek, OpenCode and OpenRouter. You use your own accounts or API keys."
+      },
+      {
+        "q": "Where is my data stored?",
+        "a": "On your computer. Atelier has no cloud account. Your chosen AI provider still receives what you send in a chat."
+      },
+      {
+        "q": "Do passwords go to the AI?",
+        "a": "No. Saved site passwords are encrypted locally and are not sent to models."
+      },
+      {
+        "q": "How does meeting transcription work?",
+        "a": "Whisper runs on your device. You download the engine and a model once, then audio is transcribed locally. Atelier asks before recording."
+      },
+      {
+        "q": "Can agents run commands on my computer?",
+        "a": "Only if you enable shell access per project. They act with your user's permissions."
+      },
+      {
+        "q": "Is there a Mac or Linux version?",
+        "a": "Not yet. Windows is the only supported platform for now."
+      },
+      {
+        "q": "How do updates work?",
+        "a": "Atelier checks GitHub Releases for new versions."
+      }
+    ]
+  },
+  "closing": {
+    "title": "Step into your studio",
+    "body": "Everything your agents need, on one desk.",
+    "cta": "Download for Windows"
+  },
+  "footer": {
+    "columns": [
+      {
+        "title": "Navigation",
+        "links": [
+          {
+            "label": "Features",
+            "href": "#features"
+          },
+          {
+            "label": "Workflow",
+            "href": "#workflow"
+          },
+          {
+            "label": "Privacy",
+            "href": "#privacy"
+          },
+          {
+            "label": "Download",
+            "href": "#download"
+          },
+          {
+            "label": "FAQ",
+            "href": "#faq"
+          }
+        ]
+      },
+      {
+        "title": "Resources",
+        "links": [
+          {
+            "label": "Changelog",
+            "href": ""
+          },
+          {
+            "label": "GitHub",
+            "href": "https://github.com/mmonzera/atelier"
+          },
+          {
+            "label": "Release notes",
+            "href": "https://github.com/mmonzera/atelier/releases"
+          },
+          {
+            "label": "Docs",
+            "href": ""
+          }
+        ]
+      },
+      {
+        "title": "Legal",
+        "links": [
+          {
+            "label": "Privacy policy",
+            "href": "#privacy"
+          },
+          {
+            "label": "Terms",
+            "href": ""
+          }
+        ]
+      },
+      {
+        "title": "Connect",
+        "links": [
+          {
+            "label": "GitHub",
+            "href": "https://github.com/mmonzera/atelier"
+          },
+          {
+            "label": "X/Twitter",
+            "href": ""
+          },
+          {
+            "label": "Email",
+            "href": ""
+          }
+        ]
+      }
+    ],
+    "copyright": "© 2026 Atelier",
+    "navLabel": "Footer"
   }
 }
