@@ -1,0 +1,32 @@
+{
+  "meta": {
+    "title": "Atelier",
+    "description": "TODO: from Copy & i18n Writer (must match PRD 3.3)"
+  },
+  "a11y": {
+    "skip": "Skip to content"
+  },
+  "nav": {
+    "features": "Features",
+    "workflow": "Workflow",
+    "privacy": "Privacy",
+    "download": "Download",
+    "faq": "FAQ",
+    "cta": "Download",
+    "lang": "ID",
+    "langLabel": "Switch language to Bahasa Indonesia",
+    "mainNav": "Main",
+    "menuOpen": "Open menu",
+    "menuClose": "Close menu"
+  },
+  "hero": {
+    "badge": "TODO(Writer): badge, harus lolos Truth Table 3.3",
+    "title": "TODO(Writer): H1",
+    "sub": "TODO(Writer): subheadline",
+    "ctaPrimary": "Download",
+    "ctaGhost": "TODO(Writer): ghost CTA",
+    "ctaGhostHref": "#features",
+    "versionLabel": "Version",
+    "sizeUnavailable": ""
+  }
+}

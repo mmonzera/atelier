@@ -1,0 +1,32 @@
+{
+  "meta": {
+    "title": "Atelier",
+    "description": "TODO: dari Copy & i18n Writer (harus sesuai PRD 3.3)"
+  },
+  "a11y": {
+    "skip": "Langsung ke konten"
+  },
+  "nav": {
+    "features": "Fitur",
+    "workflow": "Alur kerja",
+    "privacy": "Privasi",
+    "download": "Unduh",
+    "faq": "FAQ",
+    "cta": "Unduh",
+    "lang": "EN",
+    "langLabel": "Ganti bahasa ke English",
+    "mainNav": "Utama",
+    "menuOpen": "Buka menu",
+    "menuClose": "Tutup menu"
+  },
+  "hero": {
+    "badge": "TODO(Writer): badge, harus lolos Truth Table 3.3",
+    "title": "TODO(Writer): H1",
+    "sub": "TODO(Writer): subheadline",
+    "ctaPrimary": "Unduh",
+    "ctaGhost": "TODO(Writer): ghost CTA",
+    "ctaGhostHref": "#features",
+    "versionLabel": "Versi",
+    "sizeUnavailable": ""
+  }
+}

@@ -1,0 +1,18 @@
+---
+import { LOCALES, pathFor, type Locale } from "../lib/i18n";
+interface Props { lang: Locale; label: string; }
+const { lang, label } = Astro.props;
+---
+<nav aria-label={label} class="lang-toggle">
+  {LOCALES.map((l) => (
+    <a href={pathFor(l)} hreflang={l} lang={l} data-lang={l}
+       aria-current={l === lang ? "true" : undefined}>{l.toUpperCase()}</a>
+  ))}
+</nav>
+<script>
+  import { PREF_KEY } from "../lib/i18n";
+  document.addEventListener("astro:page-load", () => {
+    document.querySelectorAll<HTMLAnchorElement>(".lang-toggle a").forEach((a) =>
+      a.addEventListener("click", () => localStorage.setItem(PREF_KEY, a.dataset.lang!)));
+  });
+</script>

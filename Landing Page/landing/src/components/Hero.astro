@@ -1,0 +1,44 @@
+---
+import Button from "./Button.astro";
+import type { ReleaseInfo } from "../lib/releases";
+import "../styles/hero.css";
+
+interface Props {
+  hero: {
+    badge: string; title: string; sub: string;
+    ctaPrimary: string; ctaGhost: string; ctaGhostHref: string;
+    versionLabel: string; sizeUnavailable: string;
+  };
+  release: ReleaseInfo;
+  downloadHref: string;
+  lang: "en" | "id";
+}
+const { hero, release, downloadHref, lang } = Astro.props;
+
+// H1 dipecah per kata; animasi hanya transform/opacity (PRD 8.5).
+const words = hero.title.split(/\s+/).filter(Boolean);
+
+const win = release.assets.find((a) => /\.(exe|msi)$/i.test(a.name));
+const mb = win ? (win.size / 1024 / 1024).toFixed(0) : null;
+const metaLine = [
+  release.version ? `${hero.versionLabel} ${release.version}` : null,
+  mb ? `${mb} MB` : null,
+].filter(Boolean).join(" · ");
+---
+<section class="hero" aria-labelledby="hero-title" data-section="hero">
+  <div class="hero__horizon" aria-hidden="true"></div>
+  <div class="hero__inner">
+    <p class="hero__badge" data-reveal style="--reveal-delay:0ms">{hero.badge}</p>
+    <h1 id="hero-title" class="hero__title" lang={lang}>
+      {words.map((w, i) => (
+        <span class="hero__word" style={`--i:${i}`}><span class="hero__word-inner">{w}</span>{" "}</span>
+      ))}
+    </h1>
+    <p class="hero__sub" data-reveal style="--reveal-delay:240ms">{hero.sub}</p>
+    <div class="hero__cta" data-reveal style="--reveal-delay:320ms">
+      <Button variant="glow" href={downloadHref}>{hero.ctaPrimary}</Button>
+      <Button variant="ghost" href={hero.ctaGhostHref}>{hero.ctaGhost}</Button>
+    </div>
+    {metaLine && <p class="hero__meta" data-reveal style="--reveal-delay:400ms">{metaLine}</p>}
+  </div>
+</section>

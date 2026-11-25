@@ -1,0 +1,20 @@
+---
+import Base from "../../layouts/Base.astro";
+import Nav from "../../components/Nav.astro";
+import Hero from "../../components/Hero.astro";
+import { getDict } from "../../lib/i18n";
+import { getRelease } from "../../lib/releases";
+const lang = "id" as const;
+const t = getDict(lang);
+const release = await getRelease();
+const downloadHref = release.assets[0]?.url ?? "#download";
+---
+<Base lang={lang} title={t.meta.title} description={t.meta.description} skipLabel={t.a11y.skip}>
+  <Nav slot="nav" lang={lang} />
+  <Hero hero={t.hero} release={release} downloadHref={downloadHref} lang={lang} />
+  <section id="features" class="section-stub" aria-label={t.nav.features}></section>
+  <section id="workflow" class="section-stub" aria-label={t.nav.workflow}></section>
+  <section id="privacy" class="section-stub" aria-label={t.nav.privacy}></section>
+  <section id="download" class="section-stub" aria-label={t.nav.download}></section>
+  <section id="faq" class="section-stub" aria-label={t.nav.faq}></section>
+</Base>
