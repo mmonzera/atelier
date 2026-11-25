@@ -99,7 +99,7 @@ export function useChatSearch(messages: Message[], rootRef: RefObject<HTMLElemen
 
 export type ChatSearch = ReturnType<typeof useChatSearch>;
 
-/** Icon button that opens the search bar. Same height as the session pill beside it. */
+/** Compact icon button that opens the search bar. */
 export function ChatSearchButton({ search }: { search: ChatSearch }) {
   const tr = useT();
   return (
@@ -110,18 +110,18 @@ export function ChatSearchButton({ search }: { search: ChatSearch }) {
       aria-label={tr('Search in chat')}
       className="transition-atelier"
       style={{
-        width: 36,
-        height: 36,
-        borderRadius: 'var(--radius-md)',
+        width: 28,
+        height: 28,
+        borderRadius: 'var(--radius-full)',
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: 'var(--text-tertiary)',
-        background: 'var(--surface-1)',
-        border: '1px solid var(--border-subtle)',
+        color: search.open ? 'var(--text-primary)' : 'var(--text-tertiary)',
+        background: search.open ? 'var(--surface-2)' : 'transparent',
+        border: `1px solid ${search.open ? 'var(--border-default)' : 'transparent'}`,
       }}
     >
-      <Search size={15} strokeWidth={1.7} />
+      <Search size={14} strokeWidth={1.6} />
     </button>
   );
 }
@@ -134,33 +134,30 @@ export function ChatSearchBar({ search, hint }: { search: ChatSearch; hint?: str
   }, [search.open]);
   if (!search.open) return null;
 
-  const hasQuery = Boolean(search.query.trim());
-  const navBtn = (enabled: boolean) =>
-    ({
-      width: 28,
-      height: 26,
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      color: 'var(--text-secondary)',
-      opacity: enabled ? 1 : 0.35,
-    }) as const;
+  const iconBtn = {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'var(--text-secondary)',
+  } as const;
 
   return (
     <div
       role="search"
       style={{
-        height: 36,
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
-        padding: '0 8px 0 12px',
-        borderRadius: 'var(--radius-md)',
+        gap: 6,
+        padding: '4px 6px 4px 10px',
+        borderRadius: 'var(--radius-full)',
         background: 'var(--surface-1)',
         border: '1px solid var(--border-default)',
       }}
     >
-      <Search size={14} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+      <Search size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
       <input
         ref={inputRef}
         type="text"
@@ -179,54 +176,26 @@ export function ChatSearchBar({ search, hint }: { search: ChatSearch; hint?: str
           border: 'none',
           outline: 'none',
           boxShadow: 'none',
-          fontSize: 13.5,
+          fontSize: 12.5,
           color: 'var(--text-primary)',
         }}
       />
-      {hasQuery && (
-        <span
-          className="mono-num"
-          style={{
-            padding: '2px 8px',
-            borderRadius: 7,
-            fontSize: 11.5,
-            whiteSpace: 'nowrap',
-            color: search.count === 0 ? 'var(--text-tertiary)' : 'var(--agent-amber)',
-            background: search.count === 0 ? 'var(--surface-2)' : 'rgba(244, 188, 46, 0.14)',
-            border: `1px solid ${search.count === 0 ? 'var(--border-subtle)' : 'rgba(244, 188, 46, 0.28)'}`,
-          }}
-        >
-          {search.count === 0 ? tr('No results') : `${search.position} / ${search.count}`}
+      {search.query.trim() && (
+        <span className="mono-num" style={{ fontSize: 11, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
+          {search.count === 0 ? tr('No results') : `${search.position}/${search.count}`}
         </span>
       )}
-      {hint && !hasQuery && (
+      {hint && !search.query.trim() && (
         <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{hint}</span>
       )}
-      <div
-        style={{
-          display: 'inline-flex',
-          overflow: 'hidden',
-          borderRadius: 8,
-          border: '1px solid var(--border-subtle)',
-          background: 'var(--surface-2)',
-        }}
-      >
-        <button type="button" onClick={search.prev} disabled={search.count === 0} title={tr('Previous match')} style={navBtn(search.count > 0)}>
-          <ChevronUp size={14} />
-        </button>
-        <span style={{ width: 1, background: 'var(--border-subtle)' }} />
-        <button type="button" onClick={search.next} disabled={search.count === 0} title={tr('Next match')} style={navBtn(search.count > 0)}>
-          <ChevronDown size={14} />
-        </button>
-      </div>
-      <span style={{ width: 1, height: 18, background: 'var(--border-subtle)' }} />
-      <button
-        type="button"
-        onClick={search.close}
-        title={tr('Close search')}
-        style={{ width: 26, height: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)' }}
-      >
-        <X size={15} />
+      <button type="button" onClick={search.prev} disabled={search.count === 0} title={tr('Previous match')} style={{ ...iconBtn, opacity: search.count ? 1 : 0.35 }}>
+        <ChevronUp size={14} />
+      </button>
+      <button type="button" onClick={search.next} disabled={search.count === 0} title={tr('Next match')} style={{ ...iconBtn, opacity: search.count ? 1 : 0.35 }}>
+        <ChevronDown size={14} />
+      </button>
+      <button type="button" onClick={search.close} title={tr('Close search')} style={iconBtn}>
+        <X size={14} />
       </button>
     </div>
   );

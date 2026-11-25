@@ -991,7 +991,7 @@ export function ChatView({
               onNavigate={scrollToSession}
             />
           )}
-          <div style={{ minWidth: 0, ...(search.open ? { flex: 1 } : {}) }}>
+          <div style={{ minWidth: 0, ...(search.open ? { flex: 1, maxWidth: 340 } : {}) }}>
             {search.open ? <ChatSearchBar search={search} /> : <ChatSearchButton search={search} />}
           </div>
         </div>
