@@ -30,16 +30,14 @@
     "sizeUnavailable": ""
   },
   "strip": {
-    "label": "Integrations",
+    "label": "Runs with",
     "items": [
-      "Slack",
-      "Notion",
-      "Google Drive",
-      "GitHub",
-      "Linear",
-      "Figma",
-      "Gmail",
-      "Calendar"
+      "Claude",
+      "OpenAI",
+      "Antigravity",
+      "DeepSeek",
+      "OpenCode",
+      "OpenRouter"
     ]
   },
   "scrollWords": {
