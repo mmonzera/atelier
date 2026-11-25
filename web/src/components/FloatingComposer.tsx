@@ -46,6 +46,8 @@ interface FloatingComposerProps {
   project: Project | null;
   agent: Agent | null;
   projectAgents?: Agent[];
+  roomMode?: boolean;
+  defaultResponderName?: string | null;
   settings: Settings;
   discoveredModels?: ModelEntry[];
   draftText: string;
@@ -203,6 +205,8 @@ export function FloatingComposer({
   project,
   agent,
   projectAgents,
+  roomMode = false,
+  defaultResponderName = null,
   settings,
   discoveredModels = [],
   draftText,
@@ -274,16 +278,21 @@ export function FloatingComposer({
 
   // Typing "@" (at the start of a word, at the end of the draft) opens the agent + plugin picker.
   const mentionQuery = agent ? (/(?:^|\s)@(\S*)$/.exec(draftText)?.[1] ?? null) : null;
-  const hasTeammates = Boolean(project && (projectAgents?.length ?? 0) > 1);
+  const hasTeammates = Boolean(project && (roomMode ? (projectAgents?.length ?? 0) > 0 : (projectAgents?.length ?? 0) > 1));
   const agentMentionOptions =
     mentionQuery === null || !hasTeammates
       ? []
       : (projectAgents ?? []).filter((a) => {
-          if (a.id === agent?.id) return false;
+          if (!roomMode && a.id === agent?.id) return false;
           if (pickedAgents.some((p) => p.id === a.id)) return false;
           const needle = mentionQuery.toLowerCase();
           return !needle || `${a.name} ${a.role}`.toLowerCase().includes(needle);
         });
+  const showAllOption =
+    roomMode &&
+    mentionQuery !== null &&
+    (projectAgents?.length ?? 0) > 1 &&
+    (!mentionQuery || 'all'.startsWith(mentionQuery.toLowerCase()) || 'semua'.startsWith(mentionQuery.toLowerCase()));
   const pluginMentionOptions =
     mentionQuery === null
       ? []
@@ -294,13 +303,21 @@ export function FloatingComposer({
           return !needle || `${s.name} ${s.description ?? ''}`.toLowerCase().includes(needle);
         });
   const mentionItems: Array<
-    { kind: 'agent'; agent: Agent } | { kind: 'plugin'; server: McpServerConfig }
+    { kind: 'all' } | { kind: 'agent'; agent: Agent } | { kind: 'plugin'; server: McpServerConfig }
   > = [
+    ...(showAllOption ? [{ kind: 'all' as const }] : []),
     ...agentMentionOptions.map((a) => ({ kind: 'agent' as const, agent: a })),
     ...pluginMentionOptions.map((server) => ({ kind: 'plugin' as const, server })),
   ];
   const mentionOpen = mentionQuery !== null && !slashOpen;
   const activeMentionIndex = Math.min(mentionIndex, Math.max(0, mentionItems.length - 1));
+
+  const pickAll = () => {
+    const next = draftText.replace(/(^|\s)@\S*$/, '$1@all ');
+    onChangeDraft(next);
+    setMentionIndex(0);
+    inputRef.current?.focus();
+  };
 
   const pickAgent = (target: Agent) => {
     setPickedAgents((prev) => (prev.some((p) => p.id === target.id) ? prev : [...prev, target].slice(0, 5)));
@@ -802,7 +819,7 @@ export function FloatingComposer({
               </div>
             ) : (
               <>
-                {agentMentionOptions.length > 0 && (
+                {(showAllOption || agentMentionOptions.length > 0) && (
                   <>
                     <div
                       style={{
@@ -816,15 +833,15 @@ export function FloatingComposer({
                     >
                       {t('Agents')}
                     </div>
-                    {agentMentionOptions.map((tagged, idx) => (
+                    {showAllOption && (
                       <button
-                        key={tagged.id}
+                        key="@all"
                         type="button"
                         role="option"
-                        aria-selected={idx === activeMentionIndex}
+                        aria-selected={0 === activeMentionIndex}
                         onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => pickAgent(tagged)}
-                        onMouseEnter={() => setMentionIndex(idx)}
+                        onClick={pickAll}
+                        onMouseEnter={() => setMentionIndex(0)}
                         className="transition-atelier"
                         style={{
                           display: 'flex',
@@ -833,7 +850,7 @@ export function FloatingComposer({
                           textAlign: 'left',
                           padding: '7px 10px',
                           borderRadius: 'var(--radius-sm)',
-                          background: idx === activeMentionIndex ? 'var(--surface-3)' : 'transparent',
+                          background: 0 === activeMentionIndex ? 'var(--surface-3)' : 'transparent',
                         }}
                       >
                         <span
@@ -842,33 +859,74 @@ export function FloatingComposer({
                             width: 10,
                             height: 10,
                             borderRadius: '9999px',
-                            background: getColorVar(tagged.color),
+                            background: 'var(--action-primary)',
                             flexShrink: 0,
                           }}
                         />
                         <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                          <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{tagged.name}</span>
-                          {tagged.role && (
-                            <span
-                              style={{
-                                fontSize: 11.5,
-                                color: 'var(--text-tertiary)',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {tagged.role}
-                            </span>
-                          )}
+                          <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>@all</span>
+                          <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                            {t('Notify team members in this room')}
+                          </span>
                         </span>
                       </button>
-                    ))}
+                    )}
+                    {agentMentionOptions.map((tagged, idx) => {
+                      const itemIndex = (showAllOption ? 1 : 0) + idx;
+                      return (
+                        <button
+                          key={tagged.id}
+                          type="button"
+                          role="option"
+                          aria-selected={itemIndex === activeMentionIndex}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => pickAgent(tagged)}
+                          onMouseEnter={() => setMentionIndex(itemIndex)}
+                          className="transition-atelier"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                            textAlign: 'left',
+                            padding: '7px 10px',
+                            borderRadius: 'var(--radius-sm)',
+                            background: itemIndex === activeMentionIndex ? 'var(--surface-3)' : 'transparent',
+                          }}
+                        >
+                          <span
+                            aria-hidden
+                            style={{
+                              width: 10,
+                              height: 10,
+                              borderRadius: '9999px',
+                              background: getColorVar(tagged.color),
+                              flexShrink: 0,
+                            }}
+                          />
+                          <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                            <span style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{tagged.name}</span>
+                            {tagged.role && (
+                              <span
+                                style={{
+                                  fontSize: 11.5,
+                                  color: 'var(--text-tertiary)',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {tagged.role}
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </>
                 )}
                 {pluginMentionOptions.length > 0 && (
                   <>
-                    {agentMentionOptions.length > 0 && (
+                    {(showAllOption || agentMentionOptions.length > 0) && (
                       <div
                         style={{
                           padding: '6px 10px 2px',
@@ -883,7 +941,7 @@ export function FloatingComposer({
                       </div>
                     )}
                     {pluginMentionOptions.map((server, idx) => {
-                      const itemIndex = agentMentionOptions.length + idx;
+                      const itemIndex = (showAllOption ? 1 : 0) + agentMentionOptions.length + idx;
                       return (
                         <button
                           key={server.id}
@@ -1109,7 +1167,8 @@ export function FloatingComposer({
               } else if ((e.key === 'Enter' || e.key === 'Tab') && mentionItems.length > 0) {
                 e.preventDefault();
                 const chosen = mentionItems[activeMentionIndex]!;
-                if (chosen.kind === 'agent') pickAgent(chosen.agent);
+                if (chosen.kind === 'all') pickAll();
+                else if (chosen.kind === 'agent') pickAgent(chosen.agent);
                 else pickPlugin(chosen.server);
               } else if (e.key === 'Escape') {
                 e.preventDefault();
@@ -1139,7 +1198,18 @@ export function FloatingComposer({
             }
           }}
           placeholder={
-            agent ? project ? t('Message {name}...{placeholderHint}', { name: agent.name, placeholderHint }) : t('Message {name} directly...{placeholderHint}', { name: agent.name, placeholderHint }) : t('Create or select an agent to start...')
+            agent
+              ? project
+                ? roomMode
+                  ? defaultResponderName
+                    ? t('Message team · no @ → {name}{placeholderHint}', {
+                        name: defaultResponderName,
+                        placeholderHint,
+                      })
+                    : t('Message team...{placeholderHint}', { placeholderHint })
+                  : t('Message {name}...{placeholderHint}', { name: agent.name, placeholderHint })
+                : t('Message {name} directly...{placeholderHint}', { name: agent.name, placeholderHint })
+              : t('Create or select an agent to start...')
           }
           style={{
             flex: 1,

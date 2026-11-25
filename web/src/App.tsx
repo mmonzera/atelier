@@ -1,6 +1,7 @@
 import { useT } from './i18n';
 import type {
   AgentViewTab,
+  Message,
   MessageAttachment,
   ModelEntry,
   ModelProvider,
@@ -40,6 +41,7 @@ import { OnboardingView } from './views/OnboardingView';
 import { MeetingReadyCard, MeetingsView } from './views/MeetingsView';
 import { PluginsView } from './views/PluginsView';
 import { PreviewView } from './views/PreviewView';
+import { RoomView } from './views/RoomView';
 import { SettingsView, type SettingsTab } from './views/SettingsView';
 import { TasksView } from './views/TasksView';
 
@@ -116,6 +118,7 @@ export function App() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [draftText, setDraftText] = useState('');
   const [replyTo, setReplyTo] = useState<string | null>(null);
+  const [replyToMessageId, setReplyToMessageId] = useState<string | null>(null);
   const [modal, setModal] = useState<ActiveModal>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   /** Meeting notes page; `meetingId` null shows the list. */
@@ -216,11 +219,43 @@ export function App() {
 
   const activeAgent = viewMode === 'agent' ? activeDirectAgent : activeProjectAgent;
   const scopedProject = viewMode === 'project' ? activeProject : null;
+  const groupChatEnabled = state.settings.groupChat !== false;
+  const activeProjectRoom = useMemo(
+    () =>
+      scopedProject && groupChatEnabled
+        ? (state.channels?.find((c) => c.projectId === scopedProject.id && c.kind === 'room') ?? null)
+        : null,
+    [scopedProject, groupChatEnabled, state.channels],
+  );
+  const activeRoomSessions = useMemo(
+    () =>
+      activeProjectRoom
+        ? (state.roomSessions ?? []).filter((s) => s.channelId === activeProjectRoom.id)
+        : [],
+    [state.roomSessions, activeProjectRoom],
+  );
+  const activeRoomQueue = activeProjectRoom ? state.roomQueues?.[activeProjectRoom.id] ?? null : null;
+  const defaultResponderAgent = useMemo(() => {
+    if (!activeProjectRoom) return null;
+    return (
+      projectAgents.find((a) => a.id === activeProjectRoom.defaultResponderAgentId) ??
+      projectAgents.find((a) => /chief of staff/i.test(a.role)) ??
+      projectAgents[0] ??
+      null
+    );
+  }, [activeProjectRoom, projectAgents]);
+
+  useEffect(() => {
+    if (scopedProject && groupChatEnabled && !activeProjectRoom) {
+      void api.getProjectRoom(scopedProject.id).catch(() => undefined);
+    }
+  }, [scopedProject, groupChatEnabled, activeProjectRoom]);
 
   const handleSelectProject = (projectId: string) => {
     setViewMode('project');
     setActiveProjectId(projectId);
     setReplyTo(null);
+    setReplyToMessageId(null);
     const proj = state.projects.find((p) => p.id === projectId);
     const firstAssignedId = proj?.agentIds?.[0] ?? state.agents.find((a) => a.projectId === projectId)?.id ?? null;
     setActiveAgentId(firstAssignedId);
@@ -230,6 +265,7 @@ export function App() {
     setViewMode('project');
     setActiveAgentId(agentId);
     setReplyTo(null);
+    setReplyToMessageId(null);
     setActiveTab('chat');
   };
 
@@ -237,6 +273,7 @@ export function App() {
     setViewMode('agent');
     setActiveDirectAgentId(agentId);
     setReplyTo(null);
+    setReplyToMessageId(null);
     setAgentTab('chat');
   };
 
@@ -248,7 +285,21 @@ export function App() {
   ) => {
     if (!activeAgent) return;
     const quoted = replyTo?.replace(/\s+/g, ' ').trim().slice(0, 400);
+    const quotedMsgId = replyToMessageId;
     setReplyTo(null);
+    setReplyToMessageId(null);
+
+    if (scopedProject && activeProjectRoom && groupChatEnabled) {
+      await api.sendChannelMessage(activeProjectRoom.id, {
+        text,
+        mentionAgentIds,
+        attachmentIds: attachments?.map((a) => a.id),
+        skillIds,
+        replyToMessageId: quotedMsgId ?? undefined,
+      });
+      return;
+    }
+
     const payload = quoted && text ? `Replying to: "${quoted}"\n\n${text}` : text;
     await api.sendMessage(
       activeAgent.id,
@@ -258,18 +309,19 @@ export function App() {
       skillIds,
       mentionAgentIds,
     );
-    if (mentionAgentIds?.length && scopedProject) {
-      handleSelectProjectAgent(mentionAgentIds[0]!);
-      if (mentionAgentIds.length > 1) {
-        const names = mentionAgentIds
-          .map((id) => projectAgents.find((a) => a.id === id)?.name)
-          .filter(Boolean)
-          .join(', ');
-        if (names) {
-          toast.info(tr('Sent to {names}', { names }));
-        }
-      }
+  };
+
+  const handleForwardDmToProject = async (msg: Message, projectId: string) => {
+    const dmChannel = state.channels?.find((c) => c.kind === 'dm' && c.agentId === msg.agentId);
+    let roomChannel = state.channels?.find((c) => c.kind === 'room' && c.projectId === projectId);
+    if (!roomChannel) {
+      const res = await api.getProjectRoom(projectId);
+      roomChannel = res.channel;
     }
+    if (!dmChannel || !roomChannel) return;
+    await api.forwardToChannel(roomChannel.id, dmChannel.id, [msg.id]);
+    const proj = state.projects.find((p) => p.id === projectId);
+    toast.success(tr('Forwarded to {name}', { name: proj?.name ?? 'project room' }));
   };
 
   const handleStop = async () => {
@@ -542,6 +594,9 @@ export function App() {
               mode={viewMode}
               project={scopedProject}
               activeAgent={activeAgent}
+              roomChannel={activeProjectRoom}
+              roomAgents={projectAgents}
+              roomQueue={activeRoomQueue}
               activeTab={activeTab}
               agentTab={agentTab}
               hasActiveBrowserSession={Boolean(
@@ -550,6 +605,16 @@ export function App() {
               )}
               onChangeTab={setActiveTab}
               onChangeAgentTab={setAgentTab}
+              onSelectRoomAgent={(id) => setActiveAgentId(id)}
+              onNewRoomSession={(carryover) => {
+                if (!activeProjectRoom) return;
+                void api
+                  .startRoomSession(activeProjectRoom.id, carryover)
+                  .then(() => toast.info(tr('Started new room session')));
+              }}
+              onStopRoom={() => {
+                if (activeProjectRoom) void api.stopRoom(activeProjectRoom.id);
+              }}
               onEditAgent={() => {
                 if (activeAgent) setModal({ type: 'edit-agent', agentId: activeAgent.id });
               }}
@@ -587,6 +652,7 @@ export function App() {
                     project={null}
                     agent={activeAgent}
                     agents={state.agents}
+                    projects={visibleProjects}
                     messages={state.messages}
                     activities={state.activities}
                     tasks={state.tasks}
@@ -595,6 +661,7 @@ export function App() {
                     onSelectAgent={handleSelectDirectAgent}
                     onReplyText={(quote) => setReplyTo(quote)}
                     onQuickSend={handleSend}
+                    onForwardToProject={handleForwardDmToProject}
                     onRetryAgent={handleRetryAgent}
                     onDismissFallback={handleDismissFallback}
                     onOpenTask={(task) => setModal({ type: 'edit-task', taskId: task.id })}
@@ -777,6 +844,43 @@ export function App() {
                   void api.sendMessage(targetAgent.id, prompt, activeProject.id);
                 }}
               />
+            ) : projectAgents.length > 0 && activeProjectRoom && groupChatEnabled ? (
+              <RoomView
+                project={activeProject}
+                channel={activeProjectRoom}
+                agents={projectAgents}
+                messages={state.messages}
+                sessions={activeRoomSessions}
+                queue={activeRoomQueue}
+                activities={state.activities}
+                tasks={projectTasks}
+                settings={state.settings}
+                discoveredModels={discoveredModels}
+                onReplyMessage={(m) => {
+                  setReplyTo(m.text.slice(0, 120));
+                  setReplyToMessageId(m.id);
+                }}
+                onQuickSend={(text) => handleSend(text)}
+                onSkipTurn={async () => {
+                  await api.skipRoomTurn(activeProjectRoom.id);
+                }}
+                onStopRoom={async () => {
+                  await api.stopRoom(activeProjectRoom.id);
+                }}
+                onContinueChain={async (rootMessageId) => {
+                  await api.continueRoomChain(activeProjectRoom.id, rootMessageId);
+                }}
+                onRetryAgent={async (agentId, opts) => {
+                  await api.retryAgent(agentId, opts);
+                }}
+                onCreateTaskFromReply={(description) =>
+                  setModal({ type: 'new-task', description })
+                }
+                onOpenTask={(task) => setModal({ type: 'edit-task', taskId: task.id })}
+                browserApprovals={browserApprovals}
+                browserTakeovers={browserTakeovers}
+                browserSessions={browserSessions}
+              />
             ) : activeProjectAgent ? (
               <ChatView
                 project={activeProject}
@@ -850,11 +954,16 @@ export function App() {
               project={scopedProject}
               agent={activeAgent}
               projectAgents={scopedProject ? projectAgents : undefined}
+              roomMode={Boolean(scopedProject && activeProjectRoom && groupChatEnabled)}
+              defaultResponderName={defaultResponderAgent?.name ?? null}
               settings={state.settings}
               discoveredModels={discoveredModels}
               draftText={draftText}
               replyTo={replyTo}
-              onClearReply={() => setReplyTo(null)}
+              onClearReply={() => {
+                setReplyTo(null);
+                setReplyToMessageId(null);
+              }}
               onChangeDraft={setDraftText}
               onSend={handleSend}
               onStop={handleStop}

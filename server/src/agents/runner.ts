@@ -3,6 +3,10 @@ import type { Agent, MessageAttachment, ModelProvider, Project } from '@atelier/
 export interface Turn {
   agent: Agent;
   project: Project | null;
+  channelId?: string | null;
+  trust?: 'user' | 'teammate';
+  turnPurpose?: 'dispatch' | 'work';
+  rootMessageId?: string | null;
   prompt: string;
   /** Files the user attached to this turn's message (already listed in `prompt`). */
   attachments?: MessageAttachment[];
@@ -25,7 +29,7 @@ export interface TurnCallbacks {
   /** `costUsd` is the provider-reported cost when available (e.g. OpenRouter); otherwise it is estimated. */
   onUsage?(inputTokens: number, outputTokens: number, costUsd?: number): void;
   onContextTokens?(tokens: number): void;
-  onMemoryTail?(tokens: number): void;
+  onMemoryTail?(tokens: number, extras?: { stubs?: number; delta?: number }): void;
 }
 
 export interface AgentRunner {

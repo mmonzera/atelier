@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { applyGroupChatMigration } from './channels/migration.js';
 
 export class AtelierDb {
   public readonly sqlite: DatabaseSync;
@@ -12,11 +13,11 @@ export class AtelierDb {
     this.sqlite = new DatabaseSync(dbPath);
     this.sqlite.exec('PRAGMA journal_mode = WAL;');
     this.sqlite.exec('PRAGMA foreign_keys = ON;');
-    this.initSchema();
+    this.initSchema(path.dirname(dbPath));
     this.hasMessageFts = this.initMessageFts();
   }
 
-  private initSchema(): void {
+  private initSchema(dataDir?: string): void {
     this.sqlite.exec(`
       CREATE TABLE IF NOT EXISTS events (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,8 +51,10 @@ export class AtelierDb {
 
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
+        channel_id TEXT,
         project_id TEXT,
-        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        session_id TEXT,
         created_at TEXT NOT NULL,
         data TEXT NOT NULL
       );
@@ -199,10 +202,16 @@ export class AtelierDb {
     `);
 
     this.migrateGlobalAgentsSchema();
+    applyGroupChatMigration(this.sqlite, { dataDir });
     this.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_messages_scope_agent ON messages(project_id, agent_id, created_at)');
+    this.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at)');
     // Chunks recorded before timestamps existed have no position on the timeline.
     this.ensureColumn('meeting_chunks', 'start_ms', 'INTEGER');
     this.ensureColumn('meeting_chunks', 'energy_path', 'TEXT');
+    this.ensureColumn('agent_queue', 'channel_id', 'TEXT');
+    this.ensureColumn('agent_queue', 'trigger_rowid', 'INTEGER');
+    this.ensureColumn('agent_queue', 'mention_index', 'INTEGER');
+    this.ensureColumn('agent_queue', 'manual_order', 'INTEGER');
   }
 
   private ensureColumn(table: string, column: string, type: string): void {

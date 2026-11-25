@@ -41,6 +41,13 @@ export type MemoryAction = keyof typeof MEMORY_ACTIONS;
 export type EnqueueTaskFn = (input: {
   agentId: string;
   projectId: string | null;
+  channelId?: string | null;
+  triggerMessageId?: string | null;
+  triggerRowid?: number | null;
+  mentionIndex?: number;
+  trust?: 'user' | 'teammate';
+  rootMessageId?: string | null;
+  hop?: number;
   kind: QueueKind;
   prompt: string;
   refId: string | null;
@@ -142,8 +149,13 @@ export function createStudioTools(deps: {
   actingAgentId: string;
   enqueue: EnqueueTaskFn;
   dataDir?: string;
+  trust?: 'user' | 'teammate';
+  channelId?: string | null;
+  rootMessageId?: string | null;
+  hop?: number;
+  postRoomTeammateMessage?: (target: Agent, message: string) => { queued: boolean; targetAgentId: string | null };
 }): StudioTools {
-  const { store, projectId, actingAgentId, enqueue, dataDir = './data' } = deps;
+  const { store, projectId, actingAgentId, enqueue, dataDir = './data', trust = 'user' } = deps;
 
   return {
     memoryAction(name, rawInput) {
@@ -226,6 +238,9 @@ export function createStudioTools(deps: {
     },
 
     create_agent(rawInput) {
+      if (trust === 'teammate') {
+        throw new Error('needs_user_approval: Creating agents requires explicit user approval.');
+      }
       const input = CreateAgentToolSchema.parse(rawInput);
 
       const resolvedSkills: AgentSkill[] = [];
@@ -442,6 +457,43 @@ export function createStudioTools(deps: {
         label: `Messaged ${target.name}`,
         detail: input.message.slice(0, 120),
       });
+
+      if (projectId && deps.postRoomTeammateMessage) {
+        return deps.postRoomTeammateMessage(target, input.message);
+      }
+
+      if (projectId) {
+        const room = store.channels.getRoomByProject(projectId);
+        if (room) {
+          const mentionText = `@${target.name} ${input.message}`;
+          const { message: posted, rowid } = store.channels.postMessage({
+            channelId: room.id,
+            author: 'agent',
+            agentId: actingAgentId,
+            text: mentionText,
+            metadata: {
+              mentions: [target.id],
+              toAgentIds: [target.id],
+              rootMessageId: deps.rootMessageId ?? undefined,
+              hop: (deps.hop ?? 0) + 1,
+            },
+          });
+          enqueue({
+            agentId: target.id,
+            projectId,
+            channelId: room.id,
+            triggerMessageId: posted.id,
+            triggerRowid: rowid,
+            trust: 'teammate',
+            rootMessageId: deps.rootMessageId ?? posted.id,
+            hop: (deps.hop ?? 0) + 1,
+            kind: 'teammate',
+            prompt: input.message,
+            refId: posted.id,
+          });
+          return { queued: true, targetAgentId: target.id };
+        }
+      }
 
       enqueue({
         agentId: target.id,

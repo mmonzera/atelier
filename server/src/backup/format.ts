@@ -26,6 +26,7 @@ const KDF_MAXMEM = 128 * 1024 * 1024;
 export interface BackupHeader {
   format: 'atelier-backup';
   version: 1;
+  minAppVersion?: string;
   createdAt: string;
   encrypted: boolean;
   kdf?: { name: 'scrypt'; N: number; r: number; p: number; salt: string };

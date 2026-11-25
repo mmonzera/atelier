@@ -859,6 +859,104 @@ export interface MessageActivitySummary {
   createdAt: string;
 }
 
+export type ChannelKind = 'room' | 'dm';
+
+export type RoomEvent =
+  | {
+      kind: 'task_created';
+      taskId: string;
+      identifier: string;
+      title: string;
+      assigneeAgentId: string | null;
+      assigneeName?: string | null;
+    }
+  | {
+      kind: 'task_status';
+      taskId: string;
+      identifier: string;
+      title: string;
+      fromStatus?: TaskStatus;
+      toStatus: TaskStatus;
+      prUrl?: string | null;
+    }
+  | {
+      kind: 'qa_report';
+      qaRunId: string;
+      url: string;
+      passed: boolean;
+      summary: string;
+    }
+  | { kind: 'agent_joined'; agentId: string; agentName: string }
+  | {
+      kind: 'session_started';
+      sessionId: string;
+      seq: number;
+      carryover: 'summary' | 'clean';
+      carryoverSummary: string | null;
+    }
+  | { kind: 'turn_skipped'; agentId: string; agentName: string; reason?: string }
+  | { kind: 'loop_stopped'; rootMessageId: string; hop: number; maxHops: number }
+  | {
+      kind: 'chain_budget';
+      rootMessageId: string;
+      turnsUsed: number;
+      maxTurns: number;
+      tokensUsed: number;
+      maxTokens: number;
+      warningOnly?: boolean;
+    }
+  | {
+      kind: 'migration_summary';
+      threadCount: number;
+      messageCount: number;
+      mergedDuplicates: number;
+    };
+
+export interface ChannelSettings {
+  idleTimeoutMin?: number;
+  maxTurnMin?: number;
+  maxHops?: number;
+  maxTurnsPerChain?: number;
+  maxTokensPerChain?: number;
+  maxCostUsdPerChain?: number;
+  parallel?: boolean;
+  dispatcherModel?: ModelRef | null;
+}
+
+export interface Channel {
+  id: string;
+  projectId: string | null;
+  kind: ChannelKind;
+  agentId: string | null;
+  name: string;
+  defaultResponderAgentId: string | null;
+  currentSessionId: string | null;
+  compaction?: ThreadCompaction | null;
+  settings?: ChannelSettings;
+  createdAt: string;
+}
+
+export interface RoomSession {
+  id: string;
+  channelId: string;
+  seq: number;
+  startedAt: string;
+  startedBy: 'user' | 'system';
+  carryoverSummary: string | null;
+}
+
+export interface RoomQueueSnapshot {
+  channelId: string;
+  activeAgentId: string | null;
+  activeQueueItemId: string | null;
+  queued: Array<{
+    queueItemId: string;
+    agentId: string;
+    triggerMessageId: string | null;
+    manualOrder: number | null;
+  }>;
+}
+
 export interface MessageMetadata {
   designArtifacts?: Record<string, string>;
   designPick?: { messageId: string; optionId: string; segmentIndex?: number; canonId?: string };
@@ -888,6 +986,17 @@ export interface MessageMetadata {
   /** Provider & model that actually executed this assistant turn. */
   provider?: ModelProvider;
   model?: string;
+  mentions?: string[];
+  toAgentIds?: string[];
+  replyToMessageId?: string;
+  triggerMessageId?: string;
+  rootMessageId?: string;
+  hop?: number;
+  event?: RoomEvent;
+  stub?: string;
+  forwardedFrom?: { channelId: string; messageIds: string[] };
+  migration?: { rule?: string; possibleDuplicateOf?: string };
+  approvalRequest?: { command: string; approved?: boolean; queueItemId?: string; agentId?: string };
 }
 
 export type QaStepAction =
@@ -959,8 +1068,10 @@ export interface RunBrowserQaInput {
 
 export interface Message {
   id: string;
+  channelId?: string;
+  sessionId?: string | null;
   projectId: string | null;
-  agentId: string;
+  agentId: string | null;
   author: MessageAuthor;
   text: string;
   streaming: boolean;
@@ -978,6 +1089,7 @@ export interface Task {
   status: TaskStatus;
   priority: TaskPriority;
   assigneeAgentId: string | null;
+  blockedBy?: string[];
   branch: string | null;
   prUrl: string | null;
   deliverableSummary: string | null;
@@ -1028,7 +1140,9 @@ export interface RollingWindowUsage {
 }
 
 export interface UsageLogEntry {
-  memoryTokens?: { canon: number; summary: number; tail: number };
+  memoryTokens?: { canon: number; summary: number; tail: number; stubs?: number; delta?: number };
+  turnPurpose?: 'dispatch' | 'work';
+  rootMessageId?: string | null;
   id: string;
   provider: ModelProvider;
   model: string;
@@ -1367,12 +1481,23 @@ export interface Settings {
   fallbackChain?: ModelRef[];
   sitePresets?: SitePreset[];
   meeting?: MeetingSettings;
+  groupChat?: boolean;
+  room?: ChannelSettings;
 }
 
 export interface QueueItem {
   id: string;
   agentId: string;
   projectId: string | null;
+  channelId?: string | null;
+  triggerMessageId?: string | null;
+  triggerRowid?: number | null;
+  mentionIndex?: number;
+  manualOrder?: number | null;
+  trust?: 'user' | 'teammate';
+  priority?: 'resume' | 'normal';
+  rootMessageId?: string | null;
+  hop?: number;
   kind: QueueKind;
   prompt: string;
   refId: string | null;
@@ -1391,6 +1516,9 @@ export interface WorkspaceState {
   canon?: CanonEntry[];
   projects: Project[];
   agents: Agent[];
+  channels?: Channel[];
+  roomSessions?: RoomSession[];
+  roomQueues?: Record<string, RoomQueueSnapshot>;
   messages: Message[];
   tasks: Task[];
   activities: Activity[];
@@ -1471,6 +1599,7 @@ export interface CreateTaskInput {
   status?: TaskStatus;
   priority?: TaskPriority;
   assigneeAgentId?: string | null;
+  blockedBy?: string[];
   branch?: string | null;
   prUrl?: string | null;
 }
@@ -1481,6 +1610,7 @@ export interface UpdateTaskInput {
   status?: TaskStatus;
   priority?: TaskPriority;
   assigneeAgentId?: string | null;
+  blockedBy?: string[];
   branch?: string | null;
   prUrl?: string | null;
   deliverableSummary?: string | null;
@@ -1501,6 +1631,8 @@ export interface SettingsInput {
   fallbackChain?: ModelRef[];
   sitePresets?: SitePreset[];
   meeting?: Partial<MeetingSettings>;
+  groupChat?: boolean;
+  room?: Partial<ChannelSettings>;
 }
 
 export interface ApiErrorResponse {
@@ -1516,13 +1648,27 @@ export type ServerEvent =
   | { type: 'project-deleted'; payload: { id: string } }
   | { type: 'agent-upserted'; payload: Agent }
   | { type: 'agent-deleted'; payload: { id: string; projectId?: string | null } }
+  | { type: 'channel-upserted'; payload: Channel }
+  | { type: 'channel-deleted'; payload: { id: string } }
+  | { type: 'room-session-upserted'; payload: RoomSession }
+  | { type: 'room-queue-updated'; payload: RoomQueueSnapshot }
+  | {
+      type: 'room-typing';
+      payload: { channelId: string; agentId: string; state: 'working' | 'idle' };
+    }
   | { type: 'message-upserted'; payload: Message }
   | { type: 'canon-upserted'; payload: CanonEntry }
   | { type: 'canon-deleted'; payload: { id: string } }
   | { type: 'artifact-created'; payload: Artifact }
   | {
       type: 'message-delta';
-      payload: { id: string; projectId: string | null; agentId: string; delta: string };
+      payload: {
+        id: string;
+        channelId?: string;
+        projectId: string | null;
+        agentId: string | null;
+        delta: string;
+      };
     }
   | { type: 'task-upserted'; payload: Task }
   | { type: 'task-deleted'; payload: { id: string; projectId: string } }

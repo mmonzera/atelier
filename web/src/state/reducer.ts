@@ -2,9 +2,12 @@ import {
   DEFAULT_AUTO_COMPACT_SETTINGS,
   type Activity,
   type Agent,
+  type Channel,
   type Message,
   type PortEntry,
   type Project,
+  type RoomQueueSnapshot,
+  type RoomSession,
   type ServerEvent,
   type Settings,
   type Task,
@@ -48,25 +51,72 @@ export function workspaceReducer(state: WorkspaceState, event: ServerEvent): Wor
       return event.payload;
     case 'project-upserted':
       return { ...state, projects: upsertById<Project>(state.projects, event.payload) };
-    case 'project-deleted':
+    case 'project-deleted': {
+      const removedChannels = new Set(
+        (state.channels ?? [])
+          .filter((c) => c.projectId === event.payload.id)
+          .map((c) => c.id),
+      );
+      const nextQueues = { ...(state.roomQueues ?? {}) };
+      for (const id of removedChannels) delete nextQueues[id];
       return {
         ...state,
         projects: state.projects.filter((p) => p.id !== event.payload.id),
+        channels: (state.channels ?? []).filter((c) => c.projectId !== event.payload.id),
+        roomSessions: (state.roomSessions ?? []).filter((s) => !removedChannels.has(s.channelId)),
+        roomQueues: nextQueues,
         canon: state.canon?.filter((entry) => entry.projectId !== event.payload.id),
         messages: state.messages.filter((m) => m.projectId !== event.payload.id),
         tasks: state.tasks.filter((t) => t.projectId !== event.payload.id),
         activities: state.activities.filter((a) => a.projectId !== event.payload.id),
         ports: state.ports.filter((p) => p.projectId !== event.payload.id),
       };
+    }
     case 'agent-upserted':
       return { ...state, agents: upsertById<Agent>(state.agents, event.payload) };
     case 'agent-deleted':
       return {
         ...state,
         agents: state.agents.filter((a) => a.id !== event.payload.id),
-        messages: state.messages.filter((m) => m.agentId !== event.payload.id),
+        channels: (state.channels ?? []).filter(
+          (c) => !(c.kind === 'dm' && c.agentId === event.payload.id),
+        ),
+        // Preserve project room history when an agent is deleted (matches ON DELETE SET NULL).
+        messages: state.messages.filter(
+          (m) => m.projectId !== null || m.agentId !== event.payload.id,
+        ),
         activities: state.activities.filter((a) => a.agentId !== event.payload.id),
       };
+    case 'channel-upserted':
+      return {
+        ...state,
+        channels: upsertById<Channel>(state.channels ?? [], event.payload),
+      };
+    case 'channel-deleted': {
+      const nextQueues = { ...(state.roomQueues ?? {}) };
+      delete nextQueues[event.payload.id];
+      return {
+        ...state,
+        channels: (state.channels ?? []).filter((c) => c.id !== event.payload.id),
+        roomSessions: (state.roomSessions ?? []).filter((s) => s.channelId !== event.payload.id),
+        roomQueues: nextQueues,
+      };
+    }
+    case 'room-session-upserted':
+      return {
+        ...state,
+        roomSessions: upsertById<RoomSession>(state.roomSessions ?? [], event.payload),
+      };
+    case 'room-queue-updated':
+      return {
+        ...state,
+        roomQueues: {
+          ...(state.roomQueues ?? {}),
+          [event.payload.channelId]: event.payload as RoomQueueSnapshot,
+        },
+      };
+    case 'room-typing':
+      return state;
     case 'message-upserted':
       return { ...state, messages: upsertById<Message>(state.messages, event.payload) };
     case 'canon-upserted':

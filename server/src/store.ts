@@ -12,6 +12,7 @@ import {
   parseMessageSegments,
   type Artifact,
   type CanonEntry,
+  type Channel,
   type DesignOption,
   type Activity,
   type ActivityKind,
@@ -52,6 +53,8 @@ import {
   type WorkspaceState,
 } from '@atelier/contracts';
 import type { EventBus } from './bus.js';
+import { buildMessageStub } from './channels/context.js';
+import { ChannelService } from './channels/service.js';
 import type { AppConfig } from './config.js';
 import type { AtelierDb } from './db.js';
 import { getAgentWorkspacePath, getDirectAgentWorkspacePath, getProjectRepoPath } from './github.js';
@@ -70,6 +73,7 @@ export function nowIso(): string {
 }
 
 export class AtelierStore {
+  public readonly channels: ChannelService;
   private bus: EventBus | null = null;
   private transactionEvents?: ServerEvent[];
   private snapshotAugmenter?: (base: WorkspaceState) => WorkspaceState;
@@ -78,7 +82,21 @@ export class AtelierStore {
     private readonly db: AtelierDb,
     private readonly config: AppConfig,
   ) {
+    this.channels = new ChannelService(this.db.sqlite, (events) => {
+      for (const ev of events) {
+        this.appendEvent(ev);
+        this.broadcast(ev);
+      }
+    });
     this.seedSettings();
+  }
+
+  public get sqlite() {
+    return this.db.sqlite;
+  }
+
+  public emitEvent(event: ServerEvent): void {
+    this.broadcast(event);
   }
 
   public attachBus(bus: EventBus): void {
@@ -265,6 +283,7 @@ export class AtelierStore {
 
   public recoverOnStartup(): void {
     const now = nowIso();
+    const staleSessionsByAgent = new Map<string, Set<string>>();
     this.db.sqlite.exec('BEGIN');
     try {
       const msgRows = this.db.sqlite
@@ -281,6 +300,11 @@ export class AtelierStore {
           this.db.sqlite
             .prepare(`UPDATE messages SET data = ? WHERE id = ?`)
             .run(JSON.stringify(closed), row.id);
+          if (msg.agentId && msg.channelId) {
+            const set = staleSessionsByAgent.get(msg.agentId) ?? new Set<string>();
+            set.add(msg.channelId);
+            staleSessionsByAgent.set(msg.agentId, set);
+          }
         }
       }
 
@@ -295,6 +319,14 @@ export class AtelierStore {
 
         const cleanedSessionId =
           agent.sessionId && agent.sessionId.startsWith('mock-') ? null : agent.sessionId;
+        const staleChannels = staleSessionsByAgent.get(agent.id);
+        let nextSessions = agent.sessions;
+        if (staleChannels && agent.sessions) {
+          nextSessions = { ...agent.sessions };
+          for (const chId of staleChannels) {
+            delete nextSessions[chId];
+          }
+        }
 
         if (agent.status === 'working') {
           const errored: Agent = {
@@ -302,6 +334,7 @@ export class AtelierStore {
             status: 'error',
             currentTask: null,
             sessionId: cleanedSessionId,
+            sessions: nextSessions,
             queueLength: cntRow.cnt,
             lastError: 'Server restart saat turn berjalan',
             updatedAt: now,
@@ -314,6 +347,7 @@ export class AtelierStore {
             ...agent,
             queueLength: cntRow.cnt,
             sessionId: cleanedSessionId,
+            sessions: nextSessions,
           };
           this.db.sqlite
             .prepare(`UPDATE agents SET data = ? WHERE id = ?`)
@@ -355,6 +389,8 @@ export class AtelierStore {
     const base: WorkspaceState = {
       projects,
       agents,
+      channels: this.channels.listChannels(),
+      roomSessions: this.channels.listRoomSessions(),
       messages: parseRows<Message>('messages'),
       canon: parseRows<CanonEntry>('canon').filter((entry) => !entry.supersededBy),
       tasks: parseRows<Task>('tasks', 'created_at DESC'),
@@ -639,6 +675,8 @@ export class AtelierStore {
       inputTokens: Math.max(0, Math.round(input.inputTokens)),
       outputTokens: Math.max(0, Math.round(input.outputTokens)),
       memoryTokens: input.memoryTokens,
+      ...(input.turnPurpose ? { turnPurpose: input.turnPurpose } : {}),
+      ...(input.rootMessageId !== undefined ? { rootMessageId: input.rootMessageId } : {}),
       estimatedCostUsd: Math.max(0, input.estimatedCostUsd),
       createdAt: input.createdAt ?? nowIso(),
     };
@@ -924,6 +962,11 @@ export class AtelierStore {
       ];
     });
 
+    this.channels.ensureRoom(project.id, project.name, agents);
+    for (const agt of agents) {
+      this.channels.ensureDm(agt.id, agt.name);
+    }
+
     return { project, agents };
   }
 
@@ -1071,19 +1114,39 @@ export class AtelierStore {
 
       return events;
     });
+    this.channels.ensureDm(agent.id, agent.name);
+    if (targetProjectId) {
+      const proj = this.getProject(targetProjectId);
+      if (proj) {
+        const room = this.channels.ensureRoom(proj.id, proj.name, this.listProjectAgents(proj.id));
+        if (this.channels.listChannelMessages(room.id, { limit: 1 }).messages.length > 0) {
+          this.channels.postMessage({
+            channelId: room.id,
+            author: 'system',
+            agentId: null,
+            text: `${agent.name} (${agent.role}) joined the room.`,
+            metadata: { event: { kind: 'agent_joined', agentId: agent.id, agentName: agent.name } },
+          });
+        }
+      }
+    }
     return agent;
   }
 
   public assignAgentToProject(projectId: string, agentId: string): Project | null {
     let updated: Project | null = null;
+    let projectName = '';
+    let newlyAdded = false;
     this.runTx(() => {
       const proj = this.getProject(projectId);
       const agt = this.getAgent(agentId);
       if (!proj || !agt) return [];
+      projectName = proj.name;
       if (proj.agentIds.includes(agentId)) {
         updated = proj;
         return [];
       }
+      newlyAdded = true;
       updated = {
         ...proj,
         agentIds: [...proj.agentIds, agentId],
@@ -1094,6 +1157,19 @@ export class AtelierStore {
         .run(JSON.stringify(updated), updated.id);
       return [{ type: 'project-upserted', payload: updated }];
     });
+    if (newlyAdded && projectName) {
+      const agt = this.getAgent(agentId);
+      const room = this.channels.ensureRoom(projectId, projectName, this.listProjectAgents(projectId));
+      if (agt && this.channels.listChannelMessages(room.id, { limit: 1 }).messages.length > 0) {
+        this.channels.postMessage({
+          channelId: room.id,
+          author: 'system',
+          agentId: null,
+          text: `${agt.name} (${agt.role}) joined the room.`,
+          metadata: { event: { kind: 'agent_joined', agentId: agt.id, agentName: agt.name } },
+        });
+      }
+    }
     return updated;
   }
 
@@ -1392,11 +1468,17 @@ export class AtelierStore {
   }
 
   private designRoots(message: Message): string[] {
-    if (!message.projectId) return [this.managedWorkspace(getDirectAgentWorkspacePath(this.config.workspacesDir, message.agentId))];
+    if (!message.projectId) {
+      return message.agentId
+        ? [this.managedWorkspace(getDirectAgentWorkspacePath(this.config.workspacesDir, message.agentId))]
+        : [];
+    }
     return [
       this.getProject(message.projectId)?.repo?.localPath ||
         this.managedWorkspace(getProjectRepoPath(this.config.workspacesDir, message.projectId)),
-      this.managedWorkspace(getAgentWorkspacePath(this.config.workspacesDir, message.projectId, message.agentId)),
+      ...(message.agentId
+        ? [this.managedWorkspace(getAgentWorkspacePath(this.config.workspacesDir, message.projectId, message.agentId))]
+        : []),
     ];
   }
 
@@ -1452,9 +1534,20 @@ export class AtelierStore {
         },
       });
     }
-    const thread = this.listAgentMessages(message.agentId, projectId);
-    const context = thread.slice(0, thread.findIndex((item) => item.id === message.id))
-      .filter((item) => item.author === 'user').at(-1);
+    const thread = message.channelId
+      ? this.channels.listChannelMessagesWithRowids(message.channelId).map((r) => r.message)
+      : message.agentId
+        ? this.listAgentMessages(message.agentId, projectId)
+        : [];
+    const triggerMsg = message.metadata?.triggerMessageId
+      ? this.getMessage(message.metadata.triggerMessageId)
+      : null;
+    const context =
+      triggerMsg ??
+      thread
+        .slice(0, thread.findIndex((item) => item.id === message.id))
+        .filter((item) => item.author === 'user')
+        .at(-1);
     const isLogo = option.kind === 'svg' && /\b(?:logo|logomark|wordmark)\b/i.test(
       [option.label, option.summary, segment?.type === 'design' ? segment.block.title : '', context?.text].join(' '),
     );
@@ -1563,25 +1656,72 @@ export class AtelierStore {
   }
 
   public listAgentMessages(agentId: string, projectId?: string | null): Message[] {
+    const mentionNeedle = `%"${agentId}"%`;
     const rows = projectId === undefined
-      ? this.db.sqlite.prepare('SELECT data FROM messages WHERE agent_id = ? ORDER BY created_at, rowid').all(agentId)
-      : this.db.sqlite.prepare('SELECT data FROM messages WHERE project_id IS ? AND agent_id = ? ORDER BY created_at, rowid')
-        .all(projectId, agentId);
+      ? this.db.sqlite
+          .prepare(
+            `SELECT data FROM messages
+             WHERE agent_id = ?
+                OR (agent_id IS NULL AND json_extract(data, '$.author') = 'user' AND data LIKE ?)
+                OR (agent_id IS NULL AND coalesce(json_extract(data, '$.metadata.compacted'), 0) = 1)
+             ORDER BY created_at, rowid`,
+          )
+          .all(agentId, mentionNeedle)
+      : this.db.sqlite
+          .prepare(
+            `SELECT data FROM messages
+             WHERE project_id IS ?
+               AND (
+                 agent_id = ?
+                 OR (agent_id IS NULL AND json_extract(data, '$.author') = 'user' AND data LIKE ?)
+                 OR (agent_id IS NULL AND coalesce(json_extract(data, '$.metadata.compacted'), 0) = 1)
+               )
+             ORDER BY created_at, rowid`,
+          )
+          .all(projectId, agentId, mentionNeedle);
     return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as Message);
   }
 
   public createMessage(input: {
     id?: string;
+    channelId?: string;
+    sessionId?: string | null;
     projectId: string | null;
-    agentId: string;
+    agentId: string | null;
     author: MessageAuthor;
     text: string;
     streaming?: boolean;
     durationMs?: number | null;
     metadata?: MessageMetadata;
   }): Message {
+    let channelId = input.channelId;
+    let sessionId = input.sessionId;
+    if (!channelId) {
+      if (input.projectId) {
+        const proj = this.getProject(input.projectId);
+        if (proj) {
+          const room = this.channels.ensureRoom(
+            proj.id,
+            proj.name,
+            this.listProjectAgents(proj.id),
+          );
+          channelId = room.id;
+          if (sessionId === undefined) sessionId = room.currentSessionId;
+        }
+      } else if (input.agentId) {
+        const agt = this.getAgent(input.agentId);
+        if (agt) {
+          channelId = this.channels.ensureDm(agt.id, agt.name).id;
+        }
+      }
+    } else if (sessionId === undefined) {
+      sessionId = this.channels.getChannel(channelId)?.currentSessionId ?? null;
+    }
+
     const message: Message = {
       id: input.id ?? newId('msg'),
+      ...(channelId ? { channelId } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
       projectId: input.projectId,
       agentId: input.agentId,
       author: input.author,
@@ -1594,12 +1734,14 @@ export class AtelierStore {
     this.runTx(() => {
       this.db.sqlite
         .prepare(
-          `INSERT INTO messages (id, project_id, agent_id, created_at, data) VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (id, channel_id, project_id, agent_id, session_id, created_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           message.id,
+          message.channelId ?? null,
           message.projectId,
           message.agentId,
+          message.sessionId ?? null,
           message.createdAt,
           JSON.stringify(message),
         );
@@ -1611,7 +1753,8 @@ export class AtelierStore {
   public appendMessageDelta(messageId: string, delta: string): void {
     if (!delta) return;
     let projectId: string | null = null;
-    let agentId = '';
+    let channelId: string | undefined;
+    let agentId: string | null = null;
     this.db.sqlite.exec('BEGIN');
     try {
       const row = this.db.sqlite.prepare(`SELECT data FROM messages WHERE id = ?`).get(messageId) as
@@ -1624,6 +1767,7 @@ export class AtelierStore {
       const msg = JSON.parse(row.data) as Message;
       msg.text += delta;
       projectId = msg.projectId ?? null;
+      channelId = msg.channelId;
       agentId = msg.agentId;
       this.db.sqlite
         .prepare(`UPDATE messages SET data = ? WHERE id = ?`)
@@ -1636,7 +1780,7 @@ export class AtelierStore {
 
     this.broadcast({
       type: 'message-delta',
-      payload: { id: messageId, projectId, agentId, delta },
+      payload: { id: messageId, ...(channelId ? { channelId } : {}), projectId, agentId, delta },
     });
   }
 
@@ -1648,38 +1792,83 @@ export class AtelierStore {
       streaming: boolean;
       durationMs?: number | null;
       metadata?: MessageMetadata;
+      cursorUpdate?: { channelId: string; agentId: string; sessionId?: string | null };
     },
   ): Message | null {
     let updated: Message | null = null;
     this.runTx(() => {
-      const row = this.db.sqlite.prepare(`SELECT data FROM messages WHERE id = ?`).get(messageId) as
-        | { data: string }
-        | undefined;
+      const row = this.db.sqlite
+        .prepare(`SELECT rowid, data FROM messages WHERE id = ?`)
+        .get(messageId) as { rowid: number; data: string } | undefined;
       if (!row) return [];
       const current = JSON.parse(row.data) as Message;
       let nextText = patch.text !== undefined ? patch.text : current.text;
       if (patch.appendText) {
         nextText = `${nextText}${patch.appendText}`;
       }
+      const nextMeta: MessageMetadata | undefined =
+        patch.metadata !== undefined
+          ? {
+              ...(current.metadata?.browserScreenshots
+                ? { browserScreenshots: current.metadata.browserScreenshots }
+                : {}),
+              ...(current.metadata?.mentions ? { mentions: current.metadata.mentions } : {}),
+              ...(current.metadata?.toAgentIds ? { toAgentIds: current.metadata.toAgentIds } : {}),
+              ...(current.metadata?.triggerMessageId
+                ? { triggerMessageId: current.metadata.triggerMessageId }
+                : {}),
+              ...(current.metadata?.rootMessageId
+                ? { rootMessageId: current.metadata.rootMessageId }
+                : {}),
+              ...(current.metadata?.hop !== undefined ? { hop: current.metadata.hop } : {}),
+              ...patch.metadata,
+            }
+          : current.metadata;
       updated = {
         ...current,
         text: nextText,
         streaming: patch.streaming,
         durationMs: patch.durationMs !== undefined ? patch.durationMs : current.durationMs,
-        metadata:
-          patch.metadata !== undefined
-            ? {
-                ...(current.metadata?.browserScreenshots
-                  ? { browserScreenshots: current.metadata.browserScreenshots }
-                  : {}),
-                ...patch.metadata,
-              }
-            : current.metadata,
+        metadata: nextMeta,
       };
+      if (!patch.streaming && updated.author === 'agent' && updated.channelId && updated.text.trim()) {
+        const stub = buildMessageStub(updated, this.listAgents());
+        updated = {
+          ...updated,
+          metadata: { ...(updated.metadata ?? {}), stub },
+        };
+      }
       this.db.sqlite
         .prepare(`UPDATE messages SET data = ? WHERE id = ?`)
         .run(JSON.stringify(updated), messageId);
-      return [{ type: 'message-upserted', payload: updated }];
+      const events: ServerEvent[] = [{ type: 'message-upserted', payload: updated }];
+
+      if (patch.cursorUpdate) {
+        const { channelId, agentId, sessionId } = patch.cursorUpdate;
+        this.db.sqlite
+          .prepare(
+            `INSERT INTO channel_cursors (channel_id, agent_id, last_seen_message_id, last_seen_rowid)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(channel_id, agent_id) DO UPDATE SET
+               last_seen_message_id = excluded.last_seen_message_id,
+               last_seen_rowid = excluded.last_seen_rowid`,
+          )
+          .run(channelId, agentId, messageId, Number(row.rowid));
+
+        if (sessionId) {
+          const agt = this.getAgent(agentId);
+          if (agt) {
+            const nextSessions = { ...(agt.sessions ?? {}), [channelId]: sessionId };
+            const updatedAgent: Agent = { ...agt, sessions: nextSessions, updatedAt: nowIso() };
+            this.db.sqlite
+              .prepare(`UPDATE agents SET data = ? WHERE id = ?`)
+              .run(JSON.stringify(updatedAgent), agentId);
+            events.push({ type: 'agent-upserted', payload: updatedAgent });
+          }
+        }
+      }
+
+      return events;
     });
     return updated;
   }
@@ -1773,8 +1962,33 @@ export class AtelierStore {
     return `AT-${maxNum + 1}`;
   }
 
+  private hasTaskDependencyCycle(projectId: string, taskId: string, nextBlockedBy: string[]): boolean {
+    const tasks = this.listProjectTasks(projectId);
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const byIdent = new Map(tasks.map((t) => [t.identifier.toUpperCase(), t]));
+    const resolveId = (ref: string) => byId.get(ref)?.id ?? byIdent.get(ref.toUpperCase())?.id ?? null;
+
+    const visited = new Set<string>();
+    const stack = nextBlockedBy.map(resolveId).filter((id): id is string => Boolean(id));
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (cur === taskId) return true;
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      const t = byId.get(cur);
+      if (t?.blockedBy) {
+        for (const dep of t.blockedBy) {
+          const resolved = resolveId(dep);
+          if (resolved) stack.push(resolved);
+        }
+      }
+    }
+    return false;
+  }
+
   public createTask(projectId: string, input: CreateTaskInput): Task | null {
-    if (!this.getProject(projectId)) return null;
+    const project = this.getProject(projectId);
+    if (!project) return null;
     const now = nowIso();
     let task!: Task;
     this.runTx(() => {
@@ -1787,6 +2001,7 @@ export class AtelierStore {
         status: input.status ?? 'todo',
         priority: input.priority ?? 'medium',
         assigneeAgentId: input.assigneeAgentId ?? null,
+        ...(input.blockedBy?.length ? { blockedBy: input.blockedBy } : {}),
         branch: input.branch ?? null,
         prUrl: input.prUrl ?? null,
         deliverableSummary: null,
@@ -1798,14 +2013,42 @@ export class AtelierStore {
         .run(task.id, task.projectId, task.createdAt, JSON.stringify(task));
       return [{ type: 'task-upserted', payload: task }];
     });
+    const room = this.channels.getRoomByProject(projectId);
+    if (room) {
+      const assignee = task.assigneeAgentId ? this.getAgent(task.assigneeAgentId) : null;
+      this.channels.postMessage({
+        channelId: room.id,
+        author: 'system',
+        agentId: null,
+        text: `${task.identifier} "${task.title}" created${assignee ? ` · assigned @${assignee.name}` : ''}`,
+        metadata: {
+          taskId: task.id,
+          taskIdentifier: task.identifier,
+          taskTitle: task.title,
+          event: {
+            kind: 'task_created',
+            taskId: task.id,
+            identifier: task.identifier,
+            title: task.title,
+            assigneeAgentId: task.assigneeAgentId,
+            assigneeName: assignee?.name ?? null,
+          },
+        },
+      });
+    }
     return task;
   }
 
   public updateTask(id: string, patch: UpdateTaskInput): Task | null {
     let updated: Task | null = null;
+    let prevStatus: Task['status'] | null = null;
     this.runTx(() => {
       const existing = this.getTask(id);
       if (!existing) return [];
+      prevStatus = existing.status;
+      if (patch.blockedBy && this.hasTaskDependencyCycle(existing.projectId, id, patch.blockedBy)) {
+        throw new Error(`Circular task dependency detected for ${existing.identifier}.`);
+      }
       updated = {
         ...existing,
         title: patch.title !== undefined ? patch.title.trim() : existing.title,
@@ -1814,6 +2057,7 @@ export class AtelierStore {
         priority: patch.priority !== undefined ? patch.priority : existing.priority,
         assigneeAgentId:
           patch.assigneeAgentId !== undefined ? patch.assigneeAgentId : existing.assigneeAgentId,
+        blockedBy: patch.blockedBy !== undefined ? patch.blockedBy : existing.blockedBy,
         branch: patch.branch !== undefined ? patch.branch : existing.branch,
         prUrl: patch.prUrl !== undefined ? patch.prUrl : existing.prUrl,
         deliverableSummary:
@@ -1827,6 +2071,33 @@ export class AtelierStore {
         .run(JSON.stringify(updated), updated.id);
       return [{ type: 'task-upserted', payload: updated }];
     });
+    if (updated && prevStatus && (updated as Task).status !== prevStatus) {
+      const t = updated as Task;
+      const room = this.channels.getRoomByProject(t.projectId);
+      if (room) {
+        this.channels.postMessage({
+          channelId: room.id,
+          author: 'system',
+          agentId: null,
+          text: `${t.identifier} → ${t.status}${t.prUrl ? ` · ${t.prUrl}` : ''}`,
+          metadata: {
+            taskId: t.id,
+            taskIdentifier: t.identifier,
+            taskTitle: t.title,
+            prUrl: t.prUrl ?? undefined,
+            event: {
+              kind: 'task_status',
+              taskId: t.id,
+              identifier: t.identifier,
+              title: t.title,
+              fromStatus: prevStatus,
+              toStatus: t.status,
+              prUrl: t.prUrl,
+            },
+          },
+        });
+      }
+    }
     return updated;
   }
 
@@ -1895,6 +2166,15 @@ export class AtelierStore {
   public enqueueItem(input: {
     agentId: string;
     projectId: string | null;
+    channelId?: string | null;
+    triggerMessageId?: string | null;
+    triggerRowid?: number | null;
+    mentionIndex?: number;
+    manualOrder?: number | null;
+    trust?: 'user' | 'teammate';
+    priority?: 'resume' | 'normal';
+    rootMessageId?: string | null;
+    hop?: number;
     kind: QueueKind;
     prompt: string;
     refId: string | null;
@@ -1907,6 +2187,15 @@ export class AtelierStore {
       id: newId('q'),
       agentId: input.agentId,
       projectId: input.projectId,
+      channelId: input.channelId ?? null,
+      triggerMessageId: input.triggerMessageId ?? null,
+      triggerRowid: input.triggerRowid ?? null,
+      mentionIndex: input.mentionIndex ?? 0,
+      manualOrder: input.manualOrder ?? null,
+      trust: input.trust ?? 'user',
+      priority: input.priority ?? 'normal',
+      rootMessageId: input.rootMessageId ?? null,
+      hop: input.hop ?? 0,
       kind: input.kind,
       prompt: input.prompt,
       refId: input.refId,
@@ -1921,9 +2210,20 @@ export class AtelierStore {
     this.runTx(() => {
       this.db.sqlite
         .prepare(
-          `INSERT INTO agent_queue (id, agent_id, project_id, created_at, data) VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO agent_queue (id, agent_id, project_id, channel_id, trigger_rowid, mention_index, manual_order, created_at, data)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(item.id, item.agentId, item.projectId, item.createdAt, JSON.stringify(item));
+        .run(
+          item.id,
+          item.agentId,
+          item.projectId,
+          item.channelId ?? null,
+          item.triggerRowid ?? null,
+          item.mentionIndex ?? 0,
+          item.manualOrder ?? null,
+          item.createdAt,
+          JSON.stringify(item),
+        );
 
       const cntRow = this.db.sqlite
         .prepare(`SELECT COUNT(*) AS cnt FROM agent_queue WHERE agent_id = ?`)
@@ -1974,6 +2274,87 @@ export class AtelierStore {
     });
 
     return { item, queueLength };
+  }
+
+  public shiftQueueItemById(queueItemId: string): QueueItem | null {
+    let item: QueueItem | null = null;
+    this.runTx(() => {
+      const row = this.db.sqlite
+        .prepare(`SELECT seq, agent_id, data FROM agent_queue WHERE id = ?`)
+        .get(queueItemId) as { seq: number; agent_id: string; data: string } | undefined;
+      if (!row) return [];
+      item = JSON.parse(row.data) as QueueItem;
+      this.db.sqlite.prepare(`DELETE FROM agent_queue WHERE seq = ?`).run(row.seq);
+
+      const cntRow = this.db.sqlite
+        .prepare(`SELECT COUNT(*) AS cnt FROM agent_queue WHERE agent_id = ?`)
+        .get(row.agent_id) as { cnt: number };
+      const agt = this.getAgent(row.agent_id);
+      if (!agt) return [];
+      const updated: Agent = { ...agt, queueLength: cntRow.cnt, updatedAt: nowIso() };
+      this.db.sqlite
+        .prepare(`UPDATE agents SET data = ? WHERE id = ?`)
+        .run(JSON.stringify(updated), updated.id);
+      return [{ type: 'agent-upserted', payload: updated }];
+    });
+    return item;
+  }
+
+  public listAllQueuedItems(channelId?: string): QueueItem[] {
+    const rows = channelId
+      ? (this.db.sqlite
+          .prepare(`SELECT data FROM agent_queue WHERE channel_id = ? ORDER BY seq ASC`)
+          .all(channelId) as Array<{ data: string }>)
+      : (this.db.sqlite
+          .prepare(`SELECT data FROM agent_queue ORDER BY seq ASC`)
+          .all() as Array<{ data: string }>);
+    return rows.map((r) => JSON.parse(r.data) as QueueItem);
+  }
+
+  public hasQueuedRootForAgent(channelId: string, agentId: string, rootMessageId: string): boolean {
+    const items = this.listQueue(agentId);
+    return items.some((q) => q.channelId === channelId && q.rootMessageId === rootMessageId);
+  }
+
+  public reorderChannelQueue(channelId: string, orderedIds: string[]): void {
+    const orderMap = new Map(orderedIds.map((id, idx) => [id, idx]));
+    this.runTx(() => {
+      const rows = this.db.sqlite
+        .prepare(`SELECT seq, id, data FROM agent_queue WHERE channel_id = ?`)
+        .all(channelId) as Array<{ seq: number; id: string; data: string }>;
+      for (const row of rows) {
+        const parsed = JSON.parse(row.data) as QueueItem;
+        const nextOrder = orderMap.get(row.id) ?? null;
+        const updated: QueueItem = { ...parsed, manualOrder: nextOrder };
+        this.db.sqlite
+          .prepare(`UPDATE agent_queue SET manual_order = ?, data = ? WHERE seq = ?`)
+          .run(nextOrder, JSON.stringify(updated), row.seq);
+      }
+      return [];
+    });
+  }
+
+  public clearChannelQueue(channelId: string): void {
+    this.runTx(() => {
+      const affected = this.db.sqlite
+        .prepare(`SELECT DISTINCT agent_id FROM agent_queue WHERE channel_id = ?`)
+        .all(channelId) as Array<{ agent_id: string }>;
+      this.db.sqlite.prepare(`DELETE FROM agent_queue WHERE channel_id = ?`).run(channelId);
+      const events: ServerEvent[] = [];
+      for (const row of affected) {
+        const cntRow = this.db.sqlite
+          .prepare(`SELECT COUNT(*) AS cnt FROM agent_queue WHERE agent_id = ?`)
+          .get(row.agent_id) as { cnt: number };
+        const agt = this.getAgent(row.agent_id);
+        if (!agt) continue;
+        const updated: Agent = { ...agt, queueLength: cntRow.cnt, updatedAt: nowIso() };
+        this.db.sqlite
+          .prepare(`UPDATE agents SET data = ? WHERE id = ?`)
+          .run(JSON.stringify(updated), updated.id);
+        events.push({ type: 'agent-upserted', payload: updated });
+      }
+      return events;
+    });
   }
 
   public listQueue(agentId: string): QueueItem[] {

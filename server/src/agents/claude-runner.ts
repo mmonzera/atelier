@@ -11,6 +11,7 @@ import { toLaunchSpec } from '../mcp/config.js';
 import type { AtelierStore } from '../store.js';
 import { resolveMcpAuth } from '../mcp/oauth.js';
 import { AttachmentStore } from '../attachments.js';
+import { RoomContextBuilder } from '../channels/context.js';
 import { conversationTail, estimateTokens, getScopeKey } from './compactor.js';
 import { buildAgentSystemPrompt, renderCanon } from './prompts.js';
 import type { AgentRunner, Turn, TurnCallbacks } from './runner.js';
@@ -96,19 +97,50 @@ export class ClaudeAgentRunner implements AgentRunner {
     );
     const attachmentStore = new AttachmentStore(this.config.dataDir);
     const artifactDirectory = this.store.artifactDirectory(turn.project?.id ?? null);
-    const tail = turn.resumeSessionId || turn.recallContinuation ? '' : conversationTail(
-          this.store.listAgentMessages(turn.agent.id, turn.project?.id ?? null),
-          compaction,
-          turn.prompt,
-          settings.autoCompact.tailTokens,
-          (m) => attachmentStore.describe(m.metadata?.attachments),
-          turn.currentMessageId,
-        );
-    cb.onMemoryTail?.(estimateTokens(tail));
-    const promptText = tail ? `${tail}\n\nCURRENT MESSAGE: ${turn.prompt}`
-      : turn.resumeSessionId && turn.canonChanged && turn.canonText
-        ? `Canon update since last turn (replaces previous Canon):\n${turn.canonText}\n\n${turn.prompt}`
-        : turn.prompt;
+    const channel = turn.channelId ? this.store.channels.getChannel(turn.channelId) : null;
+    let promptText: string;
+    if (channel && !turn.recallContinuation) {
+      const triggerMessage = turn.currentMessageId
+        ? this.store.getMessage(turn.currentMessageId)
+        : null;
+      const built = new RoomContextBuilder(this.store.channels).build({
+        channel,
+        agent: turn.agent,
+        project: turn.project,
+        projectAgents: teamAgents,
+        allAgents: this.store.listAgents(),
+        tasks: projectTasks,
+        triggerMessage,
+        currentPrompt: turn.prompt,
+        hasResumeSession: Boolean(turn.resumeSessionId),
+        turnPurpose: turn.turnPurpose,
+        trust: turn.trust,
+        tailTokens: settings.autoCompact.tailTokens,
+        attachmentNote: (m) => attachmentStore.describe(m.metadata?.attachments),
+      });
+      cb.onMemoryTail?.(built.memoryTokens.tail, {
+        stubs: built.memoryTokens.stubs,
+        delta: built.memoryTokens.delta,
+      });
+      promptText =
+        turn.resumeSessionId && turn.canonChanged && turn.canonText
+          ? `Canon update since last turn (replaces previous Canon):\n${turn.canonText}\n\n${built.fullPrompt}`
+          : built.fullPrompt;
+    } else {
+      const tail = turn.resumeSessionId || turn.recallContinuation ? '' : conversationTail(
+            this.store.listAgentMessages(turn.agent.id, turn.project?.id ?? null),
+            compaction,
+            turn.prompt,
+            settings.autoCompact.tailTokens,
+            (m) => attachmentStore.describe(m.metadata?.attachments),
+            turn.currentMessageId,
+          );
+      cb.onMemoryTail?.(estimateTokens(tail));
+      promptText = tail ? `${tail}\n\nCURRENT MESSAGE: ${turn.prompt}`
+        : turn.resumeSessionId && turn.canonChanged && turn.canonText
+          ? `Canon update since last turn (replaces previous Canon):\n${turn.canonText}\n\n${turn.prompt}`
+          : turn.prompt;
+    }
 
     const tools = createStudioTools({
       store: this.store,
@@ -116,6 +148,9 @@ export class ClaudeAgentRunner implements AgentRunner {
       actingAgentId: turn.agent.id,
       enqueue: this.getEnqueue(),
       dataDir: this.config.dataDir,
+      trust: turn.trust,
+      channelId: turn.channelId,
+      rootMessageId: turn.rootMessageId,
     });
     const atelierMcp = await createAtelierSdkMcpServer(
       tools,
@@ -182,7 +217,7 @@ export class ClaudeAgentRunner implements AgentRunner {
           includePartialMessages: true,
           permissionMode: !turn.agent.allowShell
             ? 'default'
-            : turn.project?.allowFullPermissions
+            : turn.project?.allowFullPermissions && turn.trust !== 'teammate'
               ? 'bypassPermissions'
               : 'acceptEdits',
           allowedTools,
@@ -190,6 +225,33 @@ export class ClaudeAgentRunner implements AgentRunner {
           canUseTool: async (toolName: string, input: Record<string, unknown>) => {
             if (!turn.agent.allowShell && toolName === 'Bash') {
               return { behavior: 'deny', message: 'Shell execution is disabled for this agent.' };
+            }
+            if (turn.trust === 'teammate' && toolName === 'Bash') {
+              const cmd =
+                (typeof input.command === 'string' && input.command) ||
+                (typeof input.cmd === 'string' && input.cmd) ||
+                '';
+              if (/\b(?:git\s+push|rm\s+-rf|npm\s+publish|pnpm\s+publish|yarn\s+publish)\b|curl\b[^|]*\|\s*(?:sh|bash)/i.test(cmd)) {
+                if (turn.channelId) {
+                  this.store.channels.postMessage({
+                    channelId: turn.channelId,
+                    author: 'system',
+                    agentId: null,
+                    text: `${turn.agent.name} requested approval: \`${cmd.slice(0, 120)}\``,
+                    metadata: {
+                      approvalRequest: {
+                        command: cmd.slice(0, 300),
+                        approved: false,
+                        agentId: turn.agent.id,
+                      },
+                    },
+                  });
+                }
+                return {
+                  behavior: 'deny',
+                  message: `needs_user_approval: Sensitive command "${cmd.slice(0, 80)}" cannot run from a teammate trigger without explicit user approval.`,
+                };
+              }
             }
             const fileCandidate =
               (typeof input.file_path === 'string' && input.file_path) ||

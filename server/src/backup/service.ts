@@ -12,6 +12,7 @@ import type {
 } from '@atelier/contracts';
 import type { AppConfig } from '../config.js';
 import type { AtelierDb } from '../db.js';
+import { reconcileImportedGroupChat } from '../channels/migration.js';
 import {
   decryptWithKey,
   encryptWithKey,
@@ -269,6 +270,15 @@ export class BackupService {
       const safetyCopy = this.writeSafetyCopy();
       await this.hooks.beforeImport?.();
       this.replaceContentsFrom(tmp, { keepLocalSecrets: !manifest.includesSecrets });
+      const missingChannels = (
+        this.db.sqlite.prepare(`SELECT COUNT(*) AS cnt FROM channels`).get() as { cnt: number }
+      ).cnt === 0;
+      const orphanMsgs = (
+        this.db.sqlite.prepare(`SELECT COUNT(*) AS cnt FROM messages WHERE channel_id IS NULL`).get() as { cnt: number }
+      ).cnt > 0;
+      if (missingChannels || orphanMsgs) {
+        reconcileImportedGroupChat(this.db.sqlite);
+      }
       if (manifest.includesSecrets) {
         this.rekeyImportedSiteCredentials(passphrase);
       }

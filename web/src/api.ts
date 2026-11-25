@@ -7,6 +7,8 @@ import type {
   BrowserSessionInfo,
   BrowserStatusInfo,
   CanonEntry,
+  Channel,
+  ChannelSettings,
   AuthStatus,
   AutoBackupConfig,
   AutoBackupConfigInput,
@@ -19,9 +21,12 @@ import type {
   MeetingMode,
   MeetingSession,
   MeetingStatusEvent,
+  Message,
   MessageAttachment,
   RecoveryKeyResponse,
   RelinkCandidate,
+  RoomQueueSnapshot,
+  RoomSession,
   ApiErrorResponse,
   CreateAgentInput,
   CreateProjectInput,
@@ -307,6 +312,92 @@ export const api = {
 
   stopAgent: (agentId: string) =>
     request<{ ok: boolean; stopped: boolean }>(`/api/agents/${agentId}/stop`, {
+      method: 'POST',
+    }),
+
+  // Project Group Chat Rooms & Channels
+  getProjectRoom: (projectId: string) =>
+    request<{
+      channel: Channel;
+      members: Agent[];
+      sessions: RoomSession[];
+      queue: RoomQueueSnapshot;
+    }>(`/api/projects/${projectId}/room`),
+
+  updateChannel: (
+    channelId: string,
+    patch: { defaultResponderAgentId?: string | null; settings?: ChannelSettings },
+  ) =>
+    request<{ channel: Channel }>(`/api/channels/${channelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  listChannelMessages: (
+    channelId: string,
+    opts?: { beforeRowid?: number; limit?: number; sessionId?: string },
+  ) => {
+    const params = new URLSearchParams();
+    if (opts?.beforeRowid !== undefined) params.set('beforeRowid', String(opts.beforeRowid));
+    if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+    if (opts?.sessionId) params.set('sessionId', opts.sessionId);
+    const qs = params.toString();
+    return request<{ messages: Message[]; oldestRowid: number | null; hasMore: boolean }>(
+      `/api/channels/${channelId}/messages${qs ? `?${qs}` : ''}`,
+    );
+  },
+
+  sendChannelMessage: (
+    channelId: string,
+    input: {
+      text: string;
+      mentionAgentIds?: string[];
+      attachmentIds?: string[];
+      skillIds?: string[];
+      replyToMessageId?: string;
+    },
+  ) =>
+    request<{
+      ok: boolean;
+      messageId: string;
+      deliveredTo: string[];
+      queueItemId: string | null;
+    }>(`/api/channels/${channelId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  startRoomSession: (channelId: string, carryover: 'summary' | 'clean' = 'summary') =>
+    request<{ session: RoomSession; channel: Channel }>(`/api/channels/${channelId}/sessions`, {
+      method: 'POST',
+      body: JSON.stringify({ carryover }),
+    }),
+
+  forwardToChannel: (channelId: string, fromChannelId: string, messageIds: string[]) =>
+    request<{ ok: boolean; message: Message }>(`/api/channels/${channelId}/forward`, {
+      method: 'POST',
+      body: JSON.stringify({ fromChannelId, messageIds }),
+    }),
+
+  skipRoomTurn: (channelId: string) =>
+    request<{ ok: boolean; skipped: boolean; agentId: string | null }>(
+      `/api/channels/${channelId}/skip`,
+      { method: 'POST' },
+    ),
+
+  stopRoom: (channelId: string) =>
+    request<{ ok: boolean; stopped: boolean }>(`/api/channels/${channelId}/stop`, {
+      method: 'POST',
+    }),
+
+  reorderRoomQueue: (channelId: string, order: string[]) =>
+    request<{ ok: boolean; queue: RoomQueueSnapshot }>(`/api/channels/${channelId}/queue`, {
+      method: 'PATCH',
+      body: JSON.stringify({ order }),
+    }),
+
+  continueRoomChain: (channelId: string, rootMessageId: string) =>
+    request<{ ok: boolean }>(`/api/channels/${channelId}/chains/${rootMessageId}/continue`, {
       method: 'POST',
     }),
 

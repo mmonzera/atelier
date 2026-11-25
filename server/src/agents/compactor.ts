@@ -425,3 +425,155 @@ export function compactAgentScope(
     }),
   };
 }
+
+/** Shared channel-level compaction for project group-chat rooms (§4.9 #3). */
+export function compactChannelScope(
+  store: AtelierStore,
+  channelId: string,
+  actingAgentId: string,
+  opts?: { force?: boolean; reason?: 'auto' | 'manual'; keepRecentMessages?: number; trigger?: CompactTrigger },
+): CompactScopeResult {
+  const channel = store.channels.getChannel(channelId);
+  if (!channel) {
+    return { compacted: false, compaction: null, compactedCount: 0, agent: null };
+  }
+
+  const prevCompaction = channel.compaction ?? null;
+  const settings = store.getSettings();
+  const allMessages = store.channels
+    .listChannelMessagesWithRowids(channelId, { sessionId: channel.currentSessionId })
+    .map((r) => r.message);
+  const uncompacted = getUncompactedMessages(allMessages, prevCompaction);
+
+  if (uncompacted.length < 2) {
+    return {
+      compacted: false,
+      compaction: prevCompaction,
+      compactedCount: 0,
+      agent: store.getAgent(actingAgentId),
+    };
+  }
+
+  const keepBudget = opts?.keepRecentMessages ?? settings.autoCompact.keepRecentMessages;
+  const targetKeep = opts?.force
+    ? Math.min(2, Math.max(0, uncompacted.length - 1))
+    : opts?.trigger === 'provider_limit'
+      ? Math.min(keepBudget, Math.max(2, uncompacted.length - 2))
+      : Math.min(keepBudget, Math.max(0, uncompacted.length - 1));
+
+  const splitIdx = uncompacted.length - targetKeep;
+  const toCompact = uncompacted.slice(0, splitIdx);
+  const kept = uncompacted.slice(splitIdx);
+  if (toCompact.length === 0) {
+    return {
+      compacted: false,
+      compaction: prevCompaction,
+      compactedCount: 0,
+      agent: store.getAgent(actingAgentId),
+    };
+  }
+
+  const actingAgent = store.getAgent(actingAgentId);
+  const estimatedTokensBefore = estimateActiveContextTokens(
+    allMessages,
+    prevCompaction,
+    actingAgent?.scopeTokens?.[channelId],
+  );
+  const structured = buildDeterministicMemory(prevCompaction, toCompact, allMessages);
+  const picks = designPicks(allMessages);
+  const summary = renderStructuredMemory(structured);
+  const estimatedTokensAfter =
+    estimateTokens(summary) + estimateTokens(conversationTail(kept, null, '', settings.autoCompact.tailTokens));
+
+  const compaction: ThreadCompaction = {
+    summary,
+    structured,
+    compactedMessageCount: (prevCompaction?.compactedMessageCount ?? 0) + toCompact.length,
+    lastCompactedMessageId: toCompact[toCompact.length - 1]!.id,
+    compactedAt: new Date().toISOString(),
+    estimatedTokensBefore,
+    estimatedTokensAfter,
+    ...(opts?.trigger ? { trigger: opts.trigger } : {}),
+  };
+
+  store.channels.updateChannel(channelId, { compaction });
+
+  const rotate = opts?.reason !== 'auto' || opts?.trigger === 'provider_limit';
+  if (channel.projectId) {
+    for (const member of store.listProjectAgents(channel.projectId)) {
+      const nextSessions = { ...(member.sessions ?? {}) };
+      let changed = false;
+      if (rotate && nextSessions[channelId]) {
+        delete nextSessions[channelId];
+        changed = true;
+      }
+      if (rotate && nextSessions[channel.projectId]) {
+        delete nextSessions[channel.projectId];
+        changed = true;
+      }
+      if (member.id === actingAgentId) {
+        const nextCompactions = {
+          ...(member.contextCompactions ?? {}),
+          [channel.projectId]: compaction,
+        };
+        const reportedTokens = member.scopeTokens?.[channel.projectId] ?? member.scopeTokens?.[channelId] ?? 0;
+        const conversationTokensAfter =
+          estimateTokens(summary) +
+          kept.reduce((acc, m) => acc + estimateTokens(archiveText(m, picks.get(m.id))), 0);
+        store.updateAgent(member.id, {
+          ...(changed ? { sessions: nextSessions } : {}),
+          contextCompactions: nextCompactions,
+          scopeTokens: {
+            ...(member.scopeTokens ?? {}),
+            [channelId]: rotate ? estimatedTokensAfter : reportedTokens,
+            [channel.projectId]: rotate ? estimatedTokensAfter : reportedTokens,
+          },
+          conversationTokens: {
+            ...(member.conversationTokens ?? {}),
+            [channelId]: conversationTokensAfter,
+            [channel.projectId]: conversationTokensAfter,
+          },
+        });
+      } else if (changed) {
+        store.updateAgent(member.id, { sessions: nextSessions });
+      }
+    }
+  }
+
+  const reason = opts?.reason ?? 'manual';
+  const summaryPreview = summary.replace(/\s+/g, ' ').trim().slice(0, 180);
+  store.channels.postMessage({
+    channelId,
+    author: 'system',
+    agentId: null,
+    text: summary,
+    metadata: {
+      compacted: true,
+      compactedCount: toCompact.length,
+      compactedSummaryPreview: summaryPreview,
+    },
+  });
+
+  store.addActivity({
+    projectId: channel.projectId,
+    agentId: actingAgentId,
+    kind: 'status',
+    label: reason === 'auto' ? 'Auto-compacted room context' : 'Compacted room context',
+    detail: `Summarized ${toCompact.length} messages (~${estimatedTokensBefore} → ~${estimatedTokensAfter} tokens)`,
+  });
+
+  return {
+    compacted: true,
+    compaction,
+    compactedCount: toCompact.length,
+    agent: store.getAgent(actingAgentId),
+    summarizerInput: JSON.stringify({
+      previous: prevCompaction?.summary.slice(0, MAX_SUMMARY_CHARS),
+      messages: toCompact.slice(-60).map((message) => ({
+        id: message.id,
+        author: message.author,
+        text: trimHistory(archiveText(message, picks.get(message.id)), message.id, 400, 200),
+      })),
+    }),
+  };
+}

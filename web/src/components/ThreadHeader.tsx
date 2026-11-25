@@ -1,18 +1,32 @@
 import { useT } from '../i18n';
-import type { Agent, AgentViewTab, Project, WorkspaceTab } from '@atelier/contracts';
-import { MoreHorizontal } from 'lucide-react';
+import type {
+  Agent,
+  AgentViewTab,
+  Channel,
+  Project,
+  RoomQueueSnapshot,
+  WorkspaceTab,
+} from '@atelier/contracts';
+import { MoreHorizontal, RotateCcw, Square } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { getColorVar } from './Atoms';
 import { BotMascot } from './mascot/BotMascot';
 
 interface ThreadHeaderProps {
   mode: 'project' | 'agent';
   project: Project | null;
   activeAgent: Agent | null;
+  roomChannel?: Channel | null;
+  roomAgents?: Agent[];
+  roomQueue?: RoomQueueSnapshot | null;
   activeTab: WorkspaceTab;
   agentTab: AgentViewTab;
   hasActiveBrowserSession?: boolean;
   onChangeTab: (tab: WorkspaceTab) => void;
   onChangeAgentTab: (tab: AgentViewTab) => void;
+  onSelectRoomAgent?: (agentId: string) => void;
+  onNewRoomSession?: (carryover: 'summary' | 'clean') => void;
+  onStopRoom?: () => void;
   onEditAgent: () => void;
   onNewTask: () => void;
   onCompactContext?: () => void;
@@ -41,11 +55,17 @@ export function ThreadHeader({
   mode,
   project,
   activeAgent,
+  roomChannel,
+  roomAgents = [],
+  roomQueue,
   activeTab,
   agentTab,
   hasActiveBrowserSession = false,
   onChangeTab,
   onChangeAgentTab,
+  onSelectRoomAgent,
+  onNewRoomSession,
+  onStopRoom,
   onEditAgent,
   onNewTask,
   onCompactContext,
@@ -56,24 +76,37 @@ export function ThreadHeader({
 }: ThreadHeaderProps) {
   const t = useT();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [sessionOpen, setSessionOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const leftRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen && !membersOpen && !sessionOpen) return;
     const onDown = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
+        setSessionOpen(false);
+      }
+      if (leftRef.current && !leftRef.current.contains(e.target as Node)) {
+        setMembersOpen(false);
       }
     };
     window.addEventListener('mousedown', onDown);
     return () => window.removeEventListener('mousedown', onDown);
-  }, [menuOpen]);
+  }, [menuOpen, membersOpen, sessionOpen]);
 
   const isWide =
     (mode === 'project' && activeTab !== 'chat') ||
     (mode === 'agent' && agentTab !== 'chat');
 
+  const isRoomHeader = mode === 'project' && Boolean(project) && Boolean(roomChannel);
   const hasContext = mode === 'project' ? Boolean(project) : Boolean(activeAgent);
+  const workingRoomAgents = roomAgents.filter((a) => a.status === 'working');
+  const isRoomBusy =
+    workingRoomAgents.length > 0 ||
+    Boolean(roomQueue?.activeAgentId) ||
+    (roomQueue?.queued.length ?? 0) > 0;
 
   return (
     <header
@@ -90,44 +123,227 @@ export function ThreadHeader({
         transition: 'max-width 200ms var(--ease-atelier)',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-        <BotMascot
-          size={32}
-          color={activeAgent?.color ?? 'blue'}
-          shape={activeAgent?.avatarShape}
-          seed={activeAgent?.id ?? 'atelier'}
-          status={activeAgent?.status}
-        />
-        <div
-          style={{
-            fontSize: 14,
-            lineHeight: '20px',
-            fontWeight: 500,
-            color: 'var(--text-primary)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          {mode === 'agent' && activeAgent ? t('{name} · Direct', { name: activeAgent.name }) : project ? `${activeAgent?.name ?? 'Agent'} · ${project.name}` : t('Atelier · Agent Harness & Task Studio')}
-        </div>
-
-        {hasContext && activeAgent?.role && (
-          <span
+      <div
+        ref={leftRef}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, position: 'relative' }}
+      >
+        {isRoomHeader && roomAgents.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setMembersOpen((v) => !v)}
+            title={t('Room members & models')}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              padding: '2px 8px',
-              borderRadius: '9999px',
-              background: 'var(--surface-1)',
-              border: '1px solid var(--border-subtle)',
-              fontSize: 11,
-              color: 'var(--text-secondary)',
-              whiteSpace: 'nowrap',
+              gap: 8,
+              minWidth: 0,
+              padding: '2px 6px 2px 2px',
+              borderRadius: 'var(--radius-full)',
             }}
           >
-            {activeAgent.role}
-          </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+              {roomAgents.slice(0, 4).map((m, idx) => (
+                <span
+                  key={m.id}
+                  style={{
+                    marginLeft: idx === 0 ? 0 : -8,
+                    position: 'relative',
+                    display: 'inline-flex',
+                    borderRadius: '9999px',
+                    border: '1.5px solid var(--bg-canvas, #0d0d11)',
+                  }}
+                >
+                  <BotMascot
+                    size={26}
+                    color={m.color}
+                    shape={m.avatarShape}
+                    seed={m.id}
+                    status={m.status}
+                  />
+                </span>
+              ))}
+            </span>
+            <span
+              style={{
+                fontSize: 14,
+                lineHeight: '20px',
+                fontWeight: 500,
+                color: 'var(--text-primary)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {project?.name}
+            </span>
+            <span
+              className="mono-num"
+              style={{
+                fontSize: 11,
+                color: 'var(--text-tertiary)',
+                padding: '1px 7px',
+                borderRadius: '9999px',
+                background: 'var(--surface-1)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              {roomAgents.length}
+            </span>
+          </button>
+        ) : (
+          <>
+            <BotMascot
+              size={32}
+              color={activeAgent?.color ?? 'blue'}
+              shape={activeAgent?.avatarShape}
+              seed={activeAgent?.id ?? 'atelier'}
+              status={activeAgent?.status}
+            />
+            <div
+              style={{
+                fontSize: 14,
+                lineHeight: '20px',
+                fontWeight: 500,
+                color: 'var(--text-primary)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {mode === 'agent' && activeAgent
+                ? t('{name} · Direct', { name: activeAgent.name })
+                : project
+                  ? `${activeAgent?.name ?? 'Agent'} · ${project.name}`
+                  : t('Atelier · Agent Harness & Task Studio')}
+            </div>
+
+            {hasContext && activeAgent?.role && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 8px',
+                  borderRadius: '9999px',
+                  background: 'var(--surface-1)',
+                  border: '1px solid var(--border-subtle)',
+                  fontSize: 11,
+                  color: 'var(--text-secondary)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {activeAgent.role}
+              </span>
+            )}
+          </>
+        )}
+
+        {isRoomHeader && membersOpen && (
+          <div
+            className="popover-shadow"
+            style={{
+              position: 'absolute',
+              top: 38,
+              left: 0,
+              width: 260,
+              background: 'var(--surface-1)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-md)',
+              padding: 6,
+              zIndex: 45,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+            }}
+          >
+            <div
+              style={{
+                padding: '4px 8px 6px',
+                fontSize: 11,
+                fontWeight: 600,
+                color: 'var(--text-tertiary)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+              }}
+            >
+              {t('Room members')}
+            </div>
+            {roomAgents.map((m) => {
+              const isResponder = roomChannel?.defaultResponderAgentId === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => {
+                    setMembersOpen(false);
+                    onSelectRoomAgent?.(m.id);
+                    onEditAgent();
+                  }}
+                  className="transition-atelier"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    padding: '6px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--surface-3)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '9999px',
+                        background: getColorVar(m.color),
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, color: 'var(--text-primary)', fontWeight: 500 }}>
+                        {m.name}
+                        {isResponder ? (
+                          <span style={{ marginLeft: 5, fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                            · {t('default')}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: 'var(--text-tertiary)',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {m.role}
+                      </div>
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 10.5,
+                      color:
+                        m.status === 'working'
+                          ? 'var(--agent-blue)'
+                          : m.status === 'error'
+                            ? 'var(--agent-red)'
+                            : 'var(--text-muted)',
+                    }}
+                  >
+                    {m.status}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
 
@@ -216,9 +432,130 @@ export function ThreadHeader({
                 })}
           </nav>
 
+          {isRoomHeader && activeTab === 'chat' && isRoomBusy && onStopRoom && (
+            <button
+              type="button"
+              onClick={onStopRoom}
+              title={t('Stop room')}
+              style={{
+                height: 28,
+                padding: '0 10px',
+                borderRadius: 'var(--radius-full)',
+                background: 'rgba(248, 113, 113, 0.12)',
+                border: '1px solid rgba(248, 113, 113, 0.3)',
+                color: 'var(--agent-red)',
+                fontSize: 11.5,
+                fontWeight: 500,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+            >
+              <Square size={11} fill="var(--agent-red)" />
+              {t('Stop room')}
+            </button>
+          )}
+
+          {isRoomHeader && activeTab === 'chat' && onNewRoomSession && (
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setSessionOpen((v) => !v);
+                  setMenuOpen(false);
+                }}
+                title={t('Start a new room session')}
+                style={{
+                  height: 28,
+                  padding: '0 10px',
+                  borderRadius: 'var(--radius-full)',
+                  background: 'var(--surface-1)',
+                  border: '1px solid var(--border-subtle)',
+                  color: 'var(--text-secondary)',
+                  fontSize: 11.5,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                }}
+              >
+                <RotateCcw size={11} strokeWidth={1.75} />
+                {t('New session')}
+              </button>
+              {sessionOpen && (
+                <div
+                  className="popover-shadow"
+                  style={{
+                    position: 'absolute',
+                    top: 34,
+                    right: 0,
+                    width: 220,
+                    background: 'var(--surface-1)',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: 6,
+                    zIndex: 45,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSessionOpen(false);
+                      onNewRoomSession('summary');
+                    }}
+                    className="transition-atelier"
+                    style={{
+                      textAlign: 'left',
+                      padding: '7px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: 12.5,
+                      color: 'var(--text-primary)',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--surface-3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent';
+                    }}
+                  >
+                    {t('New session + summary')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSessionOpen(false);
+                      onNewRoomSession('clean');
+                    }}
+                    className="transition-atelier"
+                    style={{
+                      textAlign: 'left',
+                      padding: '7px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: 12.5,
+                      color: 'var(--text-secondary)',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--surface-3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent';
+                    }}
+                  >
+                    {t('New session (clean)')}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             type="button"
-            onClick={() => setMenuOpen((v) => !v)}
+            onClick={() => {
+              setMenuOpen((v) => !v);
+              setSessionOpen(false);
+            }}
             aria-label={t('Options')}
             className="transition-atelier"
             style={{

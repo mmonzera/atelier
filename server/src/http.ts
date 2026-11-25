@@ -491,7 +491,7 @@ export function createHttpRouter(deps: {
     }
     try {
       const { entry, option, notify } = store.pickDesign(projectId, message, optionId, segmentIndex);
-      if (notify) runtime.enqueue({
+      if (notify && message.agentId) runtime.enqueue({
         agentId: message.agentId,
         projectId,
         kind: 'user',
@@ -609,6 +609,43 @@ export function createHttpRouter(deps: {
     }
 
     try {
+      const promptText = parsed.data.text || ATTACHMENT_ONLY_TEXT;
+      if (parsed.data.projectId && store.getSettings().groupChat !== false) {
+        const proj = store.getProject(parsed.data.projectId);
+        if (!proj) {
+          return c.json(
+            apiError('project_not_found', `Project ${parsed.data.projectId} not found.`),
+            404,
+          );
+        }
+        const room = store.channels.ensureRoom(
+          proj.id,
+          proj.name,
+          store.listProjectAgents(proj.id),
+        );
+        const owner = store.getAgent(agentId);
+        if (!owner) {
+          return c.json(apiError('agent_not_found', `Agent ${agentId} not found.`), 404);
+        }
+        const mentionTargets = mentionIds.length > 0 ? mentionIds : [agentId];
+        const res = runtime.postToChannel(room.id, {
+          text: promptText,
+          mentionAgentIds: mentionTargets,
+          attachments,
+          skills: invokedSkills,
+        });
+        return c.json(
+          {
+            ok: true,
+            agentId: res.dispatchedAgentIds[0] ?? agentId,
+            messageId: res.message.id,
+            ...(mentionIds.length > 0 ? { dispatchedAgentIds: res.dispatchedAgentIds } : {}),
+            queueItemId: res.queueItemId,
+          },
+          202,
+        );
+      }
+
       const targetIds = mentionIds.length > 0 ? mentionIds : [agentId];
       const results = targetIds.map((targetId) =>
         runtime.enqueue({
@@ -616,7 +653,7 @@ export function createHttpRouter(deps: {
           agentId: targetId,
           projectId: parsed.data.projectId ?? null,
           kind: 'user',
-          prompt: parsed.data.text || ATTACHMENT_ONLY_TEXT,
+          prompt: promptText,
           attachments,
         }),
       );
@@ -635,6 +672,232 @@ export function createHttpRouter(deps: {
         404,
       );
     }
+  });
+
+  // Project Group Chat Rooms & Channels
+  api.get('/projects/:id/room', (c) => {
+    const projectId = c.req.param('id');
+    const project = store.getProject(projectId);
+    if (!project) {
+      return c.json(apiError('project_not_found', `Project ${projectId} not found.`), 404);
+    }
+    const members = store.listProjectAgents(project.id);
+    const channel = store.channels.ensureRoom(project.id, project.name, members);
+    const sessions = store.channels.listRoomSessions(channel.id);
+    const queue = runtime.getRoomQueueSnapshot(channel.id);
+    return c.json({ channel, members, sessions, queue });
+  });
+
+  api.patch('/channels/:id', async (c) => {
+    const channelId = c.req.param('id');
+    const body = await c.req.json().catch(() => null);
+    const parsed = z
+      .object({
+        defaultResponderAgentId: z.string().nullable().optional(),
+        settings: z
+          .object({
+            idleTimeoutMin: z.number().int().min(1).max(120).optional(),
+            maxTurnMin: z.number().int().min(1).max(240).optional(),
+            maxHops: z.number().int().min(1).max(20).optional(),
+            maxTurnsPerChain: z.number().int().min(1).max(50).optional(),
+            maxTokensPerChain: z.number().int().min(1000).max(2_000_000).optional(),
+            parallel: z.boolean().optional(),
+          })
+          .optional(),
+      })
+      .safeParse(body);
+    if (!parsed.success) {
+      return c.json(apiError('invalid_channel_update', 'Invalid channel update payload.'), 400);
+    }
+    const updated = store.channels.updateChannel(channelId, parsed.data);
+    if (!updated) {
+      return c.json(apiError('channel_not_found', `Channel ${channelId} not found.`), 404);
+    }
+    return c.json({ channel: updated });
+  });
+
+  api.get('/channels/:id/messages', (c) => {
+    const channelId = c.req.param('id');
+    const channel = store.channels.getChannel(channelId);
+    if (!channel) {
+      return c.json(apiError('channel_not_found', `Channel ${channelId} not found.`), 404);
+    }
+    const beforeRaw = c.req.query('beforeRowid');
+    const limitRaw = c.req.query('limit');
+    const sessionId = c.req.query('sessionId') || undefined;
+    const beforeRowid = beforeRaw ? Number(beforeRaw) : undefined;
+    const limit = limitRaw ? Number(limitRaw) : 100;
+    const res = store.channels.listChannelMessages(channelId, {
+      beforeRowid: Number.isFinite(beforeRowid) ? beforeRowid : undefined,
+      limit: Number.isFinite(limit) ? limit : 100,
+      sessionId,
+    });
+    return c.json(res);
+  });
+
+  api.post('/channels/:id/messages', async (c) => {
+    const channelId = c.req.param('id');
+    const channel = store.channels.getChannel(channelId);
+    if (!channel) {
+      return c.json(apiError('channel_not_found', `Channel ${channelId} not found.`), 404);
+    }
+    const body = await c.req.json().catch(() => null);
+    const parsed = z
+      .object({
+        text: z.string().trim().default(''),
+        mentionAgentIds: z.array(z.string().trim().min(1)).max(5).optional(),
+        attachmentIds: z.array(z.string()).max(8).optional(),
+        skillIds: z.array(z.string().trim().min(1).max(120)).max(5).optional(),
+        replyToMessageId: z.string().trim().min(1).optional(),
+      })
+      .safeParse(body);
+
+    if (!parsed.success || (!parsed.data.text && !parsed.data.attachmentIds?.length)) {
+      return c.json(apiError('invalid_message', 'Message text is required.'), 400);
+    }
+
+    let attachments: ReturnType<AttachmentStore['resolve']> = [];
+    try {
+      attachments = new AttachmentStore(config.dataDir).resolve(parsed.data.attachmentIds ?? []);
+    } catch (err) {
+      if (err instanceof AttachmentError) return c.json(apiError(err.code, err.message), err.status);
+      throw err;
+    }
+
+    const mentionIds = parsed.data.mentionAgentIds?.length
+      ? Array.from(new Set(parsed.data.mentionAgentIds))
+      : [];
+    if (mentionIds.length > 0) {
+      const projectAgentIds = channel.projectId
+        ? new Set(store.listProjectAgents(channel.projectId).map((a) => a.id))
+        : null;
+      for (const targetId of mentionIds) {
+        if (!store.getAgent(targetId)) {
+          return c.json(apiError('agent_not_found', `Agent ${targetId} not found.`), 404);
+        }
+        if (projectAgentIds && !projectAgentIds.has(targetId)) {
+          return c.json(
+            apiError('invalid_mention', `Agent ${targetId} does not belong to project ${channel.projectId}.`),
+            400,
+          );
+        }
+      }
+    }
+
+    const invokedSkills: AgentSkill[] = [];
+    if (parsed.data.skillIds?.length) {
+      const skillOwnerId = mentionIds[0] ?? channel.defaultResponderAgentId ?? channel.agentId;
+      const owner = skillOwnerId ? store.getAgent(skillOwnerId) : null;
+      if (owner) {
+        for (const id of new Set(parsed.data.skillIds)) {
+          const skill = owner.skills.find((s) => s.id === id);
+          if (!skill) return c.json(apiError('skill_not_found', `Skill ${id} is not installed on this agent.`), 404);
+          invokedSkills.push(skill);
+        }
+      }
+    }
+
+    const res = runtime.postToChannel(channelId, {
+      text: parsed.data.text || ATTACHMENT_ONLY_TEXT,
+      mentionAgentIds: mentionIds.length > 0 ? mentionIds : undefined,
+      attachments,
+      skills: invokedSkills,
+      replyToMessageId: parsed.data.replyToMessageId,
+    });
+    return c.json(
+      {
+        ok: true,
+        messageId: res.message.id,
+        deliveredTo: res.dispatchedAgentIds,
+        queueItemId: res.queueItemId,
+      },
+      202,
+    );
+  });
+
+  api.post('/channels/:id/sessions', async (c) => {
+    const channelId = c.req.param('id');
+    const body = await c.req.json().catch(() => null);
+    const parsed = z
+      .object({
+        carryover: z.enum(['summary', 'clean']).optional().default('summary'),
+      })
+      .safeParse(body ?? {});
+    if (!parsed.success) {
+      return c.json(apiError('invalid_session_input', 'Invalid session options.'), 400);
+    }
+    const res = runtime.startNewRoomSession(channelId, parsed.data.carryover);
+    if (!res) {
+      return c.json(apiError('channel_not_found', `Room channel ${channelId} not found.`), 404);
+    }
+    return c.json(res, 201);
+  });
+
+  api.post('/channels/:id/forward', async (c) => {
+    const channelId = c.req.param('id');
+    const body = await c.req.json().catch(() => null);
+    const parsed = z
+      .object({
+        fromChannelId: z.string().trim().min(1),
+        messageIds: z.array(z.string().trim().min(1)).min(1).max(20),
+      })
+      .safeParse(body);
+    if (!parsed.success) {
+      return c.json(apiError('invalid_forward', 'fromChannelId and messageIds are required.'), 400);
+    }
+    const agents = new Map(store.listAgents().map((a) => [a.id, a.name]));
+    const res = store.channels.forwardMessages(channelId, {
+      ...parsed.data,
+      agentNameLookup: (id) => (id ? agents.get(id) ?? 'Agent' : 'Agent'),
+    });
+    if (!res) {
+      return c.json(apiError('forward_failed', 'Target channel or source messages not found.'), 404);
+    }
+    return c.json({ ok: true, message: res.message }, 201);
+  });
+
+  api.post('/channels/:id/skip', (c) => {
+    const channelId = c.req.param('id');
+    if (!store.channels.getChannel(channelId)) {
+      return c.json(apiError('channel_not_found', `Channel ${channelId} not found.`), 404);
+    }
+    const res = runtime.skipRoomTurn(channelId);
+    return c.json({ ok: true, ...res });
+  });
+
+  api.post('/channels/:id/stop', async (c) => {
+    const channelId = c.req.param('id');
+    if (!store.channels.getChannel(channelId)) {
+      return c.json(apiError('channel_not_found', `Channel ${channelId} not found.`), 404);
+    }
+    const res = await runtime.stopRoom(channelId);
+    return c.json({ ok: true, ...res });
+  });
+
+  api.patch('/channels/:id/queue', async (c) => {
+    const channelId = c.req.param('id');
+    if (!store.channels.getChannel(channelId)) {
+      return c.json(apiError('channel_not_found', `Channel ${channelId} not found.`), 404);
+    }
+    const body = await c.req.json().catch(() => null);
+    const parsed = z.object({ order: z.array(z.string().trim().min(1)).max(50) }).safeParse(body);
+    if (!parsed.success) {
+      return c.json(apiError('invalid_queue_order', 'order array is required.'), 400);
+    }
+    store.reorderChannelQueue(channelId, parsed.data.order);
+    const snapshot = runtime.getRoomQueueSnapshot(channelId);
+    store.emitEvent({ type: 'room-queue-updated', payload: snapshot });
+    return c.json({ ok: true, queue: snapshot });
+  });
+
+  api.post('/channels/:id/chains/:rootMessageId/continue', (c) => {
+    const channelId = c.req.param('id');
+    const rootMessageId = c.req.param('rootMessageId');
+    const ok = runtime.continueRoomChain(channelId, rootMessageId);
+    if (!ok) {
+      return c.json(apiError('chain_not_found', `Chain ${rootMessageId} not found.`), 404);
+    }
+    return c.json({ ok: true });
   });
 
   api.post('/agents/:id/stop', async (c) => {
@@ -728,6 +991,7 @@ export function createHttpRouter(deps: {
           .default('todo'),
         priority: z.enum(['urgent', 'high', 'medium', 'low', 'none']).optional().default('medium'),
         assigneeAgentId: z.string().nullable().optional(),
+        blockedBy: z.array(z.string().trim().min(1)).max(20).optional(),
         branch: z.string().nullable().optional(),
         prUrl: z.string().nullable().optional(),
       })
@@ -756,6 +1020,7 @@ export function createHttpRouter(deps: {
           .optional(),
         priority: z.enum(['urgent', 'high', 'medium', 'low', 'none']).optional(),
         assigneeAgentId: z.string().nullable().optional(),
+        blockedBy: z.array(z.string().trim().min(1)).max(20).optional(),
         branch: z.string().nullable().optional(),
         prUrl: z.string().nullable().optional(),
         deliverableSummary: z.string().nullable().optional(),
@@ -766,7 +1031,15 @@ export function createHttpRouter(deps: {
       return c.json(apiError('invalid_task_update', 'Invalid task update payload.'), 400);
     }
 
-    const task = store.updateTask(id, parsed.data);
+    let task: ReturnType<typeof store.updateTask>;
+    try {
+      task = store.updateTask(id, parsed.data);
+    } catch (err) {
+      return c.json(
+        apiError('invalid_task_dependency', err instanceof Error ? err.message : 'Invalid task update.'),
+        400,
+      );
+    }
     if (!task) {
       return c.json(apiError('task_not_found', `Task ${id} not found.`), 404);
     }

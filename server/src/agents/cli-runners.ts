@@ -29,6 +29,7 @@ import {
   spawnCli,
 } from './cli-spawn.js';
 import { AttachmentStore } from '../attachments.js';
+import { RoomContextBuilder } from '../channels/context.js';
 import { conversationTail, estimateTokens, getScopeKey } from './compactor.js';
 import { resolveMcpAuth } from '../mcp/oauth.js';
 import { buildAgentSystemPrompt, renderCanon } from './prompts.js';
@@ -340,7 +341,40 @@ export class CliAgentRunner implements AgentRunner {
   }
 
   private buildConversationContext(turn: Turn, cb: TurnCallbacks, hasNativeResume: boolean): string {
-    if (hasNativeResume || turn.memoryOnly || turn.recallContinuation) return turn.prompt;
+    if (turn.memoryOnly || turn.recallContinuation) return turn.prompt;
+    const channel = turn.channelId ? this.store.channels.getChannel(turn.channelId) : null;
+    if (channel) {
+      const files = this.attachmentStore;
+      const triggerMessage = turn.currentMessageId ? this.store.getMessage(turn.currentMessageId) : null;
+      const projectAgents = turn.project
+        ? this.store.listProjectAgents(turn.project.id)
+        : [turn.agent];
+      const projectTasks = turn.project
+        ? this.store.listProjectTasks(turn.project.id)
+        : this.store.listAgentTasks(turn.agent.id);
+      const built = new RoomContextBuilder(this.store.channels).build({
+        channel,
+        agent: turn.agent,
+        project: turn.project,
+        projectAgents,
+        allAgents: this.store.listAgents(),
+        tasks: projectTasks,
+        triggerMessage,
+        currentPrompt: turn.prompt,
+        hasResumeSession: hasNativeResume,
+        turnPurpose: turn.turnPurpose,
+        trust: turn.trust,
+        tailTokens: this.store.getSettings().autoCompact.tailTokens,
+        attachmentNote: (m) => files.describe(m.metadata?.attachments),
+      });
+      cb.onMemoryTail?.(built.memoryTokens.tail, {
+        stubs: built.memoryTokens.stubs,
+        delta: built.memoryTokens.delta,
+      });
+      return built.fullPrompt;
+    }
+
+    if (hasNativeResume) return turn.prompt;
     const scopeKey = getScopeKey(turn.project?.id ?? null);
     const compaction = turn.agent.contextCompactions?.[scopeKey];
     const history = this.store.listAgentMessages(turn.agent.id, turn.project?.id ?? null);
@@ -429,6 +463,9 @@ export class CliAgentRunner implements AgentRunner {
       actingAgentId: turn.agent.id,
       enqueue: this.getEnqueue(),
       dataDir: this.config.dataDir,
+      trust: turn.trust,
+      channelId: turn.channelId,
+      rootMessageId: turn.rootMessageId,
     });
 
     let sessionId = turn.resumeSessionId;
@@ -633,7 +670,7 @@ export class CliAgentRunner implements AgentRunner {
     const nativeResumeId = turn.memoryOnly ? null : parseProviderSessionId(turn.resumeSessionId, 'claude');
     const permissionMode = !turn.agent.allowShell
       ? 'acceptEdits'
-      : turn.project?.allowFullPermissions
+      : turn.project?.allowFullPermissions && turn.trust !== 'teammate'
         ? 'bypassPermissions'
         : 'auto';
 
@@ -769,7 +806,7 @@ export class CliAgentRunner implements AgentRunner {
 
     const sandboxMode = !turn.agent.allowShell
       ? 'read-only'
-      : turn.project?.allowFullPermissions
+      : turn.project?.allowFullPermissions && turn.trust !== 'teammate'
         ? 'danger-full-access'
         : 'workspace-write';
 
@@ -891,7 +928,7 @@ export class CliAgentRunner implements AgentRunner {
       model: opts.model,
       effort: opts.effort,
       allowShell: turn.agent.allowShell,
-      allowFullPermissions: Boolean(turn.project?.allowFullPermissions),
+      allowFullPermissions: Boolean(turn.project?.allowFullPermissions) && turn.trust !== 'teammate',
       memoryOnly: Boolean(turn.memoryOnly),
       attachmentDir: this.attachmentStore.directory,
       artifactDir: fs.existsSync(artifactDir) ? artifactDir : null,

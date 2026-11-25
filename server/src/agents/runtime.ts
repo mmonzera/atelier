@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import {
   type Agent,
   type AgentSkill,
+  type Channel,
+  type Message,
   type MessageActivitySummary,
   type MessageAttachment,
   type MessageMetadata,
@@ -10,11 +12,16 @@ import {
   type PendingFallbackOffer,
   type QueueItem,
   type QueueKind,
+  type RoomQueueSnapshot,
+  type RoomSession,
   type Task,
   stripAtelierActions,
 } from '@atelier/contracts';
 import { AttachmentStore } from '../attachments.js';
 import type { BrowserManager } from '../browser/manager.js';
+import { LoopGuard } from '../channels/loop-guard.js';
+import { routeRoomMessage } from '../channels/router.js';
+import { RoomScheduler, type LeaseReleaseReason, type RoomLease } from '../channels/scheduler.js';
 import type { AppConfig } from '../config.js';
 import type { AtelierStore } from '../store.js';
 import { createActionTagStreamFilter } from './action-stream-filter.js';
@@ -23,7 +30,9 @@ import {
   type CompactScopeResult,
   type CompactTrigger,
   autoCompactTrigger,
+  buildDeterministicSummary,
   compactAgentScope,
+  compactChannelScope,
   estimateActiveContextTokens,
   estimateConversationTokens,
   estimateTokens,
@@ -48,6 +57,8 @@ export class AgentRuntime {
   private readonly activeTurns = new Map<string, Promise<void>>();
   private readonly memorySummaries = new Map<string, AbortController>();
   private readonly cooldowns = new ProviderCooldownTracker();
+  public readonly scheduler: RoomScheduler;
+  public readonly loopGuard: LoopGuard;
   private shuttingDown = false;
   private readonly runner: AgentRunner;
   private readonly attachmentStore: AttachmentStore;
@@ -59,14 +70,331 @@ export class AgentRuntime {
     customRunner?: AgentRunner,
     customRunnerFactory?: (deps: { store: AtelierStore; enqueue: EnqueueTaskFn }) => AgentRunner,
     browserManager?: BrowserManager,
+    schedulerOpts?: { idleTimeoutMin?: number; maxTurnMin?: number; sweepIntervalMs?: number },
   ) {
     this.browserManager = browserManager;
     this.attachmentStore = new AttachmentStore(config.dataDir);
+    this.loopGuard = new LoopGuard(store.sqlite);
+    const roomCfg = store.getSettings().room;
+    this.scheduler = new RoomScheduler({
+      idleTimeoutMin: schedulerOpts?.idleTimeoutMin ?? roomCfg?.idleTimeoutMin ?? 10,
+      maxTurnMin: schedulerOpts?.maxTurnMin ?? roomCfg?.maxTurnMin ?? 45,
+      sweepIntervalMs: schedulerOpts?.sweepIntervalMs ?? 15_000,
+      onTimeout: (lease, reason) => {
+        this.handleLeaseTimeout(lease, reason);
+      },
+    });
     const getEnqueue = () => this.enqueue.bind(this);
     this.runner =
       customRunner ??
       customRunnerFactory?.({ store, enqueue: this.enqueue.bind(this) }) ??
       new CliAgentRunner(store, config, getEnqueue, browserManager);
+  }
+
+  private handleLeaseTimeout(lease: RoomLease, reason: 'idle_timeout' | 'hard_timeout'): void {
+    const channel = this.store.channels.getChannel(lease.channelId);
+    const agent = this.store.getAgent(lease.agentId);
+    if (channel && agent) {
+      this.store.channels.postMessage({
+        channelId: channel.id,
+        author: 'system',
+        agentId: null,
+        text:
+          reason === 'idle_timeout'
+            ? `${agent.name} timed out after inactivity; lock released.`
+            : `${agent.name} reached the maximum turn duration; lock released.`,
+        metadata: {
+          event: {
+            kind: 'turn_skipped',
+            agentId: agent.id,
+            agentName: agent.name,
+            reason,
+          },
+        },
+      });
+    }
+    this.scheduler.release(lease.channelId, reason);
+    this.emitRoomQueue(lease.channelId);
+    this.kickNextInChannel(lease.channelId);
+  }
+
+  public getRoomQueueSnapshot(channelId: string): RoomQueueSnapshot {
+    const channel = this.store.channels.getChannel(channelId);
+    const tasks = channel?.projectId ? this.store.listProjectTasks(channel.projectId) : [];
+    return this.scheduler.snapshot(channelId, this.store.listAllQueuedItems(channelId), tasks);
+  }
+
+  private emitRoomQueue(channelId: string): void {
+    this.store.emitEvent({
+      type: 'room-queue-updated',
+      payload: this.getRoomQueueSnapshot(channelId),
+    });
+  }
+
+  private kickNextInChannel(channelId: string): void {
+    if (this.shuttingDown) return;
+    const channel = this.store.channels.getChannel(channelId);
+    if (!channel || channel.kind !== 'room') return;
+    if (!channel.settings?.parallel && this.scheduler.getLease(channelId)) return;
+    const queued = this.store.listAllQueuedItems(channelId);
+    const tasks = channel.projectId ? this.store.listProjectTasks(channel.projectId) : [];
+    const next = this.scheduler.pickNext(queued, tasks);
+    if (next) {
+      void this.drain(next.agentId);
+    }
+  }
+
+  public postToChannel(
+    channelId: string,
+    input: {
+      text: string;
+      mentionAgentIds?: string[];
+      attachments?: MessageAttachment[];
+      skillsByAgent?: Map<string, Array<Pick<AgentSkill, 'id' | 'name' | 'content'>>>;
+      skills?: Array<Pick<AgentSkill, 'id' | 'name' | 'content'>>;
+      replyToMessageId?: string;
+    },
+  ): { message: Message; dispatchedAgentIds: string[]; queueItemId: string | null } {
+    const channel = this.store.channels.getChannel(channelId);
+    if (!channel) {
+      throw new Error(`Channel not found: ${channelId}`);
+    }
+
+    if (channel.kind === 'dm') {
+      if (!channel.agentId) {
+        throw new Error(`DM channel ${channelId} has no target agent.`);
+      }
+      const { agent, item } = this.enqueue({
+        agentId: channel.agentId,
+        projectId: null,
+        channelId: channel.id,
+        kind: 'user',
+        prompt: input.text,
+        attachments: input.attachments,
+        skills: input.skills,
+        metadata: input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : undefined,
+      });
+      const msg = item.refId ? this.store.getMessage(item.refId) : null;
+      return {
+        message:
+          msg ??
+          this.store.channels.postMessage({
+            channelId: channel.id,
+            author: 'user',
+            agentId: null,
+            text: input.text,
+          }).message,
+        dispatchedAgentIds: [agent.id],
+        queueItemId: item.id,
+      };
+    }
+
+    const projectId = channel.projectId!;
+    const projectAgents = this.store.listProjectAgents(projectId);
+    const tasks = this.store.listProjectTasks(projectId);
+    const replyToMessage = input.replyToMessageId
+      ? this.store.getMessage(input.replyToMessageId)
+      : null;
+
+    const routed = routeRoomMessage(
+      { author: 'user', agentId: null, text: input.text },
+      {
+        channel,
+        projectAgents,
+        tasks,
+        replyToMessage,
+        explicitMentionAgentIds: input.mentionAgentIds,
+      },
+    );
+
+    const { message: posted, rowid } = this.store.channels.postMessage({
+      channelId: channel.id,
+      author: 'user',
+      agentId: null,
+      text: input.text,
+      metadata: {
+        ...(routed.targetAgentIds.length ? { mentions: routed.targetAgentIds, toAgentIds: routed.targetAgentIds } : {}),
+        ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        ...(input.skills?.length ? { skills: input.skills.map(({ id, name }) => ({ id, name })) } : {}),
+      },
+    });
+
+    const roomSettings = { ...(this.store.getSettings().room ?? {}), ...(channel.settings ?? {}) };
+    this.loopGuard.ensureChain(posted.id, channel.id, {
+      maxTurns: roomSettings.maxTurnsPerChain,
+      maxTokens: roomSettings.maxTokensPerChain,
+    });
+
+    let firstQueueId: string | null = null;
+    const dispatchedAgentIds: string[] = [];
+    for (let idx = 0; idx < routed.targetAgentIds.length; idx += 1) {
+      const targetId = routed.targetAgentIds[idx]!;
+      const targetAgent = this.store.getAgent(targetId);
+      if (!targetAgent) continue;
+
+      const skills = input.skillsByAgent?.get(targetId) ?? (idx === 0 ? input.skills : undefined);
+      const basePrompt = this.promptWithAttachments(input.text, input.attachments);
+      const finalPrompt = this.promptWithSkills(basePrompt, skills);
+
+      const { item } = this.store.enqueueItem({
+        agentId: targetId,
+        projectId,
+        channelId: channel.id,
+        triggerMessageId: posted.id,
+        triggerRowid: rowid,
+        mentionIndex: idx,
+        trust: 'user',
+        priority: 'normal',
+        rootMessageId: posted.id,
+        hop: 0,
+        kind: 'user',
+        prompt: finalPrompt,
+        refId: posted.id,
+      });
+      if (!firstQueueId) firstQueueId = item.id;
+      dispatchedAgentIds.push(targetId);
+
+      if (targetAgent.status === 'error') {
+        this.store.updateAgent(targetId, { lastError: null });
+      }
+    }
+
+    this.emitRoomQueue(channel.id);
+    this.kickNextInChannel(channel.id);
+
+    return {
+      message: posted,
+      dispatchedAgentIds,
+      queueItemId: firstQueueId,
+    };
+  }
+
+  public skipRoomTurn(channelId: string): { skipped: boolean; agentId: string | null } {
+    const lease = this.scheduler.skip(channelId);
+    if (!lease) return { skipped: false, agentId: null };
+    const agt = this.store.getAgent(lease.agentId);
+    const channel = this.store.channels.getChannel(channelId);
+    if (channel && agt) {
+      this.store.channels.postMessage({
+        channelId,
+        author: 'system',
+        agentId: null,
+        text: `Skipped ${agt.name}'s turn.`,
+        metadata: {
+          event: {
+            kind: 'turn_skipped',
+            agentId: agt.id,
+            agentName: agt.name,
+            reason: 'user_skipped',
+          },
+        },
+      });
+    }
+    return { skipped: true, agentId: lease.agentId };
+  }
+
+  public async stopRoom(channelId: string): Promise<{ stopped: boolean }> {
+    const lease = this.scheduler.getLease(channelId);
+    this.store.clearChannelQueue(channelId);
+    if (lease) {
+      await this.stop(lease.agentId);
+    }
+    this.scheduler.release(channelId, 'stopped');
+    this.emitRoomQueue(channelId);
+    return { stopped: Boolean(lease) };
+  }
+
+  public continueRoomChain(channelId: string, rootMessageId: string, extraTurns = 6): boolean {
+    const updated = this.loopGuard.continueChain(rootMessageId, extraTurns);
+    if (!updated) return false;
+    this.kickNextInChannel(channelId);
+    return true;
+  }
+
+  public startNewRoomSession(
+    channelId: string,
+    carryover: 'summary' | 'clean' = 'summary',
+  ): { session: RoomSession; channel: Channel } | null {
+    const channel = this.store.channels.getChannel(channelId);
+    if (!channel || channel.kind !== 'room') return null;
+
+    const currentMsgs = this.store.channels
+      .listChannelMessagesWithRowids(channelId, { sessionId: channel.currentSessionId })
+      .map((r) => r.message)
+      .filter((m) => !m.streaming && !m.metadata?.compacted && m.text.trim().length > 0);
+
+    let deterministicSummary: string | null = null;
+    if (carryover === 'summary') {
+      const parts: string[] = [];
+      if (currentMsgs.length > 0) {
+        parts.push(buildDeterministicSummary(channel.compaction?.summary, currentMsgs.slice(-60)));
+      }
+      if (channel.projectId) {
+        const openTasks = this.store
+          .listProjectTasks(channel.projectId)
+          .filter((t) => t.status !== 'done' && t.status !== 'cancelled')
+          .slice(0, 8);
+        if (openTasks.length > 0) {
+          parts.push(
+            `Open tasks: ${openTasks.map((t) => `${t.identifier} [${t.status}] ${t.title}`).join('; ')}`,
+          );
+        }
+      }
+      deterministicSummary = parts.join('\n\n').slice(0, 1600) || null;
+    }
+
+    const res = this.store.channels.startNewSession(channelId, {
+      carryover,
+      carryoverSummary: deterministicSummary,
+      startedBy: 'user',
+    });
+    if (!res) return null;
+
+    // Clear provider session ids for project agents on this channel
+    if (channel.projectId) {
+      for (const agt of this.store.listProjectAgents(channel.projectId)) {
+        if (agt.sessions?.[channelId]) {
+          const nextSessions = { ...agt.sessions };
+          delete nextSessions[channelId];
+          this.store.updateAgent(agt.id, { sessions: nextSessions });
+        }
+      }
+    }
+
+    // Refine carryover summary in the background with a 20s timeout (§10.12)
+    if (carryover === 'summary' && currentMsgs.length >= 2 && this.runner.summarize) {
+      const settings = this.store.getSettings();
+      const input = JSON.stringify({
+        previous: channel.compaction?.summary?.slice(0, 2000),
+        messages: currentMsgs.slice(-40).map((m) => ({
+          id: m.id,
+          author: m.author,
+          text: m.text.slice(0, 400),
+        })),
+      });
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20_000);
+      timer.unref();
+      void Promise.resolve()
+        .then(async () => {
+          const out = await this.runner.summarize!(
+            settings.provider,
+            settings.autoCompact.summarizerModel,
+            input,
+            ctrl.signal,
+          );
+          if (ctrl.signal.aborted) return;
+          const trimmed = out.trim().slice(0, 1600);
+          if (trimmed) {
+            this.store.channels.updateSessionCarryover(res.session.id, trimmed);
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => clearTimeout(timer));
+    }
+
+    return { session: res.session, channel: res.channel };
   }
 
   public dispatchTask(taskId: string): { task: Task; agent: Agent } {
@@ -120,6 +448,14 @@ export class AgentRuntime {
   public enqueue(input: {
     agentId: string;
     projectId?: string | null;
+    channelId?: string | null;
+    triggerMessageId?: string | null;
+    triggerRowid?: number | null;
+    mentionIndex?: number;
+    trust?: 'user' | 'teammate';
+    priority?: 'resume' | 'normal';
+    rootMessageId?: string | null;
+    hop?: number;
     kind: QueueKind;
     prompt: string;
     refId?: string | null;
@@ -135,9 +471,99 @@ export class AgentRuntime {
     }
 
     const projectId = input.projectId ?? null;
-    const author = input.kind === 'user' ? 'user' : 'teammate';
+    const channelId =
+      input.channelId ??
+      (projectId
+        ? this.store.channels.getRoomByProject(projectId)?.id ?? null
+        : this.store.channels.getDmByAgent(agent.id)?.id ?? null);
+    const channel = channelId ? this.store.channels.getChannel(channelId) : null;
     const prompt = this.promptWithSkills(this.promptWithAttachments(input.prompt, input.attachments), input.skills);
+
+    if (channel?.kind === 'room' && input.triggerMessageId) {
+      const rootId = input.rootMessageId ?? input.triggerMessageId;
+      const hop = input.hop ?? 0;
+      const roomSettings = { ...(this.store.getSettings().room ?? {}), ...(channel.settings ?? {}) };
+      const check = this.loopGuard.canEnqueue({
+        rootMessageId: rootId,
+        channelId: channel.id,
+        hop,
+        maxHops: roomSettings.maxHops,
+        maxTurns: roomSettings.maxTurnsPerChain,
+        maxTokens: roomSettings.maxTokensPerChain,
+      });
+      if (!check.allowed) {
+        if (check.reason === 'max_hops') {
+          this.store.channels.postMessage({
+            channelId: channel.id,
+            author: 'system',
+            agentId: null,
+            text: `Agent-to-agent chain stopped at ${check.maxHops ?? 6} steps — reply to continue.`,
+            metadata: {
+              event: {
+                kind: 'loop_stopped',
+                rootMessageId: rootId,
+                hop,
+                maxHops: check.maxHops ?? 6,
+              },
+            },
+          });
+        }
+        return {
+          agent,
+          item: {
+            id: 'q_skipped',
+            agentId: agent.id,
+            projectId,
+            channelId: channel.id,
+            kind: input.kind,
+            prompt,
+            refId: input.refId ?? null,
+            createdAt: new Date().toISOString(),
+          },
+        };
+      }
+      if (this.store.hasQueuedRootForAgent(channel.id, agent.id, rootId)) {
+        return {
+          agent,
+          item: this.store.listQueue(agent.id).find((q) => q.channelId === channel.id && q.rootMessageId === rootId) ?? {
+            id: 'q_deduped',
+            agentId: agent.id,
+            projectId,
+            channelId: channel.id,
+            kind: input.kind,
+            prompt,
+            refId: input.refId ?? null,
+            createdAt: new Date().toISOString(),
+          },
+        };
+      }
+      const { item, agent: updatedAgent } = this.store.enqueueItem({
+        agentId: agent.id,
+        projectId,
+        channelId: channel.id,
+        triggerMessageId: input.triggerMessageId,
+        triggerRowid: input.triggerRowid ?? this.store.channels.getMessageRowid(input.triggerMessageId),
+        mentionIndex: input.mentionIndex ?? 0,
+        trust: input.trust ?? (input.kind === 'teammate' ? 'teammate' : 'user'),
+        priority: input.priority ?? 'normal',
+        rootMessageId: rootId,
+        hop,
+        kind: input.kind,
+        prompt,
+        refId: input.refId ?? input.triggerMessageId,
+        replyToAgentId: input.replyToAgentId ?? null,
+      });
+      if (agent.status === 'error') {
+        this.store.updateAgent(agent.id, { lastError: null });
+      }
+      this.emitRoomQueue(channel.id);
+      this.kickNextInChannel(channel.id);
+      return { agent: updatedAgent ?? agent, item };
+    }
+
+    const author = input.kind === 'user' ? 'user' : 'teammate';
     const { item, agent: updatedAgent } = this.store.enqueueMessage({
+      ...(channelId ? { channelId } : {}),
       projectId,
       agentId: agent.id,
       author,
@@ -152,6 +578,11 @@ export class AgentRuntime {
     }, {
       agentId: agent.id,
       projectId,
+      channelId,
+      trust: input.trust ?? (input.kind === 'teammate' ? 'teammate' : 'user'),
+      priority: input.priority ?? 'normal',
+      rootMessageId: input.rootMessageId ?? null,
+      hop: input.hop ?? 0,
       kind: input.kind,
       // The chat bubble shows the plain text; the model also gets the file list (+ small text files).
       prompt,
@@ -163,7 +594,12 @@ export class AgentRuntime {
       this.store.updateAgent(agent.id, { lastError: null });
     }
 
-    void this.drain(agent.id);
+    if (channel?.kind === 'room') {
+      this.emitRoomQueue(channel.id);
+      this.kickNextInChannel(channel.id);
+    } else {
+      void this.drain(agent.id);
+    }
 
     return {
       agent: updatedAgent ?? agent,
@@ -242,6 +678,8 @@ export class AgentRuntime {
         this.store.enqueueItem({
           agentId: agent.id,
           projectId: pf.projectId ?? null,
+          channelId: pf.projectId ? this.store.channels.getRoomByProject(pf.projectId)?.id ?? null : null,
+          priority: 'resume',
           kind: pf.kind,
           prompt: pf.prompt,
           refId: pf.refId,
@@ -263,6 +701,9 @@ export class AgentRuntime {
           this.store.enqueueItem({
             agentId: agent.id,
             projectId: lastUser.projectId ?? null,
+            channelId: lastUser.channelId ?? null,
+            triggerMessageId: lastUser.id,
+            priority: 'resume',
             kind: 'user',
             prompt: this.promptWithSkills(
               this.promptWithAttachments(lastUser.text, lastUser.metadata?.attachments),
@@ -313,7 +754,78 @@ export class AgentRuntime {
         'Agent is currently running a turn. Wait until it finishes or stop it first.',
       );
     }
+    const room = projectId ? this.store.channels.getRoomByProject(projectId) : null;
+    if (room) {
+      return this.compactChannel(room.id, agent.id, 'manual');
+    }
     return this.compactScope(agent, projectId, 'manual');
+  }
+
+  private compactChannel(
+    channelId: string,
+    actingAgentId: string,
+    reason: 'manual' | 'auto',
+    providerOverride?: ModelProvider,
+    trigger?: CompactTrigger,
+  ): CompactScopeResult {
+    const result = compactChannelScope(this.store, channelId, actingAgentId, {
+      force: reason === 'manual',
+      reason,
+      trigger,
+    });
+    const { compaction, summarizerInput } = result;
+    if (!compaction?.structured || !summarizerInput || !this.runner.summarize) return result;
+    const settings = this.store.getSettings();
+    const actingAgent = this.store.getAgent(actingAgentId);
+    const provider = providerOverride ?? actingAgent?.providerOverride ?? settings.provider;
+    const key = `channel:${channelId}`;
+    this.memorySummaries.get(key)?.abort();
+    const controller = new AbortController();
+    this.memorySummaries.set(key, controller);
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    timer.unref();
+    void Promise.resolve()
+      .then(async () => {
+        const text = await this.runner.summarize!(
+          provider,
+          settings.autoCompact.summarizerModel,
+          summarizerInput,
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        const ch = this.store.channels.getChannel(channelId);
+        const previous = ch?.compaction;
+        if (
+          !ch ||
+          previous?.lastCompactedMessageId !== compaction.lastCompactedMessageId ||
+          previous.compactedAt !== compaction.compactedAt
+        ) {
+          return;
+        }
+        const structured = mergeModelMemory(text, compaction.structured!);
+        const summary = renderStructuredMemory(structured);
+        const updatedCompaction = { ...previous, summary, structured };
+        this.store.channels.updateChannel(channelId, {
+          compaction: updatedCompaction,
+        });
+        if (ch.projectId) {
+          const curActing = this.store.getAgent(actingAgentId);
+          if (curActing) {
+            this.store.updateAgent(actingAgentId, {
+              contextCompactions: {
+                ...(curActing.contextCompactions ?? {}),
+                [ch.projectId]: updatedCompaction,
+              },
+            });
+          }
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        clearTimeout(timer);
+        if (this.memorySummaries.get(key) === controller) this.memorySummaries.delete(key);
+      });
+    return result;
   }
 
   private compactScope(
@@ -392,6 +904,7 @@ export class AgentRuntime {
 
   public async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    this.scheduler.close();
     for (const controller of this.memorySummaries.values()) controller.abort();
     for (const controller of this.activeAborts.values()) {
       controller.abort();
@@ -414,10 +927,51 @@ export class AgentRuntime {
         const current = this.store.getAgent(agentId);
         if (!current || current.status === 'working') break;
 
-        const { item } = this.store.shiftQueue(agentId);
+        const agentQueue = this.store.listQueue(agentId);
+        const peek = agentQueue[0];
+        if (!peek) break;
+
+        let item: QueueItem | null = null;
+        let leaseController: AbortController | undefined;
+        let leaseChannelId: string | null = null;
+
+        const peekChannel = peek.channelId ? this.store.channels.getChannel(peek.channelId) : null;
+        if (peekChannel?.kind === 'room') {
+          const roomSettings = { ...(this.store.getSettings().room ?? {}), ...(peekChannel.settings ?? {}) };
+          const parallel = Boolean(roomSettings.parallel);
+          const allRoomItems = this.store.listAllQueuedItems(peekChannel.id);
+          const projectTasks = peekChannel.projectId
+            ? this.store.listProjectTasks(peekChannel.projectId)
+            : [];
+          const picked = this.scheduler.pickNext(allRoomItems, projectTasks);
+          if (!picked || picked.agentId !== agentId) {
+            break;
+          }
+          leaseController = new AbortController();
+          const lease = this.scheduler.tryAcquire(
+            peekChannel.id,
+            agentId,
+            picked.id,
+            leaseController,
+            parallel,
+          );
+          if (!lease) {
+            break;
+          }
+          leaseChannelId = peekChannel.id;
+          item = this.store.shiftQueueItemById(picked.id);
+          if (!item) {
+            this.scheduler.release(peekChannel.id, 'done');
+            continue;
+          }
+          this.emitRoomQueue(peekChannel.id);
+        } else {
+          item = this.store.shiftQueue(agentId).item;
+        }
+
         if (!item) break;
 
-        const turnPromise = this.executeTurn(item);
+        const turnPromise = this.executeTurn(item, leaseController, leaseChannelId);
         this.activeTurns.set(agentId, turnPromise);
         try {
           await turnPromise;
@@ -432,32 +986,62 @@ export class AgentRuntime {
     }
   }
 
-  private async executeTurn(item: QueueItem): Promise<void> {
+  private async executeTurn(
+    item: QueueItem,
+    leaseController?: AbortController,
+    leaseChannelId?: string | null,
+  ): Promise<void> {
     const project = item.projectId ? this.store.getProject(item.projectId) : null;
-    if (item.projectId && !project) return;
+    if (item.projectId && !project) {
+      if (leaseChannelId) {
+        this.scheduler.release(leaseChannelId, 'error');
+        this.emitRoomQueue(leaseChannelId);
+      }
+      return;
+    }
     let agent = this.store.getAgent(item.agentId);
-    if (!agent) return;
+    if (!agent) {
+      if (leaseChannelId) {
+        this.scheduler.release(leaseChannelId, 'error');
+        this.emitRoomQueue(leaseChannelId);
+      }
+      return;
+    }
 
     const projectId = project?.id ?? null;
-    const scopeKey = getScopeKey(projectId);
+    const resolvedChannelId =
+      item.channelId ??
+      leaseChannelId ??
+      (projectId
+        ? this.store.channels.getRoomByProject(projectId)?.id ?? null
+        : this.store.channels.getDmByAgent(agent.id)?.id ?? null);
+    let channel = resolvedChannelId ? this.store.channels.getChannel(resolvedChannelId) : null;
+    const isRoom = channel?.kind === 'room';
+    const scopeKey = isRoom && channel ? channel.id : getScopeKey(projectId);
     const settings = this.store.getSettings();
-    const preMessages = this.store.listAgentMessages(agent.id, projectId);
+    const preMessages =
+      isRoom && channel
+        ? this.store.channels
+            .listChannelMessagesWithRowids(channel.id, { sessionId: channel.currentSessionId })
+            .map((r) => r.message)
+        : this.store.listAgentMessages(agent.id, projectId);
+    const preCompaction = isRoom && channel ? channel.compaction : agent.contextCompactions?.[scopeKey];
     const preTrigger = autoCompactTrigger(
       preMessages,
-      agent.contextCompactions?.[scopeKey],
+      preCompaction,
       agent.scopeTokens?.[scopeKey],
       settings.autoCompact,
     );
     if (preTrigger === 'provider_limit') {
-      const compactRes = this.compactScope(
-        agent,
-        projectId,
-        'auto',
-        item.modelOverride?.provider,
-        preTrigger,
-      );
+      const compactRes =
+        isRoom && channel
+          ? this.compactChannel(channel.id, agent.id, 'auto', item.modelOverride?.provider, preTrigger)
+          : this.compactScope(agent, projectId, 'auto', item.modelOverride?.provider, preTrigger);
       if (compactRes.agent) {
         agent = compactRes.agent;
+      }
+      if (isRoom && channel) {
+        channel = this.store.channels.getChannel(channel.id);
       }
     }
 
@@ -468,10 +1052,16 @@ export class AgentRuntime {
       Boolean(item.modelOverride) && item.modelOverride!.provider !== primaryProvider;
     const initialResumeId = switchingProvider
       ? null
-      : (agent.sessions?.[scopeKey] ?? (project && agent.projectId === project.id &&
-          !Object.values(agent.sessions ?? {}).includes(agent.sessionId ?? '') ? agent.sessionId : null));
+      : (agent.sessions?.[scopeKey] ??
+        (project &&
+        !isRoom &&
+        agent.projectId === project.id &&
+        !Object.values(agent.sessions ?? {}).includes(agent.sessionId ?? '')
+          ? agent.sessionId
+          : null));
 
-    const canon = renderCanon(this.store.listCanon(scopeKey), (id) => {
+    const canonScope = getScopeKey(projectId);
+    const canon = renderCanon(this.store.listCanon(canonScope), (id) => {
       const artifact = this.store.getArtifact(id);
       if (artifact?.kind === 'svg' && artifact.projectId === projectId && artifact.sizeBytes <= 2048) {
         return this.store.readArtifact(artifact).toString('utf8');
@@ -483,9 +1073,12 @@ export class AgentRuntime {
     const previousCanon = agent.sessionCanon?.[scopeKey];
     const canonChanged = !!initialResumeId &&
       (previousCanon?.sessionId !== initialResumeId || previousCanon.version !== canonVersion);
-    const memoryTokens = {
+    const activeSummaryText = isRoom && channel
+      ? (channel.compaction?.summary ?? '')
+      : (agent.contextCompactions?.[scopeKey]?.summary ?? '');
+    const memoryTokens: { canon: number; summary: number; tail: number; stubs?: number; delta?: number } = {
       canon: estimateTokens(canon.text),
-      summary: estimateTokens((agent.contextCompactions?.[scopeKey]?.summary ?? '').slice(0, 8000)),
+      summary: estimateTokens(activeSummaryText.slice(0, 8000)),
       tail: 0,
     };
     if (canon.omitted) {
@@ -496,8 +1089,9 @@ export class AgentRuntime {
     }
 
     const startedAt = Date.now();
-    const controller = new AbortController();
+    const controller = leaseController ?? new AbortController();
     this.activeAborts.set(agent.id, controller);
+    let releaseReason: LeaseReleaseReason = 'done';
 
     if (item.kind === 'task' && item.refId) {
       const existingTask = this.store.getTask(item.refId);
@@ -513,8 +1107,15 @@ export class AgentRuntime {
       lastError: null,
       pendingFallback: null,
     });
+    if (channel) {
+      this.store.emitEvent({
+        type: 'room-typing',
+        payload: { channelId: channel.id, agentId: agent.id, state: 'working' },
+      });
+    }
 
     const replyMsg = this.store.createMessage({
+      ...(channel ? { channelId: channel.id, sessionId: channel.currentSessionId ?? null } : {}),
       projectId,
       agentId: agent.id,
       author: 'agent',
@@ -523,6 +1124,11 @@ export class AgentRuntime {
       metadata: {
         provider: effectiveProvider,
         model: effectiveModel,
+        ...(item.triggerMessageId || item.refId
+          ? { triggerMessageId: item.triggerMessageId ?? item.refId ?? undefined }
+          : {}),
+        ...(item.rootMessageId ? { rootMessageId: item.rootMessageId } : {}),
+        ...(item.hop !== undefined ? { hop: item.hop } : {}),
       },
     });
 
@@ -538,14 +1144,18 @@ export class AgentRuntime {
     });
 
     try {
+      const refMessageId = item.triggerMessageId ?? item.refId;
       const { finalText: rawFinalText } = await this.runner.run(
         {
           agent,
           project,
+          channelId: channel?.id ?? null,
+          trust: item.trust ?? 'user',
+          rootMessageId: item.rootMessageId ?? refMessageId ?? null,
           prompt: item.prompt,
-          attachments: item.refId ? this.store.getMessage(item.refId)?.metadata?.attachments : undefined,
+          attachments: refMessageId ? this.store.getMessage(refMessageId)?.metadata?.attachments : undefined,
           resumeSessionId: initialResumeId,
-          currentMessageId: item.kind === 'user' ? item.refId : null,
+          currentMessageId: item.kind === 'user' ? refMessageId : null,
           replyMessageId: replyMsg.id,
           canonText: canon.text,
           canonChanged,
@@ -555,9 +1165,11 @@ export class AgentRuntime {
         },
         {
           onText: (delta) => {
+            if (leaseChannelId) this.scheduler.heartbeat(leaseChannelId);
             streamFilter.push(delta);
           },
           onTool: (name, input) => {
+            if (leaseChannelId) this.scheduler.heartbeat(leaseChannelId);
             const rawDetail =
               input && typeof input === 'object'
                 ? JSON.stringify(input).slice(0, 120)
@@ -587,7 +1199,11 @@ export class AgentRuntime {
             usageOut = outputTokens;
             usageCostUsd = typeof costUsd === 'number' && Number.isFinite(costUsd) ? costUsd : null;
           },
-          onMemoryTail: (tokens) => { memoryTokens.tail = tokens; },
+          onMemoryTail: (tokens, extras) => {
+            memoryTokens.tail = tokens;
+            if (extras?.stubs !== undefined) memoryTokens.stubs = extras.stubs;
+            if (extras?.delta !== undefined) memoryTokens.delta = extras.delta;
+          },
           onContextTokens: (tokens) => { providerContextTokens = Math.max(providerContextTokens, tokens); },
         },
       );
@@ -611,12 +1227,25 @@ export class AgentRuntime {
       }
 
       const designArtifacts = this.store.captureDesignArtifacts({ ...replyMsg, text: finalText });
-      this.store.finalizeMessage(replyMsg.id, {
+      const roomMentions =
+        isRoom && channel && projectId
+          ? routeRoomMessage(
+              { author: 'agent', agentId: agent.id, text: finalText },
+              {
+                channel,
+                projectAgents: this.store.listProjectAgents(projectId),
+                tasks: this.store.listProjectTasks(projectId),
+              },
+            ).targetAgentIds
+          : [];
+
+      const finalized = this.store.finalizeMessage(replyMsg.id, {
         text: finalText,
         streaming: false,
         durationMs,
         metadata: {
           ...(Object.keys(designArtifacts).length ? { designArtifacts } : {}),
+          ...(roomMentions.length ? { mentions: roomMentions, toAgentIds: roomMentions } : {}),
           activities: turnActivities,
           provider: effectiveProvider,
           model: effectiveModel,
@@ -630,26 +1259,50 @@ export class AgentRuntime {
               }
             : {}),
         },
+        cursorUpdate:
+          isRoom && channel
+            ? {
+                channelId: channel.id,
+                agentId: agent.id,
+                sessionId: !switchingProvider ? sessionId : null,
+              }
+            : undefined,
       });
 
       const latestAgent = this.store.getAgent(agent.id) ?? agent;
       const nextSessions = { ...(latestAgent.sessions ?? {}) };
-      if (sessionId && !switchingProvider) nextSessions[scopeKey] = sessionId;
+      if (sessionId && !switchingProvider) {
+        nextSessions[scopeKey] = sessionId;
+        if (isRoom && projectId) nextSessions[projectId] = sessionId;
+      }
       const sessionCanon = { ...(latestAgent.sessionCanon ?? {}) };
-      if (sessionId && !switchingProvider) sessionCanon[scopeKey] = { sessionId, version: canonVersion };
+      if (sessionId && !switchingProvider) {
+        sessionCanon[scopeKey] = { sessionId, version: canonVersion };
+        if (isRoom && projectId) sessionCanon[projectId] = { sessionId, version: canonVersion };
+      }
 
-      const postMessages = this.store.listAgentMessages(agent.id, projectId);
-      const activeCompaction = latestAgent.contextCompactions?.[scopeKey];
+      const postMessages =
+        isRoom && channel
+          ? this.store.channels
+              .listChannelMessagesWithRowids(channel.id, { sessionId: channel.currentSessionId })
+              .map((r) => r.message)
+          : this.store.listAgentMessages(agent.id, projectId);
+      const activeCompaction =
+        isRoom && channel
+          ? this.store.channels.getChannel(channel.id)?.compaction
+          : latestAgent.contextCompactions?.[scopeKey];
       const activeScopeTokens = providerContextTokens || usageIn ||
         estimateActiveContextTokens(postMessages, activeCompaction);
       const nextScopeTokens = {
         ...(latestAgent.scopeTokens ?? {}),
         [scopeKey]: activeScopeTokens,
+        ...(isRoom && projectId ? { [projectId]: activeScopeTokens } : {}),
       };
       const activeConversationTokens = estimateConversationTokens(postMessages, activeCompaction);
       const nextConversationTokens = {
         ...(latestAgent.conversationTokens ?? {}),
         [scopeKey]: activeConversationTokens,
+        ...(isRoom && projectId ? { [projectId]: activeConversationTokens } : {}),
       };
 
       this.store.updateAgent(agent.id, {
@@ -671,6 +1324,8 @@ export class AgentRuntime {
       const afterSettings = this.store.getSettings();
       const loggedIn = usageIn > 0 ? usageIn : estimateTokens(item.prompt);
       const loggedOut = usageOut > 0 ? usageOut : estimateTokens(finalText);
+      const costUsd =
+        usageCostUsd ?? estimateTurnCostUsd(effectiveProvider, effectiveModel, loggedIn, loggedOut);
       this.store.recordUsageLog({
         provider: effectiveProvider,
         model: effectiveModel,
@@ -679,11 +1334,42 @@ export class AgentRuntime {
         inputTokens: loggedIn,
         outputTokens: loggedOut,
         memoryTokens,
-        estimatedCostUsd:
-          usageCostUsd ?? estimateTurnCostUsd(effectiveProvider, effectiveModel, loggedIn, loggedOut),
+        rootMessageId: item.rootMessageId ?? null,
+        estimatedCostUsd: costUsd,
       });
       if (process.env.ATELIER_LOG_LEVEL === 'debug') {
         console.debug('Atelier memory tokens', { scopeKey, agentId: agent.id, ...memoryTokens });
+      }
+
+      if (isRoom && channel && item.rootMessageId) {
+        const roomSettings = { ...(afterSettings.room ?? {}), ...(channel.settings ?? {}) };
+        const budgetRes = this.loopGuard.recordTurn(item.rootMessageId, channel.id, {
+          tokens: loggedIn + loggedOut,
+          costUsd,
+          maxTurns: roomSettings.maxTurnsPerChain,
+          maxTokens: roomSettings.maxTokensPerChain,
+        });
+        if (budgetRes.justWarned || budgetRes.justPaused) {
+          this.store.channels.postMessage({
+            channelId: channel.id,
+            author: 'system',
+            agentId: null,
+            text: budgetRes.justPaused
+              ? `Chain budget reached (${budgetRes.chain.turnsUsed}/${budgetRes.chain.maxTurns} turns, ${budgetRes.chain.tokensUsed} tokens) — paused.`
+              : `Chain budget at 80% (${budgetRes.chain.turnsUsed}/${budgetRes.chain.maxTurns} turns).`,
+            metadata: {
+              event: {
+                kind: 'chain_budget',
+                rootMessageId: item.rootMessageId,
+                turnsUsed: budgetRes.chain.turnsUsed,
+                maxTurns: budgetRes.chain.maxTurns,
+                tokensUsed: budgetRes.chain.tokensUsed,
+                maxTokens: budgetRes.chain.maxTokens,
+                warningOnly: budgetRes.justWarned,
+              },
+            },
+          });
+        }
       }
 
       const postTrigger = autoCompactTrigger(
@@ -693,10 +1379,47 @@ export class AgentRuntime {
         afterSettings.autoCompact,
       );
       if (postTrigger) {
-        this.compactScope(latestAgent, projectId, 'auto', effectiveProvider, postTrigger);
+        if (isRoom && channel) {
+          this.compactChannel(channel.id, agent.id, 'auto', effectiveProvider, postTrigger);
+        } else {
+          this.compactScope(latestAgent, projectId, 'auto', effectiveProvider, postTrigger);
+        }
       }
 
-      if (item.replyToAgentId && finalText) {
+      // In a project room, route explicit @mentions in the reply (skip targets already messaged via tool).
+      if (isRoom && channel && roomMentions.length > 0 && finalized) {
+        const alreadyMessaged = new Set(
+          turnActivities
+            .filter((a) => a.label === 'atelier.message_agent' && a.detail)
+            .map((a) => {
+              try {
+                return (JSON.parse(a.detail!) as { targetAgentId?: string }).targetAgentId ?? '';
+              } catch {
+                return '';
+              }
+            })
+            .filter(Boolean),
+        );
+        const rowid = this.store.channels.getMessageRowid(finalized.id);
+        for (let idx = 0; idx < roomMentions.length; idx += 1) {
+          const targetId = roomMentions[idx]!;
+          if (alreadyMessaged.has(targetId)) continue;
+          this.enqueue({
+            agentId: targetId,
+            projectId,
+            channelId: channel.id,
+            triggerMessageId: finalized.id,
+            triggerRowid: rowid,
+            mentionIndex: idx,
+            trust: 'teammate',
+            rootMessageId: item.rootMessageId ?? finalized.id,
+            hop: (item.hop ?? 0) + 1,
+            kind: 'teammate',
+            prompt: finalText,
+            refId: finalized.id,
+          });
+        }
+      } else if (!isRoom && item.replyToAgentId && finalText) {
         this.enqueue({
           agentId: item.replyToAgentId,
           projectId,
@@ -715,6 +1438,7 @@ export class AgentRuntime {
       }
 
       if (isAbort) {
+        releaseReason = 'stopped';
         this.store.finalizeMessage(replyMsg.id, {
           appendText: ' (dihentikan)',
           streaming: false,
@@ -732,6 +1456,7 @@ export class AgentRuntime {
           pendingFallback: null,
         });
       } else {
+        releaseReason = 'error';
         const message = err instanceof Error ? err.message : String(err);
         const classified = classifyTurnError(message);
         if (classified.cooldownMs > 0) {
@@ -776,6 +1501,14 @@ export class AgentRuntime {
             this.store.enqueueItem({
               agentId: agent.id,
               projectId,
+              channelId: channel?.id ?? item.channelId ?? null,
+              triggerMessageId: item.triggerMessageId ?? null,
+              triggerRowid: item.triggerRowid ?? null,
+              mentionIndex: item.mentionIndex ?? 0,
+              trust: item.trust ?? 'user',
+              priority: 'resume',
+              rootMessageId: item.rootMessageId ?? null,
+              hop: item.hop ?? 0,
               kind: item.kind,
               prompt: item.prompt,
               refId: item.refId,
@@ -798,6 +1531,7 @@ export class AgentRuntime {
           }
         }
 
+        releaseReason = 'awaiting_fallback';
         const pendingFallback: PendingFallbackOffer = {
           projectId,
           prompt: item.prompt,
@@ -839,6 +1573,17 @@ export class AgentRuntime {
       }
     } finally {
       this.activeAborts.delete(agent.id);
+      if (channel) {
+        this.store.emitEvent({
+          type: 'room-typing',
+          payload: { channelId: channel.id, agentId: agent.id, state: 'idle' },
+        });
+      }
+      if (leaseChannelId) {
+        this.scheduler.release(leaseChannelId, releaseReason);
+        this.emitRoomQueue(leaseChannelId);
+        this.kickNextInChannel(leaseChannelId);
+      }
     }
   }
 }

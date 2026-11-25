@@ -20,9 +20,11 @@ export function applyAtelierActions(
   rawText: string,
   tools: StudioTools,
   cb: Pick<TurnCallbacks, 'onTool'>,
+  opts?: { maxRecall?: number },
 ): { cleanText: string; actionsExecuted: number; recall: Array<{ tool: string; result: unknown }> } {
   let actionsExecuted = 0;
   const recall: Array<{ tool: string; result: unknown }> = [];
+  const maxRecall = opts?.maxRecall ?? 3;
 
   const cleanText = rawText
     .replace(ACTION_TAG_RE, (_full, jsonPayload: string) => {
@@ -35,7 +37,7 @@ export function applyAtelierActions(
             toolName === 'get_message' ||
             toolName === 'get_artifact' ||
             toolName === 'get_skill';
-          if (isRecall && recall.length >= 2) return '';
+          if (isRecall && recall.length >= maxRecall) return '';
           const result = tools.memoryAction(toolName as MemoryAction, obj);
           if (isRecall) recall.push({ tool: toolName, result });
           cb.onTool(`atelier.${toolName}`, { key: obj.key, id: obj.id });

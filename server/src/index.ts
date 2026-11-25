@@ -144,12 +144,21 @@ export async function startAtelierServer(opts?: {
       }),
   });
 
-  store.setSnapshotAugmenter((base) => ({
-    ...base,
-    browserSessions: browserManager.listSessions(),
-    browserApprovals: browserManager.listApprovals(),
-    activeMeeting: meetingService.getActiveMeetingStatus(),
-  }));
+  store.setSnapshotAugmenter((base) => {
+    const roomQueues: Record<string, ReturnType<typeof runtime.getRoomQueueSnapshot>> = {};
+    for (const ch of base.channels ?? []) {
+      if (ch.kind === 'room') {
+        roomQueues[ch.id] = runtime.getRoomQueueSnapshot(ch.id);
+      }
+    }
+    return {
+      ...base,
+      roomQueues,
+      browserSessions: browserManager.listSessions(),
+      browserApprovals: browserManager.listApprovals(),
+      activeMeeting: meetingService.getActiveMeetingStatus(),
+    };
+  });
 
   const vault = new LocalVault(db);
   const backup = new BackupService(db, store, config, {

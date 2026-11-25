@@ -116,6 +116,7 @@ interface ChatViewProps {
   project: Project | null;
   agent: Agent;
   agents: Agent[];
+  projects?: Project[];
   messages: Message[];
   activities: Activity[];
   tasks: Task[];
@@ -124,6 +125,7 @@ interface ChatViewProps {
   onSelectAgent: (agentId: string) => void;
   onReplyText: (text: string) => void;
   onQuickSend: (text: string) => Promise<void>;
+  onForwardToProject?: (msg: Message, projectId: string) => Promise<void>;
   onRetryAgent: (opts?: {
     provider?: ModelProvider;
     model?: string;
@@ -149,6 +151,7 @@ export function ChatView({
   project,
   agent,
   agents,
+  projects = [],
   messages,
   activities,
   tasks,
@@ -157,6 +160,7 @@ export function ChatView({
   onSelectAgent,
   onReplyText,
   onQuickSend,
+  onForwardToProject,
   onRetryAgent,
   onDismissFallback,
   onCreateTaskFromReply,
@@ -985,6 +989,22 @@ export function ChatView({
                     >
                       <Reply size={14} strokeWidth={1.5} />
                     </button>
+                    {!project && onForwardToProject && projects.length > 0 && (
+                      <button
+                        type="button"
+                        title={tr('Forward to project room')}
+                        onClick={() => void onForwardToProject(msg, projects[0]!.id)}
+                        style={{
+                          fontSize: 11,
+                          color: 'var(--text-tertiary)',
+                          padding: '1px 6px',
+                          borderRadius: 'var(--radius-full)',
+                          border: '1px solid var(--border-subtle)',
+                        }}
+                      >
+                        {tr('Send to {name}', { name: projects[0]!.name })}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
