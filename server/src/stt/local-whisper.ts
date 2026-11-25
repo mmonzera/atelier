@@ -45,9 +45,12 @@ async function findFreePort(): Promise<number> {
   });
 }
 
-function configKey(cfg: LocalWhisperConfig): string {
-  return JSON.stringify([cfg.exePath, cfg.modelPath, cfg.threads, cfg.language, cfg.useGpu]);
+function configKey(cfg: LocalWhisperConfig, threads: number): string {
+  return JSON.stringify([cfg.exePath, cfg.modelPath, threads, cfg.language, cfg.useGpu]);
 }
+
+/** Speed-only server flags: flash attention, no temperature fallback re-decodes, greedy decoding. */
+const FAST_SERVER_ARGS = ['-fa', '-nf', '-bo', '1', '-bs', '1'];
 
 export class LocalWhisperProvider implements SttProvider {
   private readonly idleTimeoutMs: number;
@@ -60,6 +63,8 @@ export class LocalWhisperProvider implements SttProvider {
   private queue: Promise<unknown> = Promise.resolve();
   private consecutiveCrashes = 0;
   private background = false;
+  /** Set when this whisper build rejected the speed flags: start plain from then on. */
+  private fastArgsRejected = false;
 
   constructor(private readonly opts: LocalWhisperOptions) {
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 120_000;
@@ -161,14 +166,28 @@ export class LocalWhisperProvider implements SttProvider {
     this.applyPriority();
   }
 
-  /** Idle while recording (only spare CPU), below normal otherwise. */
+  /**
+   * Threads for the next start. While recording we stay at the configured (small) count so the
+   * meeting app keeps its CPU; once recording is over use most cores so the backlog clears fast.
+   */
+  private effectiveThreads(cfg: LocalWhisperConfig): number {
+    const configured = Math.max(1, cfg.threads);
+    if (this.background) return configured;
+    const cores = Math.max(1, os.cpus().length);
+    return Math.min(8, Math.max(configured, cores - 2));
+  }
+
+  /**
+   * Below normal while recording (the meeting app still wins, but we are not starved the way the
+   * old Windows "Idle" class did, which made live transcripts fall minutes behind); normal after Stop.
+   */
   private applyPriority(): void {
     const pid = this.child?.pid;
     if (!pid || !this.isRunning()) return;
     try {
       os.setPriority(
         pid,
-        this.background ? os.constants.priority.PRIORITY_LOW : os.constants.priority.PRIORITY_BELOW_NORMAL,
+        this.background ? os.constants.priority.PRIORITY_BELOW_NORMAL : os.constants.priority.PRIORITY_NORMAL,
       );
     } catch {
       // Ignore if the OS refuses the priority change
@@ -201,7 +220,8 @@ export class LocalWhisperProvider implements SttProvider {
     if (!cfg.modelPath) {
       throw new Error('Selected Whisper model is not downloaded.');
     }
-    const desiredKey = configKey(cfg);
+    const threads = this.effectiveThreads(cfg);
+    const desiredKey = configKey(cfg, threads);
     if (this.isRunning() && this.activeConfigKey === desiredKey) {
       return;
     }
@@ -222,12 +242,14 @@ export class LocalWhisperProvider implements SttProvider {
             '--port',
             String(port),
             '-t',
-            String(Math.max(1, cfg.threads)),
+            String(threads),
             '-l',
             cfg.language,
             ...(cfg.useGpu ? [] : ['--no-gpu']),
+            ...(this.fastArgsRejected ? [] : FAST_SERVER_ARGS),
           ],
         };
+    const usingFastArgs = !this.opts.buildSpawnSpec && !this.fastArgsRejected;
 
     const child = spawn(spec.command, spec.args, {
       windowsHide: true,
@@ -257,6 +279,11 @@ export class LocalWhisperProvider implements SttProvider {
     while (Date.now() < deadline) {
       if (exitedEarly) {
         const tail = stderrChunks.join('').trim();
+        if (usingFastArgs && /unknown argument|usage:|invalid/i.test(tail)) {
+          // An older/newer build does not know a speed flag: remember and start without them.
+          this.fastArgsRejected = true;
+          return this.ensureStarted();
+        }
         throw new Error(tail ? `${exitedEarly}: ${tail.slice(-300)}` : exitedEarly);
       }
       try {
@@ -304,6 +331,8 @@ export class LocalWhisperProvider implements SttProvider {
       // verbose_json adds the sentences with start/end seconds (whisper.cpp server).
       form.set('response_format', 'verbose_json');
       form.set('temperature', '0');
+      // No temperature fallback: a hard chunk is accepted as is instead of being decoded up to 6 times.
+      form.set('temperature_inc', '0');
       if (opts.language && opts.language !== 'auto') {
         form.set('language', opts.language);
       }
