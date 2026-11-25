@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Atelier",
-    "description": "TODO: dari Copy & i18n Writer (harus sesuai PRD 3.3)"
+    "description": "Atelier adalah studio desktop Windows untuk builder yang menjalankan banyak AI agent, dengan memori, browser, dan catatan meeting yang tetap di laptopmu."
   },
   "a11y": {
     "skip": "Langsung ke konten"
@@ -15,18 +15,123 @@
     "cta": "Unduh",
     "lang": "EN",
     "langLabel": "Ganti bahasa ke English",
-    "mainNav": "Utama",
+    "mainNav": "Navigasi utama",
     "menuOpen": "Buka menu",
     "menuClose": "Tutup menu"
   },
   "hero": {
-    "badge": "TODO(Writer): badge, harus lolos Truth Table 3.3",
-    "title": "TODO(Writer): H1",
-    "sub": "TODO(Writer): subheadline",
-    "ctaPrimary": "Unduh",
-    "ctaGhost": "TODO(Writer): ghost CTA",
+    "badge": "Windows beta · akses awal",
+    "title": "Satu studio untuk semua AI agent yang kamu jalankan.",
+    "sub": "Atelier menyatukan AI agent-mu di satu meja, dengan memori, browser, dan catatan meeting yang tetap di laptopmu.",
+    "ctaPrimary": "Unduh untuk Windows",
+    "ctaGhost": "Lihat isinya",
     "ctaGhostHref": "#features",
     "versionLabel": "Versi",
     "sizeUnavailable": ""
+  },
+  "strip": {
+    "label": "Integrasi",
+    "items": [
+      "Slack",
+      "Notion",
+      "Google Drive",
+      "GitHub",
+      "Linear",
+      "Figma",
+      "Gmail",
+      "Calendar"
+    ]
+  },
+  "scrollWords": {
+    "label": "Kenapa Atelier",
+    "text": "Lebih sedikit berpindah aplikasi. Lebih banyak menyelesaikan",
+    "accent": "hal yang penting."
+  },
+  "bento": {
+    "eyebrow": "Inti",
+    "title": "Dibangun dari cara kerja yang sebenarnya",
+    "body": "Atelier menjaga orang, file, dan keputusan sebuah proyek tetap berdekatan, supaya konteks tidak hilang saat estafet.",
+    "items": [
+      {
+        "tag": "01",
+        "title": "AI agent dalam konteks",
+        "body": "Setiap AI agent bekerja dengan file dan riwayat yang kamu berikan, bukan obrolan kosong.",
+        "visual": "orbit"
+      },
+      {
+        "tag": "02",
+        "title": "Satu utas",
+        "body": "Percakapan, dokumen, dan tugas tetap bersama, jadi kamu bisa melanjutkan nanti.",
+        "visual": "threads"
+      },
+      {
+        "tag": "03",
+        "title": "Memori yang terlihat",
+        "body": "Apa yang diingat workspace terlihat jelas, dan kamu yang menentukan apa yang disimpan.",
+        "visual": "rings"
+      },
+      {
+        "tag": "04",
+        "title": "Tenang secara default",
+        "body": "Gerak, suara, dan notifikasi menunggu sampai kamu memintanya.",
+        "visual": "control"
+      }
+    ]
+  },
+  "features": {
+    "eyebrow": "Detail",
+    "title": "Hal kecil yang menjaga alur kerjamu",
+    "body": "Bagian yang kamu pakai setiap hari, dikerjakan dengan rapi.",
+    "items": [
+      {
+        "icon": "keyboard",
+        "title": "Keyboard dulu",
+        "body": "Bergerak di seluruh workspace tanpa lepas dari tombol."
+      },
+      {
+        "icon": "search",
+        "title": "Palet perintah",
+        "body": "Temukan file, AI agent, dan aksi dari satu kolom."
+      },
+      {
+        "icon": "layers",
+        "title": "Tugas terstruktur",
+        "body": "Ubah percakapan menjadi tugas dengan pemilik dan tenggat."
+      },
+      {
+        "icon": "file",
+        "title": "Dokumen hidup",
+        "body": "Menulis dan menyunting di tempat yang sama dengan pekerjaannya."
+      },
+      {
+        "icon": "globe",
+        "title": "Dua bahasa",
+        "body": "English dan Bahasa Indonesia, dengan isi yang sama."
+      },
+      {
+        "icon": "shield",
+        "title": "Default aksesibel",
+        "body": "Reduced motion, fokus yang terlihat, dan kontras yang terbaca."
+      }
+    ]
+  },
+  "workflow": {
+    "eyebrow": "Alur kerja",
+    "title": "Dari tugas ke hasil, tanpa pindah jendela",
+    "body": "Tiga langkah, tanpa lompat tab.",
+    "steps": [
+      {
+        "title": "Jelaskan pekerjaannya",
+        "body": "Mulai dari tugas, file, atau pertanyaan."
+      },
+      {
+        "title": "Bekerja dengan agen",
+        "body": "AI agent mengambil konteks dan bekerja bersamamu."
+      },
+      {
+        "title": "Simpan hasilnya",
+        "body": "Hasil tetap di workspace, di samping percakapan yang menghasilkannya."
+      }
+    ]
   }
 }

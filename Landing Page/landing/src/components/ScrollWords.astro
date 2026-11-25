@@ -1,0 +1,14 @@
+---
+import ScrollWordsIsland from "./react/ScrollWords.tsx";
+import "../styles/core.css";
+
+interface Props {
+  text: string;
+  accent?: string;
+  label: string;
+}
+const { text, accent, label } = Astro.props;
+---
+<section class="scrollwords" aria-label={label}>
+  <ScrollWordsIsland client:visible text={text} accent={accent} />
+</section>

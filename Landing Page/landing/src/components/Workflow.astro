@@ -1,0 +1,29 @@
+---
+import SectionHead from "./SectionHead.astro";
+import "../styles/core.css";
+
+interface Step {
+  title: string;
+  body: string;
+}
+
+interface Props {
+  workflow: { eyebrow: string; title: string; body?: string; steps: Step[] };
+}
+const { workflow } = Astro.props;
+---
+<section id="workflow" class="core-section workflow" aria-labelledby="workflow-title">
+  <div class="core-shell">
+    <SectionHead id="workflow-title" eyebrow={workflow.eyebrow} title={workflow.title} body={workflow.body} />
+
+    <ol class="workflow__steps">
+      {workflow.steps.map((step, i) => (
+        <li class="workflow__step" data-reveal style={`--reveal-delay:${i * 80}ms`}>
+          <p class="workflow__num">{String(i + 1).padStart(2, "0")}</p>
+          <h3 class="workflow__title">{step.title}</h3>
+          <p class="workflow__body">{step.body}</p>
+        </li>
+      ))}
+    </ol>
+  </div>
+</section>

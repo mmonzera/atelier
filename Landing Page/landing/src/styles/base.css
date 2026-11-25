@@ -10,7 +10,19 @@
 }
 *, *::before, *::after { box-sizing: border-box; }
 html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
-body { margin: 0; font-family: var(--font-sans, "Inter", system-ui, sans-serif); }
+/* tokens.css disalin dari app dan mengunci dokumen (height:100%; overflow:hidden).
+   Landing butuh dokumen yang bisa di-scroll, jadi aturan itu dilepas di sini. */
+html { height: auto; min-height: 100%; overflow: visible; }
+body {
+  margin: 0;
+  height: auto;
+  min-height: 100%;
+  overflow-x: clip;
+  overflow-y: visible;
+  font-family: var(--font-sans, "Inter", system-ui, sans-serif);
+  font-size: 1rem;
+  line-height: 1.6;
+}
 .skip-link {
   position: absolute; left: 1rem; top: -4rem; z-index: 100;
   padding: .5rem 1rem; border-radius: .5rem; background: #fff; color: #000;

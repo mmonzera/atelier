@@ -1,0 +1,30 @@
+---
+import "../styles/core.css";
+
+interface Props {
+  strip: { label: string; items: string[] };
+}
+const { strip } = Astro.props;
+
+// Dua grup identik: grup kedua hanya untuk loop, disembunyikan dari screen reader.
+const copies = [0, 1] as const;
+---
+<section class="strip" aria-label={strip.label}>
+  <p class="strip__label" aria-hidden="true">{strip.label}</p>
+  <div class="strip__viewport" data-marquee>
+    <div class="strip__track">
+      {copies.map((copy) => (
+        <ul
+          class="strip__group"
+          aria-hidden={copy === 1 ? "true" : undefined}
+        >
+          {strip.items.map((name) => (
+            <li class="strip__item">
+              <span class="strip__dot" aria-hidden="true"></span>{name}
+            </li>
+          ))}
+        </ul>
+      ))}
+    </div>
+  </div>
+</section>
