@@ -27,6 +27,7 @@ import {
   Copy,
   Globe,
   Hand,
+  MessagesSquare,
   Minimize2,
   RefreshCw,
   Reply,
@@ -36,7 +37,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { shownModels } from '../state/models';
 import { api, browserApi } from '../api';
 import { MemoryChip } from '../components/MemoryChip';
@@ -45,7 +46,7 @@ import {
   TaskStatusIcon,
   getColorVar,
 } from '../components/Atoms';
-import { AgentSessionBar } from '../components/AgentSessionBar';
+import { AgentSessionBar, sessionLabel } from '../components/AgentSessionBar';
 import { MessageAttachments, isAttachmentOnlyText } from '../components/AttachmentViews';
 import { ChatSearchBar, ChatSearchButton, useChatSearch } from '../components/ChatSearch';
 import { ParallelAgentsStrip, WorkPointsChecklist } from '../components/ChatWorkPanel';
@@ -215,20 +216,108 @@ export function ChatView({
     return found ? found.label : modelId;
   };
 
-  // A personal chat with sessions shows only the active one.
+  // A personal chat shows every session in one timeline, split by a named divider per session.
+  // The agent itself only reads the active session (scoped on the server).
   const activeSessionId = !project && channel ? channel.currentSessionId : null;
   const threadMessages = useMemo(
     () =>
       messages.filter(
-        (m) =>
-          (m.projectId ?? null) === (project?.id ?? null) &&
-          m.agentId === agent.id &&
-          (!activeSessionId || !m.sessionId || m.sessionId === activeSessionId),
+        (m) => (m.projectId ?? null) === (project?.id ?? null) && m.agentId === agent.id,
       ),
-    [messages, project?.id, agent.id, activeSessionId],
+    [messages, project?.id, agent.id],
   );
   const search = useChatSearch(threadMessages, scrollRef);
   const showSessions = !project && Boolean(channel);
+  const dividerRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  /** Message id -> session divider shown right before it (where the session changes). */
+  const sessionMarks = useMemo(() => {
+    const marks = new Map<string, { session: RoomSession; continued: boolean }>();
+    const seen = new Set<string>();
+    if (!showSessions || sessions.length < 2) return { marks, seen };
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    const first = [...sessions].sort((a, b) => a.seq - b.seq)[0]!;
+    let prev: string | null = null;
+    for (const m of threadMessages) {
+      const sid: string = m.sessionId && byId.has(m.sessionId) ? m.sessionId : (prev ?? first.id);
+      if (sid !== prev) {
+        marks.set(m.id, { session: byId.get(sid)!, continued: seen.has(sid) });
+        seen.add(sid);
+      }
+      prev = sid;
+    }
+    return { marks, seen };
+  }, [showSessions, sessions, threadMessages]);
+
+  const scrollToSession = (sessionId: string) => {
+    // wait a tick so a just-activated empty session has rendered its divider
+    window.setTimeout(() => {
+      const node = dividerRefs.current[sessionId];
+      const el = scrollRef.current;
+      if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      else if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    }, 60);
+  };
+
+  const renderSessionDivider = (s: RoomSession, continued: boolean) => {
+    const isActive = s.id === activeSessionId;
+    return (
+      <div
+        key={`divider-${s.id}-${continued ? 'cont' : 'start'}`}
+        ref={
+          continued
+            ? undefined
+            : (el) => {
+                dividerRefs.current[s.id] = el;
+              }
+        }
+        style={{ display: 'flex', alignItems: 'center', gap: 10, scrollMarginTop: 44 }}
+      >
+        <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            maxWidth: '70%',
+            padding: '3px 10px',
+            borderRadius: 'var(--radius-full)',
+            border: `1px solid ${isActive ? 'var(--border-default)' : 'var(--border-subtle)'}`,
+            background: 'var(--surface-1)',
+            fontSize: 11.5,
+            color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+          }}
+        >
+          <MessagesSquare size={12} strokeWidth={1.6} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>
+            {sessionLabel(s, tr)}
+          </span>
+          <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+            {continued
+              ? tr('continued')
+              : new Date(s.startedAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}
+          </span>
+          {isActive && (
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: 'var(--agent-green)',
+                flexShrink: 0,
+              }}
+              title={tr('Active session')}
+            />
+          )}
+        </div>
+        <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
+      </div>
+    );
+  };
+  const activeSessionEmpty =
+    sessionMarks.seen.size > 0 && activeSessionId && !sessionMarks.seen.has(activeSessionId)
+      ? (sessions.find((s) => s.id === activeSessionId) ?? null)
+      : null;
   const savedDesignPicks = useMemo(() => {
     const picks = new Map<string, string>();
     for (const message of threadMessages) {
@@ -291,6 +380,563 @@ export function ChatView({
     }
   };
 
+  const renderMessage = (msg: Message, idx: number) => {
+    if (msg.author === 'user') {
+      return (
+        <div
+          key={msg.id}
+          data-msg-id={msg.id}
+          ref={(el) => {
+            messageRefs.current[msg.id] = el;
+          }}
+          style={{ display: 'flex', justifyContent: 'flex-end' }}
+        >
+          <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
+              <MessageAttachments attachments={msg.metadata.attachments} />
+            )}
+            {msg.metadata?.skills && msg.metadata.skills.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6 }}>
+                {msg.metadata.skills.map((skill) => (
+                  <span
+                    key={skill.id}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      padding: '2px 9px',
+                      borderRadius: 'var(--radius-full)',
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: 11.5,
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    <Sparkles size={11} strokeWidth={1.5} style={{ color: 'var(--agent-purple)' }} />
+                    {skill.name}
+                  </span>
+                ))}
+              </div>
+            )}
+            {!(msg.metadata?.attachments?.length && isAttachmentOnlyText(msg.text)) && (
+              <div
+                className="glass glass-user msg-enter"
+                style={{
+                  maxWidth: '100%',
+                  borderRadius: 16,
+                  padding: '12px 16px',
+                  fontSize: 13.5,
+                  lineHeight: '21px',
+                  color: 'var(--text-primary)',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {renderUserMessageText(msg.text, agents)}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (msg.author === 'system' && msg.metadata?.compacted) {
+      const compactedCount = msg.metadata.compactedCount ?? 0;
+      const summaryOpen = Boolean(expandedWorkIds[msg.id]);
+      return (
+        <div
+          key={msg.id}
+          data-msg-id={msg.id}
+          ref={(el) => {
+            messageRefs.current[msg.id] = el;
+          }}
+          className="msg-enter"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 8,
+            margin: '4px 0',
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+            }}
+          >
+            <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
+            <button
+              type="button"
+              onClick={() => toggleWork(msg.id)}
+              className="transition-atelier"
+              title={tr('Toggle compacted context memory')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 10px',
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--surface-1)',
+                border: '1px solid var(--border-subtle)',
+                fontSize: 11.5,
+                color: 'var(--text-tertiary)',
+              }}
+            >
+              <Minimize2 size={12} strokeWidth={1.5} style={{ color: 'var(--agent-amber)' }} />
+              <span>{tr('Context compacted')}</span>
+              {compactedCount > 0 && (
+                <span className="mono-num" style={{ color: 'var(--text-secondary)' }}>
+                  · {compactedCount}{tr('msgs')}
+                </span>
+              )}
+              {summaryOpen ? (
+                <ChevronDown size={12} strokeWidth={1.5} />
+              ) : (
+                <ChevronRight size={12} strokeWidth={1.5} />
+              )}
+            </button>
+            <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
+          </div>
+
+          {summaryOpen && (
+            <div
+              className="glass glass-agent glass-soft"
+              style={{
+                width: '100%',
+                borderRadius: 12,
+                padding: '10px 14px',
+                fontSize: 12,
+                lineHeight: '18px',
+                color: 'var(--text-secondary)',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {msg.text}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (msg.author === 'teammate' || msg.author === 'system') {
+      const relatedTask = msg.metadata?.taskId
+        ? tasks.find((t) => t.id === msg.metadata?.taskId)
+        : undefined;
+      const targetAgent = msg.metadata?.targetAgentId
+        ? agents.find((a) => a.id === msg.metadata?.targetAgentId)
+        : undefined;
+      return (
+        <div
+          key={msg.id}
+          data-msg-id={msg.id}
+          ref={(el) => {
+            messageRefs.current[msg.id] = el;
+          }}
+          className="glass glass-agent glass-soft msg-enter"
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+            padding: '9px 14px',
+            borderRadius: 16,
+            fontSize: 12.5,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: '9999px',
+              marginTop: 6,
+              background: targetAgent ? getColorVar(targetAgent.color) : 'var(--agent-blue)',
+              flexShrink: 0,
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <FormattedText text={msg.text} />
+            {msg.metadata?.qaRun && (
+              <div style={{ marginTop: 10 }}>
+                <QaReportCard
+                  run={msg.metadata.qaRun}
+                  compact
+                  onSendFailuresToAgent={(run) =>
+                    void onQuickSend(
+                      [
+                        `Fix the issues found in Browser QA on ${run.url}:`,
+                        run.summary,
+                        ...run.pageErrors.map((e) => `- PageError: ${e}`),
+                        ...run.consoleErrors.map((e) => `- ConsoleError: ${e}`),
+                        ...run.failedRequests.map((r) => `- HTTP ${r.status}: ${r.method} ${r.url}`),
+                      ].join('\n'),
+                    )
+                  }
+                />
+              </div>
+            )}
+            {relatedTask && (
+              <button
+                type="button"
+                onClick={() => onOpenTask(relatedTask)}
+                style={{
+                  marginTop: 6,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 12,
+                  color: 'var(--text-primary)',
+                  textDecoration: 'underline',
+                  textDecorationColor: 'var(--border-default)',
+                  textUnderlineOffset: 3,
+                }}
+              >
+                <TaskStatusIcon status={relatedTask.status} size={12} />
+                <span>
+                  {relatedTask.identifier} · {relatedTask.title}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const msgActivities =
+      msg.metadata?.activities ?? activities.filter((a) => a.messageId === msg.id);
+    const isExpanded = expandedWorkIds[msg.id] ?? msg.streaming;
+    const linkedTask = msg.metadata?.taskId
+      ? tasks.find((t) => t.id === msg.metadata?.taskId)
+      : undefined;
+    const targetAgent = msg.metadata?.targetAgentId
+      ? agents.find((a) => a.id === msg.metadata?.targetAgentId)
+      : undefined;
+
+    let prevAssistant: Message | null = null;
+    for (let j = idx - 1; j >= 0; j -= 1) {
+      if (threadMessages[j]!.author === 'agent') {
+        prevAssistant = threadMessages[j]!;
+        break;
+      }
+    }
+    const msgProvider = msg.metadata?.provider;
+    const msgModel = msg.metadata?.model;
+    const prevProvider = prevAssistant?.metadata?.provider;
+    const prevModel = prevAssistant?.metadata?.model;
+    const switchedModel = Boolean(
+      msgProvider &&
+        msgModel &&
+        prevProvider &&
+        prevModel &&
+        (prevProvider !== msgProvider || prevModel !== msgModel),
+    );
+
+    return (
+      <div
+        key={msg.id}
+        data-msg-id={msg.id}
+        ref={(el) => {
+          messageRefs.current[msg.id] = el;
+        }}
+        className="message-group"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          paddingRight: 16,
+        }}
+      >
+        {switchedModel && msgProvider && msgModel && (
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 11.5,
+              color: 'var(--text-tertiary)',
+            }}
+          >
+            <ProviderIcon provider={msgProvider} size={11} />
+            <span>
+              {tr('Switched to {model}', {
+                model: formatShortModelName(msgProvider, msgModel),
+              })}
+            </span>
+          </div>
+        )}
+
+        {(msg.streaming || msgActivities.length > 0 || (!msg.streaming && msg.durationMs)) && (
+          <WorkPointsChecklist
+            activities={msgActivities}
+            streaming={msg.streaming}
+            durationMs={msg.durationMs}
+            createdAt={msg.createdAt}
+            agents={agents}
+            pendingTasks={msg.streaming ? pendingAgentTasks : []}
+            expanded={isExpanded}
+            onToggle={() => toggleWork(msg.id, msg.streaming)}
+          />
+        )}
+
+        {!msg.streaming && <MemoryChip used={msg.metadata?.memoryUsed} scope={msg.projectId ?? null} />}
+
+        {msg.metadata?.fallbackTo && (
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              alignSelf: 'flex-start',
+              padding: '2px 8px',
+              borderRadius: 'var(--radius-full)',
+              background: 'rgba(96, 165, 250, 0.1)',
+              border: '1px solid rgba(96, 165, 250, 0.25)',
+              fontSize: 11,
+              color: 'var(--agent-blue)',
+            }}
+          >
+            <RefreshCw size={10} strokeWidth={1.75} />
+            <span>{tr('Backup ·')} {msg.metadata.fallbackTo.provider} / {msg.metadata.fallbackTo.model}
+            </span>
+          </div>
+        )}
+
+        {msg.text &&
+          parseMessageSegments(msg.text).map((seg, i) => {
+            if (seg.type === 'design') {
+              return (
+                <DesignOptionsCard
+                  key={`${msg.id}-d${i}`}
+                  block={seg.block}
+                  chosen={savedDesignPicks.get(`${msg.id}:${i}`) ?? savedDesignPicks.get(`${msg.id}:-1`)}
+                  streaming={msg.streaming}
+                  onChoose={(o) => api.pickDesign(msg.projectId, msg.id, o.id, i)}
+                />
+              );
+            }
+            if (seg.type === 'design-pending') {
+              return <DesignPendingCard key={`${msg.id}-p${i}`} title={seg.title} />;
+            }
+            if (!seg.text.trim()) return null;
+            return (
+              <div
+                key={`${msg.id}-t${i}`}
+                className="glass glass-agent msg-enter"
+                style={{
+                  alignSelf: 'flex-start',
+                  maxWidth: '100%',
+                  padding: '12px 16px',
+                  borderRadius: 16,
+                  fontSize: 13.5,
+                  lineHeight: '21px',
+                  color: 'var(--text-primary)',
+                  wordBreak: 'break-word',
+                }}
+              >
+                <FormattedText text={seg.text} />
+              </div>
+            );
+          })}
+
+        {msg.metadata?.browserScreenshots && msg.metadata.browserScreenshots.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            {msg.metadata.browserScreenshots.map((shot) => (
+              <button
+                key={shot.artifactId}
+                type="button"
+                onClick={() => setEnlargedShot(shot)}
+                style={{
+                  width: 210,
+                  borderRadius: 12,
+                  overflow: 'hidden',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border-subtle)',
+                  textAlign: 'left',
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+              >
+                <img
+                  src={shot.url}
+                  alt={shot.label}
+                  style={{
+                    width: '100%',
+                    height: 126,
+                    objectFit: 'cover',
+                    display: 'block',
+                    background: '#0a0a0e',
+                  }}
+                />
+                <div style={{ padding: '7px 10px' }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 500,
+                      color: 'var(--text-primary)',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {shot.label}
+                  </div>
+                  {shot.pageUrl && (
+                    <div
+                      className="mono-num"
+                      style={{
+                        fontSize: 10.5,
+                        color: 'var(--text-muted)',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {shot.pageUrl}
+                    </div>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {msg.metadata?.cancelled && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{tr('Stopped by user.')}
+          </div>
+        )}
+
+        {(targetAgent || linkedTask) && (
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
+            {targetAgent && (
+              <button
+                type="button"
+                onClick={() => onSelectAgent(targetAgent.id)}
+                className="transition-atelier"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 12.5,
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <span>{tr('Messaged')}</span>
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '9999px',
+                    background: getColorVar(targetAgent.color),
+                  }}
+                />
+                <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                  {targetAgent.name}
+                </span>
+              </button>
+            )}
+
+            {linkedTask && (
+              <button
+                type="button"
+                onClick={() => onOpenTask(linkedTask)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 12,
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <TaskStatusIcon status={linkedTask.status} size={12} />
+                <span className="mono-num" style={{ color: 'var(--text-muted)' }}>
+                  {linkedTask.identifier}
+                </span>
+                <span>{linkedTask.title}</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {!msg.streaming && (
+          <div
+            className="message-actions"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 12,
+              fontSize: 12,
+              color: 'var(--text-tertiary)',
+            }}
+          >
+            <span>{formatTime(msg.createdAt)}</span>
+            {msgProvider && msgModel && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  fontSize: 11.5,
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <ProviderIcon provider={msgProvider} size={11} active={false} />
+                <span>{formatShortModelName(msgProvider, msgModel)}</span>
+              </span>
+            )}
+            <button
+              type="button"
+              title={tr('Copy reply')}
+              onClick={() => void handleCopy(msg.id, stripAtelierActions(msg.text))}
+              style={{ display: 'inline-flex', alignItems: 'center' }}
+            >
+              {copiedId === msg.id ? (
+                <Check size={14} strokeWidth={1.5} style={{ color: 'var(--agent-green)' }} />
+              ) : (
+                <Copy size={14} strokeWidth={1.5} />
+              )}
+            </button>
+            {project && onCreateTaskFromReply && (
+              <button
+                type="button"
+                title={tr('Create task from this reply')}
+                onClick={() => onCreateTaskFromReply(stripAtelierActions(msg.text).slice(0, 400))}
+                style={{ display: 'inline-flex', alignItems: 'center' }}
+              >
+                <CheckSquare size={14} strokeWidth={1.5} />
+              </button>
+            )}
+            <button
+              type="button"
+              title={tr('Follow up in composer')}
+              onClick={() => onReplyText(stripAtelierActions(msg.text))}
+              style={{ display: 'inline-flex', alignItems: 'center' }}
+            >
+              <Reply size={14} strokeWidth={1.5} />
+            </button>
+            {!project && onForwardToProject && projects.length > 0 && (
+              <button
+                type="button"
+                title={tr('Forward to project room')}
+                onClick={() => void onForwardToProject(msg, projects[0]!.id)}
+                style={{
+                  fontSize: 11,
+                  color: 'var(--text-tertiary)',
+                  padding: '1px 6px',
+                  borderRadius: 'var(--radius-full)',
+                  border: '1px solid var(--border-subtle)',
+                }}
+              >
+                {tr('Send to {name}', { name: projects[0]!.name })}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const suggestions = project
     ? [
         tr('Review open tasks in this project and propose an execution plan'),
@@ -329,21 +975,27 @@ export function ChatView({
           pointerEvents: 'none',
         }}
       >
-        <div style={{ pointerEvents: 'auto', minWidth: 0 }}>
-          {showSessions && channel && (
-            <AgentSessionBar channel={channel} sessions={sessions} busy={agent.status === 'working'} />
-          )}
-        </div>
         <div
           style={{
             pointerEvents: 'auto',
+            minWidth: 0,
+            flex: 1,
             display: 'flex',
             alignItems: 'center',
             gap: 6,
-            ...(search.open ? { flex: 1, maxWidth: 340 } : {}),
           }}
         >
-          {search.open ? <ChatSearchBar search={search} /> : <ChatSearchButton search={search} />}
+          {showSessions && channel && (
+            <AgentSessionBar
+              channel={channel}
+              sessions={sessions}
+              busy={agent.status === 'working'}
+              onNavigate={scrollToSession}
+            />
+          )}
+          <div style={{ minWidth: 0, ...(search.open ? { flex: 1, maxWidth: 340 } : {}) }}>
+            {search.open ? <ChatSearchBar search={search} /> : <ChatSearchButton search={search} />}
+          </div>
         </div>
       </div>
 
@@ -510,562 +1162,19 @@ export function ChatView({
           </div>
         ) : (
           threadMessages.map((msg, idx) => {
-            if (msg.author === 'user') {
-              return (
-                <div
-                  key={msg.id}
-                  data-msg-id={msg.id}
-                  ref={(el) => {
-                    messageRefs.current[msg.id] = el;
-                  }}
-                  style={{ display: 'flex', justifyContent: 'flex-end' }}
-                >
-                  <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                    {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
-                      <MessageAttachments attachments={msg.metadata.attachments} />
-                    )}
-                    {msg.metadata?.skills && msg.metadata.skills.length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6 }}>
-                        {msg.metadata.skills.map((skill) => (
-                          <span
-                            key={skill.id}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              padding: '2px 9px',
-                              borderRadius: 'var(--radius-full)',
-                              background: 'var(--surface-2)',
-                              border: '1px solid var(--border-subtle)',
-                              fontSize: 11.5,
-                              color: 'var(--text-secondary)',
-                            }}
-                          >
-                            <Sparkles size={11} strokeWidth={1.5} style={{ color: 'var(--agent-purple)' }} />
-                            {skill.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {!(msg.metadata?.attachments?.length && isAttachmentOnlyText(msg.text)) && (
-                      <div
-                        className="glass glass-user msg-enter"
-                        style={{
-                          maxWidth: '100%',
-                          borderRadius: 16,
-                          padding: '12px 16px',
-                          fontSize: 13.5,
-                          lineHeight: '21px',
-                          color: 'var(--text-primary)',
-                          whiteSpace: 'pre-wrap',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        {renderUserMessageText(msg.text, agents)}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            }
-
-            if (msg.author === 'system' && msg.metadata?.compacted) {
-              const compactedCount = msg.metadata.compactedCount ?? 0;
-              const summaryOpen = Boolean(expandedWorkIds[msg.id]);
-              return (
-                <div
-                  key={msg.id}
-                  data-msg-id={msg.id}
-                  ref={(el) => {
-                    messageRefs.current[msg.id] = el;
-                  }}
-                  className="msg-enter"
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 8,
-                    margin: '4px 0',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: '100%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                    }}
-                  >
-                    <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
-                    <button
-                      type="button"
-                      onClick={() => toggleWork(msg.id)}
-                      className="transition-atelier"
-                      title={tr('Toggle compacted context memory')}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        padding: '4px 10px',
-                        borderRadius: 'var(--radius-full)',
-                        background: 'var(--surface-1)',
-                        border: '1px solid var(--border-subtle)',
-                        fontSize: 11.5,
-                        color: 'var(--text-tertiary)',
-                      }}
-                    >
-                      <Minimize2 size={12} strokeWidth={1.5} style={{ color: 'var(--agent-amber)' }} />
-                      <span>{tr('Context compacted')}</span>
-                      {compactedCount > 0 && (
-                        <span className="mono-num" style={{ color: 'var(--text-secondary)' }}>
-                          · {compactedCount}{tr('msgs')}
-                        </span>
-                      )}
-                      {summaryOpen ? (
-                        <ChevronDown size={12} strokeWidth={1.5} />
-                      ) : (
-                        <ChevronRight size={12} strokeWidth={1.5} />
-                      )}
-                    </button>
-                    <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
-                  </div>
-
-                  {summaryOpen && (
-                    <div
-                      className="glass glass-agent glass-soft"
-                      style={{
-                        width: '100%',
-                        borderRadius: 12,
-                        padding: '10px 14px',
-                        fontSize: 12,
-                        lineHeight: '18px',
-                        color: 'var(--text-secondary)',
-                        whiteSpace: 'pre-wrap',
-                      }}
-                    >
-                      {msg.text}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-
-            if (msg.author === 'teammate' || msg.author === 'system') {
-              const relatedTask = msg.metadata?.taskId
-                ? tasks.find((t) => t.id === msg.metadata?.taskId)
-                : undefined;
-              const targetAgent = msg.metadata?.targetAgentId
-                ? agents.find((a) => a.id === msg.metadata?.targetAgentId)
-                : undefined;
-              return (
-                <div
-                  key={msg.id}
-                  data-msg-id={msg.id}
-                  ref={(el) => {
-                    messageRefs.current[msg.id] = el;
-                  }}
-                  className="glass glass-agent glass-soft msg-enter"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 8,
-                    padding: '9px 14px',
-                    borderRadius: 16,
-                    fontSize: 12.5,
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 7,
-                      height: 7,
-                      borderRadius: '9999px',
-                      marginTop: 6,
-                      background: targetAgent ? getColorVar(targetAgent.color) : 'var(--agent-blue)',
-                      flexShrink: 0,
-                    }}
-                  />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <FormattedText text={msg.text} />
-                    {msg.metadata?.qaRun && (
-                      <div style={{ marginTop: 10 }}>
-                        <QaReportCard
-                          run={msg.metadata.qaRun}
-                          compact
-                          onSendFailuresToAgent={(run) =>
-                            void onQuickSend(
-                              [
-                                `Fix the issues found in Browser QA on ${run.url}:`,
-                                run.summary,
-                                ...run.pageErrors.map((e) => `- PageError: ${e}`),
-                                ...run.consoleErrors.map((e) => `- ConsoleError: ${e}`),
-                                ...run.failedRequests.map((r) => `- HTTP ${r.status}: ${r.method} ${r.url}`),
-                              ].join('\n'),
-                            )
-                          }
-                        />
-                      </div>
-                    )}
-                    {relatedTask && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenTask(relatedTask)}
-                        style={{
-                          marginTop: 6,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          fontSize: 12,
-                          color: 'var(--text-primary)',
-                          textDecoration: 'underline',
-                          textDecorationColor: 'var(--border-default)',
-                          textUnderlineOffset: 3,
-                        }}
-                      >
-                        <TaskStatusIcon status={relatedTask.status} size={12} />
-                        <span>
-                          {relatedTask.identifier} · {relatedTask.title}
-                        </span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            }
-
-            const msgActivities =
-              msg.metadata?.activities ?? activities.filter((a) => a.messageId === msg.id);
-            const isExpanded = expandedWorkIds[msg.id] ?? msg.streaming;
-            const linkedTask = msg.metadata?.taskId
-              ? tasks.find((t) => t.id === msg.metadata?.taskId)
-              : undefined;
-            const targetAgent = msg.metadata?.targetAgentId
-              ? agents.find((a) => a.id === msg.metadata?.targetAgentId)
-              : undefined;
-
-            let prevAssistant: Message | null = null;
-            for (let j = idx - 1; j >= 0; j -= 1) {
-              if (threadMessages[j]!.author === 'agent') {
-                prevAssistant = threadMessages[j]!;
-                break;
-              }
-            }
-            const msgProvider = msg.metadata?.provider;
-            const msgModel = msg.metadata?.model;
-            const prevProvider = prevAssistant?.metadata?.provider;
-            const prevModel = prevAssistant?.metadata?.model;
-            const switchedModel = Boolean(
-              msgProvider &&
-                msgModel &&
-                prevProvider &&
-                prevModel &&
-                (prevProvider !== msgProvider || prevModel !== msgModel),
-            );
-
-            return (
-              <div
-                key={msg.id}
-                data-msg-id={msg.id}
-                ref={(el) => {
-                  messageRefs.current[msg.id] = el;
-                }}
-                className="message-group"
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 10,
-                  paddingRight: 16,
-                }}
-              >
-                {switchedModel && msgProvider && msgModel && (
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      fontSize: 11.5,
-                      color: 'var(--text-tertiary)',
-                    }}
-                  >
-                    <ProviderIcon provider={msgProvider} size={11} />
-                    <span>
-                      {tr('Switched to {model}', {
-                        model: formatShortModelName(msgProvider, msgModel),
-                      })}
-                    </span>
-                  </div>
-                )}
-
-                {(msg.streaming || msgActivities.length > 0 || (!msg.streaming && msg.durationMs)) && (
-                  <WorkPointsChecklist
-                    activities={msgActivities}
-                    streaming={msg.streaming}
-                    durationMs={msg.durationMs}
-                    createdAt={msg.createdAt}
-                    agents={agents}
-                    pendingTasks={msg.streaming ? pendingAgentTasks : []}
-                    expanded={isExpanded}
-                    onToggle={() => toggleWork(msg.id, msg.streaming)}
-                  />
-                )}
-
-                {!msg.streaming && <MemoryChip used={msg.metadata?.memoryUsed} scope={msg.projectId ?? null} />}
-
-                {msg.metadata?.fallbackTo && (
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      alignSelf: 'flex-start',
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-full)',
-                      background: 'rgba(96, 165, 250, 0.1)',
-                      border: '1px solid rgba(96, 165, 250, 0.25)',
-                      fontSize: 11,
-                      color: 'var(--agent-blue)',
-                    }}
-                  >
-                    <RefreshCw size={10} strokeWidth={1.75} />
-                    <span>{tr('Backup ·')} {msg.metadata.fallbackTo.provider} / {msg.metadata.fallbackTo.model}
-                    </span>
-                  </div>
-                )}
-
-                {msg.text &&
-                  parseMessageSegments(msg.text).map((seg, i) => {
-                    if (seg.type === 'design') {
-                      return (
-                        <DesignOptionsCard
-                          key={`${msg.id}-d${i}`}
-                          block={seg.block}
-                          chosen={savedDesignPicks.get(`${msg.id}:${i}`) ?? savedDesignPicks.get(`${msg.id}:-1`)}
-                          streaming={msg.streaming}
-                          onChoose={(o) => api.pickDesign(msg.projectId, msg.id, o.id, i)}
-                        />
-                      );
-                    }
-                    if (seg.type === 'design-pending') {
-                      return <DesignPendingCard key={`${msg.id}-p${i}`} title={seg.title} />;
-                    }
-                    if (!seg.text.trim()) return null;
-                    return (
-                      <div
-                        key={`${msg.id}-t${i}`}
-                        className="glass glass-agent msg-enter"
-                        style={{
-                          alignSelf: 'flex-start',
-                          maxWidth: '100%',
-                          padding: '12px 16px',
-                          borderRadius: 16,
-                          fontSize: 13.5,
-                          lineHeight: '21px',
-                          color: 'var(--text-primary)',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        <FormattedText text={seg.text} />
-                      </div>
-                    );
-                  })}
-
-                {msg.metadata?.browserScreenshots && msg.metadata.browserScreenshots.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                    {msg.metadata.browserScreenshots.map((shot) => (
-                      <button
-                        key={shot.artifactId}
-                        type="button"
-                        onClick={() => setEnlargedShot(shot)}
-                        style={{
-                          width: 210,
-                          borderRadius: 12,
-                          overflow: 'hidden',
-                          background: 'var(--surface-2)',
-                          border: '1px solid var(--border-subtle)',
-                          textAlign: 'left',
-                          display: 'flex',
-                          flexDirection: 'column',
-                        }}
-                      >
-                        <img
-                          src={shot.url}
-                          alt={shot.label}
-                          style={{
-                            width: '100%',
-                            height: 126,
-                            objectFit: 'cover',
-                            display: 'block',
-                            background: '#0a0a0e',
-                          }}
-                        />
-                        <div style={{ padding: '7px 10px' }}>
-                          <div
-                            style={{
-                              fontSize: 12,
-                              fontWeight: 500,
-                              color: 'var(--text-primary)',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                            }}
-                          >
-                            {shot.label}
-                          </div>
-                          {shot.pageUrl && (
-                            <div
-                              className="mono-num"
-                              style={{
-                                fontSize: 10.5,
-                                color: 'var(--text-muted)',
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                              }}
-                            >
-                              {shot.pageUrl}
-                            </div>
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {msg.metadata?.cancelled && (
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{tr('Stopped by user.')}
-                  </div>
-                )}
-
-                {(targetAgent || linkedTask) && (
-                  <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
-                    {targetAgent && (
-                      <button
-                        type="button"
-                        onClick={() => onSelectAgent(targetAgent.id)}
-                        className="transition-atelier"
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          fontSize: 12.5,
-                          color: 'var(--text-secondary)',
-                        }}
-                      >
-                        <span>{tr('Messaged')}</span>
-                        <span
-                          style={{
-                            width: 8,
-                            height: 8,
-                            borderRadius: '9999px',
-                            background: getColorVar(targetAgent.color),
-                          }}
-                        />
-                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
-                          {targetAgent.name}
-                        </span>
-                      </button>
-                    )}
-
-                    {linkedTask && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenTask(linkedTask)}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          fontSize: 12,
-                          color: 'var(--text-secondary)',
-                        }}
-                      >
-                        <TaskStatusIcon status={linkedTask.status} size={12} />
-                        <span className="mono-num" style={{ color: 'var(--text-muted)' }}>
-                          {linkedTask.identifier}
-                        </span>
-                        <span>{linkedTask.title}</span>
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {!msg.streaming && (
-                  <div
-                    className="message-actions"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 12,
-                      fontSize: 12,
-                      color: 'var(--text-tertiary)',
-                    }}
-                  >
-                    <span>{formatTime(msg.createdAt)}</span>
-                    {msgProvider && msgModel && (
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 5,
-                          fontSize: 11.5,
-                          color: 'var(--text-muted)',
-                        }}
-                      >
-                        <ProviderIcon provider={msgProvider} size={11} active={false} />
-                        <span>{formatShortModelName(msgProvider, msgModel)}</span>
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      title={tr('Copy reply')}
-                      onClick={() => void handleCopy(msg.id, stripAtelierActions(msg.text))}
-                      style={{ display: 'inline-flex', alignItems: 'center' }}
-                    >
-                      {copiedId === msg.id ? (
-                        <Check size={14} strokeWidth={1.5} style={{ color: 'var(--agent-green)' }} />
-                      ) : (
-                        <Copy size={14} strokeWidth={1.5} />
-                      )}
-                    </button>
-                    {project && onCreateTaskFromReply && (
-                      <button
-                        type="button"
-                        title={tr('Create task from this reply')}
-                        onClick={() => onCreateTaskFromReply(stripAtelierActions(msg.text).slice(0, 400))}
-                        style={{ display: 'inline-flex', alignItems: 'center' }}
-                      >
-                        <CheckSquare size={14} strokeWidth={1.5} />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      title={tr('Follow up in composer')}
-                      onClick={() => onReplyText(stripAtelierActions(msg.text))}
-                      style={{ display: 'inline-flex', alignItems: 'center' }}
-                    >
-                      <Reply size={14} strokeWidth={1.5} />
-                    </button>
-                    {!project && onForwardToProject && projects.length > 0 && (
-                      <button
-                        type="button"
-                        title={tr('Forward to project room')}
-                        onClick={() => void onForwardToProject(msg, projects[0]!.id)}
-                        style={{
-                          fontSize: 11,
-                          color: 'var(--text-tertiary)',
-                          padding: '1px 6px',
-                          borderRadius: 'var(--radius-full)',
-                          border: '1px solid var(--border-subtle)',
-                        }}
-                      >
-                        {tr('Send to {name}', { name: projects[0]!.name })}
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
+            const mark = sessionMarks.marks.get(msg.id);
+            const rendered = renderMessage(msg, idx);
+            return mark ? (
+              <Fragment key={`wrap-${msg.id}`}>
+                {renderSessionDivider(mark.session, mark.continued)}
+                {rendered}
+              </Fragment>
+            ) : (
+              rendered
             );
           })
         )}
+        {activeSessionEmpty && renderSessionDivider(activeSessionEmpty, false)}
 
         {showParallelStrip && (
           <ParallelAgentsStrip

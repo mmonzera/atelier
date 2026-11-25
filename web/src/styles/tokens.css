@@ -599,3 +599,19 @@ button:disabled {
 .canon-entry-actions { display: flex; gap: 6px; }
 .canon-entry-actions button { cursor: pointer; }
 .canon-entry-actions button:disabled { cursor: default; opacity: .5; }
+
+/* Session switcher rows */
+.session-row:not([aria-selected='true']):hover {
+  background: var(--surface-1) !important;
+}
+.session-row .session-row-action {
+  opacity: 0;
+}
+.session-row:hover .session-row-action,
+.session-row .session-row-action:focus-visible {
+  opacity: 1;
+}
+.session-row .session-row-action:hover {
+  color: var(--text-primary) !important;
+  background: var(--surface-2);
+}
