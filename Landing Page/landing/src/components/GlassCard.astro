@@ -1,6 +1,0 @@
----
-import type { HTMLTag } from "astro/types";
-interface Props { class?: string; as?: HTMLTag; }
-const { class: cls = "", as: Tag = "div" } = Astro.props;
----
-<Tag class={`glass-card ${cls}`.trim()}><slot /></Tag>

@@ -1,7 +1,0 @@
----
-interface Props { variant?: "glow" | "solid" | "ghost" | "link"; href?: string; class?: string; [k: string]: unknown; }
-const { variant = "glow", href, class: cls = "", ...rest } = Astro.props;
-const Tag = href ? "a" : "button";
-const classes = `btn btn-${variant} ${cls}`.trim();
----
-<Tag class={classes} href={href} {...rest}><slot /></Tag>

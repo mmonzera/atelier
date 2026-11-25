@@ -1,6 +1,0 @@
----
-import type { HTMLTag } from "astro/types";
-interface Props { delay?: number; as?: HTMLTag; class?: string; }
-const { delay = 0, as: Tag = "div", class: cls = "" } = Astro.props;
----
-<Tag data-reveal class={cls} style={`--reveal-delay:${delay}ms`}><slot /></Tag>
