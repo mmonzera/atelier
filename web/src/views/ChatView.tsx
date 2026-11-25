@@ -24,7 +24,6 @@ import {
   Copy,
   Globe,
   Hand,
-  LayoutGrid,
   Minimize2,
   RefreshCw,
   Reply,
@@ -38,13 +37,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { shownModels } from '../state/models';
 import { api, browserApi } from '../api';
 import {
-  DotMatrixGrid,
   FormattedText,
   TaskStatusIcon,
   getColorVar,
 } from '../components/Atoms';
 import { MessageAttachments, isAttachmentOnlyText } from '../components/AttachmentViews';
+import { ParallelAgentsStrip, WorkPointsChecklist } from '../components/ChatWorkPanel';
 import { DesignOptionsCard, DesignPendingCard } from '../components/DesignOptionsCard';
+import { ProviderIcon } from '../components/ProviderIcon';
 import { BotMascot } from '../components/mascot/BotMascot';
 import { QaReportCard } from '../components/QaReportCard';
 import { Select } from '../components/Select';
@@ -76,30 +76,10 @@ interface ChatViewProps {
   onOpenBrowserTab?: () => void;
 }
 
-function formatDuration(ms: number | null): string {
-  if (!ms) return '1s';
-  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.round(ms / 1000)}s`;
-}
-
 function formatTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-function LiveTimer({ startIso }: { startIso: string }) {
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    const startMs = new Date(startIso).getTime() || Date.now();
-    const tick = () => setElapsed(Math.max(0, (Date.now() - startMs) / 1000));
-    tick();
-    const id = window.setInterval(tick, 100);
-    return () => window.clearInterval(id);
-  }, [startIso]);
-
-  return <span className="mono-num">{elapsed.toFixed(1)}s</span>;
 }
 
 export function ChatView({
@@ -153,6 +133,11 @@ export function ChatView({
     return found ? `${found.label} (${provider})` : `${provider} · ${modelId}`;
   };
 
+  const formatShortModelName = (provider: ModelProvider, modelId: string) => {
+    const found = allModels.find((m) => m.provider === provider && m.id === modelId);
+    return found ? found.label : modelId;
+  };
+
   const threadMessages = useMemo(
     () =>
       messages.filter(
@@ -170,6 +155,27 @@ export function ChatView({
   }, [threadMessages]);
 
   const enabledSkills = useMemo(() => agent.skills.filter((s) => s.enabled), [agent.skills]);
+  const workingAgents = useMemo(() => agents.filter((a) => a.status === 'working'), [agents]);
+  const showParallelStrip = useMemo(
+    () => workingAgents.length >= 2 || workingAgents.some((a) => a.id !== agent.id),
+    [workingAgents, agent.id],
+  );
+  const earliestActiveIso = useMemo(() => {
+    let earliestMs = Infinity;
+    let earliestIso = '';
+    for (const a of workingAgents) {
+      const ms = new Date(a.updatedAt).getTime();
+      if (Number.isFinite(ms) && ms < earliestMs) {
+        earliestMs = ms;
+        earliestIso = a.updatedAt;
+      }
+    }
+    return earliestIso || new Date().toISOString();
+  }, [workingAgents]);
+  const pendingAgentTasks = useMemo(
+    () => tasks.filter((t) => t.assigneeAgentId === agent.id && t.status === 'todo'),
+    [tasks, agent.id],
+  );
 
   const lastMsg = threadMessages[threadMessages.length - 1];
   useEffect(() => {
@@ -179,8 +185,8 @@ export function ChatView({
     if (lastMsg) setActiveTickId(lastMsg.id);
   }, [threadMessages.length, lastMsg?.text, lastMsg?.streaming]);
 
-  const toggleWork = (id: string) => {
-    setExpandedWorkIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggleWork = (id: string, defaultExpanded = false) => {
+    setExpandedWorkIds((prev) => ({ ...prev, [id]: !(prev[id] ?? defaultExpanded) }));
   };
 
   const handleCopy = async (id: string, text: string) => {
@@ -387,7 +393,7 @@ export function ChatView({
             </div>
           </div>
         ) : (
-          threadMessages.map((msg) => {
+          threadMessages.map((msg, idx) => {
             if (msg.author === 'user') {
               return (
                 <div
@@ -610,14 +616,32 @@ export function ChatView({
 
             const msgActivities =
               msg.metadata?.activities ?? activities.filter((a) => a.messageId === msg.id);
-            const isExpanded = Boolean(expandedWorkIds[msg.id]);
-            const latestTool = msgActivities[msgActivities.length - 1];
+            const isExpanded = expandedWorkIds[msg.id] ?? msg.streaming;
             const linkedTask = msg.metadata?.taskId
               ? tasks.find((t) => t.id === msg.metadata?.taskId)
               : undefined;
             const targetAgent = msg.metadata?.targetAgentId
               ? agents.find((a) => a.id === msg.metadata?.targetAgentId)
               : undefined;
+
+            let prevAssistant: Message | null = null;
+            for (let j = idx - 1; j >= 0; j -= 1) {
+              if (threadMessages[j]!.author === 'agent') {
+                prevAssistant = threadMessages[j]!;
+                break;
+              }
+            }
+            const msgProvider = msg.metadata?.provider;
+            const msgModel = msg.metadata?.model;
+            const prevProvider = prevAssistant?.metadata?.provider;
+            const prevModel = prevAssistant?.metadata?.model;
+            const switchedModel = Boolean(
+              msgProvider &&
+                msgModel &&
+                prevProvider &&
+                prevModel &&
+                (prevProvider !== msgProvider || prevModel !== msgModel),
+            );
 
             return (
               <div
@@ -633,79 +657,36 @@ export function ChatView({
                   paddingRight: 16,
                 }}
               >
-                {(msgActivities.length > 0 || (!msg.streaming && msg.durationMs)) && (
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => toggleWork(msg.id)}
-                      className="transition-atelier"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        fontSize: 12,
-                        lineHeight: '16px',
-                        color: 'var(--text-secondary)',
-                      }}
-                    >
-                      {isExpanded ? (
-                        <ChevronDown size={14} strokeWidth={1.5} />
-                      ) : (
-                        <ChevronRight size={14} strokeWidth={1.5} />
-                      )}
-                      <LayoutGrid size={13} strokeWidth={1.5} />
-                      <span>
-                        {msg.streaming ? tr('Working · {length} step{v1}', { length: msgActivities.length, v1: msgActivities.length === 1 ? '' : 's' }) : tr('Worked for {v0}{v1}', { v0: formatDuration(msg.durationMs), v1: msgActivities.length > 0 ? ` · ${msgActivities.length} tools` : '' })}
-                      </span>
-                    </button>
-
-                    {isExpanded && msgActivities.length > 0 && (
-                      <div
-                        className="transition-expand"
-                        style={{
-                          marginTop: 8,
-                          marginLeft: 6,
-                          paddingLeft: 12,
-                          borderLeft: '1px solid var(--border-subtle)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 6,
-                        }}
-                      >
-                        {msgActivities.map((act) => (
-                          <div
-                            key={act.id}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'baseline',
-                              justifyContent: 'space-between',
-                              gap: 12,
-                              fontSize: 12,
-                              color:
-                                act.kind === 'error' ? 'var(--agent-red)' : 'var(--text-tertiary)',
-                            }}
-                          >
-                            <div style={{ minWidth: 0 }}>
-                              <span className="mono-num" style={{ color: 'var(--text-secondary)' }}>
-                                {act.label}
-                              </span>
-                              {act.detail && (
-                                <span style={{ marginLeft: 8, color: 'var(--text-muted)' }}>
-                                  {act.detail}
-                                </span>
-                              )}
-                            </div>
-                            <span
-                              className="mono-num"
-                              style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}
-                            >
-                              {formatTime(act.createdAt)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                {switchedModel && msgProvider && msgModel && (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      fontSize: 11.5,
+                      color: 'var(--text-tertiary)',
+                    }}
+                  >
+                    <ProviderIcon provider={msgProvider} size={11} />
+                    <span>
+                      {tr('Switched to {model}', {
+                        model: formatShortModelName(msgProvider, msgModel),
+                      })}
+                    </span>
                   </div>
+                )}
+
+                {(msg.streaming || msgActivities.length > 0 || (!msg.streaming && msg.durationMs)) && (
+                  <WorkPointsChecklist
+                    activities={msgActivities}
+                    streaming={msg.streaming}
+                    durationMs={msg.durationMs}
+                    createdAt={msg.createdAt}
+                    agents={agents}
+                    pendingTasks={msg.streaming ? pendingAgentTasks : []}
+                    expanded={isExpanded}
+                    onToggle={() => toggleWork(msg.id, msg.streaming)}
+                  />
                 )}
 
                 {msg.metadata?.fallbackTo && (
@@ -885,22 +866,7 @@ export function ChatView({
                   </div>
                 )}
 
-                {msg.streaming ? (
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      fontSize: 12,
-                      color: 'var(--text-secondary)',
-                      marginTop: 2,
-                    }}
-                  >
-                    <DotMatrixGrid pulsing color="var(--text-secondary)" />
-                    <span>{latestTool ? `${latestTool.label}…` : tr('Working…')}</span>
-                    <LiveTimer startIso={msg.createdAt} />
-                  </div>
-                ) : (
+                {!msg.streaming && (
                   <div
                     className="message-actions"
                     style={{
@@ -912,6 +878,20 @@ export function ChatView({
                     }}
                   >
                     <span>{formatTime(msg.createdAt)}</span>
+                    {msgProvider && msgModel && (
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          fontSize: 11.5,
+                          color: 'var(--text-muted)',
+                        }}
+                      >
+                        <ProviderIcon provider={msgProvider} size={11} active={false} />
+                        <span>{formatShortModelName(msgProvider, msgModel)}</span>
+                      </span>
+                    )}
                     <button
                       type="button"
                       title={tr('Copy reply')}
@@ -947,6 +927,18 @@ export function ChatView({
               </div>
             );
           })
+        )}
+
+        {showParallelStrip && (
+          <ParallelAgentsStrip
+            agents={workingAgents}
+            settings={settings}
+            earliestActiveIso={earliestActiveIso}
+            onSelectAgent={onSelectAgent}
+            onStopAgents={async (ids) => {
+              await Promise.allSettled(ids.map((id) => api.stopAgent(id)));
+            }}
+          />
         )}
 
         {browserApprovals
@@ -1138,7 +1130,7 @@ export function ChatView({
                   />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
-                      {agent.pendingFallback.failedProvider} · {agent.pendingFallback.failedModel}{tr('stopped (')}
+                      {agent.pendingFallback.failedProvider} · {agent.pendingFallback.failedModel} {tr('stopped (')}
                       {agent.pendingFallback.errorKind.replace('_', ' ')})
                     </div>
                     <div

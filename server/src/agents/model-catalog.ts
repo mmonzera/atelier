@@ -1,7 +1,7 @@
 import { BUILT_IN_MODELS, type ModelCatalog, type ModelEntry, type RealProvider, type Settings } from '@atelier/contracts';
 import type { AppConfig } from '../config.js';
 import { discoverLocalCodexModels } from './cli-runners.js';
-import { execCliCapture, resolveCliBinary } from './cli-spawn.js';
+import { execCliCapture, getOpenCodeCliCapabilities, resolveCliBinary } from './cli-spawn.js';
 
 const CACHE_MS = 10 * 60 * 1000;
 const cache = new Map<string, { at: number; value: ModelCatalog }>();
@@ -63,17 +63,265 @@ async function fetchOpenRouter(config: AppConfig): Promise<ModelEntry[]> {
   return out;
 }
 
-async function fetchOpenCode(settings: Settings): Promise<ModelEntry[]> {
+export interface OpenCodeCustomProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+}
+
+function readStringProp(obj: unknown, key: string): string | null {
+  if (!obj || typeof obj !== 'object') return null;
+  const val = (obj as Record<string, unknown>)[key];
+  return typeof val === 'string' && val.trim() ? val.trim() : null;
+}
+
+function extractAuthKey(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (!value || typeof value !== 'object') return null;
+  return (
+    readStringProp(value, 'key') ??
+    readStringProp(value, 'apiKey') ??
+    readStringProp(value, 'token')
+  );
+}
+
+/**
+ * Extracts OpenCode custom providers (e.g. `vikey`) with a configured `baseURL` and matching
+ * credential from `opencode debug config` and `opencode auth export`.
+ */
+export function extractOpenCodeCustomProviders(
+  debugConfigStdout: string,
+  authExportStdout: string,
+): OpenCodeCustomProvider[] {
+  let docs: unknown[] = [];
+  try {
+    const parsed = JSON.parse(debugConfigStdout.replace(/^\uFEFF/, '').trim());
+    docs = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? [parsed] : [];
+  } catch {
+    return [];
+  }
+
+  const authByIntegration = new Map<string, string>();
+  try {
+    const parsedAuth = JSON.parse(authExportStdout.replace(/^\uFEFF/, '').trim());
+    if (Array.isArray(parsedAuth)) {
+      const inactiveFallback = new Map<string, string>();
+      for (const item of parsedAuth) {
+        if (!item || typeof item !== 'object') continue;
+        const rec = item as Record<string, unknown>;
+        const integrationId = readStringProp(rec, 'integrationID') ?? readStringProp(rec, 'provider');
+        const key = extractAuthKey(rec.value) ?? extractAuthKey(rec);
+        if (!integrationId || !key) continue;
+        const normalized = integrationId.toLowerCase();
+        if (rec.active !== false) {
+          authByIntegration.set(normalized, key);
+        } else if (!inactiveFallback.has(normalized)) {
+          inactiveFallback.set(normalized, key);
+        }
+      }
+      for (const [k, v] of inactiveFallback) {
+        if (!authByIntegration.has(k)) authByIntegration.set(k, v);
+      }
+    } else if (parsedAuth && typeof parsedAuth === 'object') {
+      for (const [k, v] of Object.entries(parsedAuth as Record<string, unknown>)) {
+        const key = extractAuthKey(v);
+        if (key) authByIntegration.set(k.toLowerCase(), key);
+      }
+    }
+  } catch {
+    // auth export is optional if inline apiKey is configured
+  }
+
+  const providers = new Map<string, OpenCodeCustomProvider>();
+  for (const doc of docs) {
+    if (!doc || typeof doc !== 'object') continue;
+    const d = doc as Record<string, unknown>;
+    const info = d.info && typeof d.info === 'object' ? (d.info as Record<string, unknown>) : d;
+    for (const block of [info.providers, info.provider]) {
+      if (!block || typeof block !== 'object') continue;
+      for (const [rawId, rawCfg] of Object.entries(block as Record<string, unknown>)) {
+        const id = rawId.trim();
+        if (!id || !rawCfg || typeof rawCfg !== 'object') continue;
+        const cfg = rawCfg as Record<string, unknown>;
+        const baseUrl =
+          readStringProp(cfg.settings, 'baseURL') ?? readStringProp(cfg.options, 'baseURL');
+        if (!baseUrl) continue;
+        const apiKey =
+          authByIntegration.get(id.toLowerCase()) ??
+          readStringProp(cfg.settings, 'apiKey') ??
+          readStringProp(cfg.options, 'apiKey');
+        if (!apiKey) continue;
+        const name = readStringProp(cfg, 'name') ?? id;
+        providers.set(id, { id, name, baseUrl, apiKey });
+      }
+    }
+  }
+
+  return [...providers.values()];
+}
+
+export function extractOpenCodeDisabledProviders(debugConfigStdout: string): string[] {
+  let docs: unknown[] = [];
+  try {
+    const parsed = JSON.parse(debugConfigStdout.replace(/^\uFEFF/, '').trim());
+    docs = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? [parsed] : [];
+  } catch {
+    return [];
+  }
+
+  const disabled = new Set<string>();
+  for (const doc of docs) {
+    if (!doc || typeof doc !== 'object') continue;
+    const d = doc as Record<string, unknown>;
+    const info = d.info && typeof d.info === 'object' ? (d.info as Record<string, unknown>) : d;
+    if (!Array.isArray(info.policies)) continue;
+    for (const policy of info.policies) {
+      if (!policy || typeof policy !== 'object') continue;
+      const p = policy as Record<string, unknown>;
+      if (p.action === 'provider.use' && p.effect === 'deny') {
+        const res = readStringProp(p, 'resource');
+        if (res && res !== '*') disabled.add(res);
+      }
+    }
+  }
+  return [...disabled];
+}
+
+export function formatOpenCodeModelLabel(
+  providerName: string,
+  modelId: string,
+  explicitName?: string,
+): string {
+  const cleanName = explicitName?.trim();
+  return cleanName ? `${providerName} · ${cleanName}` : `${providerName} · ${modelId}`;
+}
+
+async function discoverOpenCodeCustomModels(
+  binPath: string,
+  standaloneArgs: string[],
+): Promise<{ models: ModelEntry[]; customProviderNames: string[]; disabledProviders: string[] }> {
+  const emptyRes = { exitCode: 1, stdout: '', stderr: '' };
+  const [cfgRes, authRes] = await Promise.all([
+    execCliCapture(binPath, [...standaloneArgs, 'debug', 'config'], 5000).catch(() => emptyRes),
+    execCliCapture(binPath, [...standaloneArgs, 'auth', 'export'], 5000).catch(() => emptyRes),
+  ]);
+  const disabledProviders = extractOpenCodeDisabledProviders(cfgRes.stdout);
+  const providers = extractOpenCodeCustomProviders(cfgRes.stdout, authRes.stdout);
+  if (providers.length === 0) {
+    return { models: [], customProviderNames: [], disabledProviders };
+  }
+
+  const models: ModelEntry[] = [];
+  const customProviderNames: string[] = [];
+
+  await Promise.allSettled(
+    providers.map(async (prov) => {
+      const endpoint = `${prov.baseUrl.replace(/\/+$/, '')}/models`;
+      const res = await fetch(endpoint, {
+        headers: {
+          Authorization: `Bearer ${prov.apiKey}`,
+          Accept: 'application/json',
+        },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return;
+      const body = (await res.json()) as {
+        data?: Array<{ id?: unknown; name?: unknown }>;
+      };
+      if (!Array.isArray(body.data)) return;
+      customProviderNames.push(prov.name);
+      for (const item of body.data) {
+        if (typeof item?.id !== 'string') continue;
+        const itemId = item.id.trim();
+        if (!itemId) continue;
+        const fullId = `${prov.id}/${itemId}`;
+        if (!MODEL_ID_RE.test(fullId)) continue;
+        models.push({
+          id: fullId,
+          label: formatOpenCodeModelLabel(
+            prov.name,
+            itemId,
+            typeof item.name === 'string' ? item.name : undefined,
+          ),
+          provider: 'opencode',
+        });
+      }
+    }),
+  );
+
+  return { models, customProviderNames, disabledProviders };
+}
+
+async function fetchOpenCode(settings: Settings): Promise<{ models: ModelEntry[]; note?: string }> {
   const bin = await resolveCliBinary('opencode', settings.cliPaths?.opencode);
   if (!bin) throw new Error('OpenCode CLI not found. Install it or set its path in Accounts.');
-  const res = await execCliCapture(bin, ['models'], 20_000);
-  if (res.exitCode !== 0 && !res.stdout.trim()) {
+
+  const { standaloneArgs } = await getOpenCodeCliCapabilities(bin);
+  const [res, custom] = await Promise.all([
+    execCliCapture(bin, [...standaloneArgs, 'models'], 20_000),
+    discoverOpenCodeCustomModels(bin, standaloneArgs),
+  ]);
+  if (res.exitCode !== 0 && !res.stdout.trim() && custom.models.length === 0) {
     throw new Error(res.stderr.trim().split('\n').pop() || 'opencode models failed');
+  }
+
+  const byId = new Map<string, ModelEntry>();
+  for (const raw of res.stdout.split(/\r?\n/)) {
+    const id = raw.trim();
+    if (id.includes('/') && MODEL_ID_RE.test(id)) {
+      const label = id.startsWith('opencode-go/')
+        ? `OpenCode Go · ${id.slice('opencode-go/'.length)}`
+        : id;
+      byId.set(id, { id, label, provider: 'opencode' });
+    }
+  }
+  for (const m of custom.models) {
+    byId.set(m.id, m);
+  }
+
+  const models = [...byId.values()];
+  const disabledSet = new Set(custom.disabledProviders.map((d) => d.toLowerCase()));
+  const activePrefixes = [
+    ...new Set(
+      models
+        .map((m) => m.id.split('/')[0])
+        .filter((p): p is string => Boolean(p) && !disabledSet.has(p.toLowerCase())),
+    ),
+  ];
+  const noteParts: string[] = [];
+  if (activePrefixes.length > 0) {
+    noteParts.push(
+      `Active in OpenCode: ${activePrefixes.join(', ')}. Use "+ Add provider" (or run opencode → /connect → OpenCode Go) to connect OpenCode Go, ChatGPT, Copilot, Gemini, and more.`,
+    );
+  }
+  if (custom.disabledProviders.length > 0) {
+    noteParts.push(
+      `Disabled in OpenCode config: ${custom.disabledProviders.join(', ')} (re-enable in OpenCode to run these models).`,
+    );
+  }
+  const note = noteParts.length > 0 ? noteParts.join(' ') : undefined;
+
+  return { models, ...(note ? { note } : {}) };
+}
+
+async function fetchAntigravity(settings: Settings): Promise<ModelEntry[]> {
+  const bin = await resolveCliBinary('antigravity', settings.cliPaths?.antigravity);
+  if (!bin) return [];
+  const res = await execCliCapture(bin, ['models'], 10_000);
+  if (res.exitCode !== 0 && !res.stdout.trim()) {
+    throw new Error(res.stderr.trim().split('\n').pop() || 'agy models failed');
   }
   const out: ModelEntry[] = [];
   for (const raw of res.stdout.split(/\r?\n/)) {
-    const id = raw.trim();
-    if (id.includes('/') && MODEL_ID_RE.test(id)) out.push({ id, label: id, provider: 'opencode' });
+    const line = raw.trim();
+    const match = /^(\S+)(?:\t+|\s{2,})(.+)$/.exec(line);
+    if (!match) continue;
+    const id = match[1]!.trim();
+    const label = match[2]!.trim();
+    if (MODEL_ID_RE.test(id)) {
+      out.push({ id, label: label || id, provider: 'antigravity' });
+    }
   }
   return out;
 }
@@ -91,12 +339,23 @@ async function load(
           models: mergeCatalog(provider, await fetchOpenRouter(config)),
           source: 'live',
         };
-      case 'opencode':
+      case 'opencode': {
+        const { models, note } = await fetchOpenCode(settings);
         return {
           provider,
-          models: mergeCatalog(provider, await fetchOpenCode(settings)),
+          models: mergeCatalog(provider, models),
           source: 'live',
+          ...(note ? { note } : {}),
         };
+      }
+      case 'antigravity': {
+        const detected = await fetchAntigravity(settings);
+        return {
+          provider,
+          models: mergeCatalog(provider, detected),
+          source: detected.length > 0 ? 'live' : 'builtin',
+        };
+      }
       case 'openai': {
         const detected = discoverLocalCodexModels();
         return {

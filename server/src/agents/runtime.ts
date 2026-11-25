@@ -518,6 +518,10 @@ export class AgentRuntime {
       author: 'agent',
       text: '',
       streaming: true,
+      metadata: {
+        provider: effectiveProvider,
+        model: effectiveModel,
+      },
     });
 
     const turnActivities: MessageActivitySummary[] = [];
@@ -603,6 +607,8 @@ export class AgentRuntime {
         metadata: {
           ...(Object.keys(designArtifacts).length ? { designArtifacts } : {}),
           activities: turnActivities,
+          provider: effectiveProvider,
+          model: effectiveModel,
           taskId: linkedTask?.id,
           taskIdentifier: linkedTask?.identifier,
           taskTitle: linkedTask?.title,
@@ -702,7 +708,12 @@ export class AgentRuntime {
           appendText: ' (dihentikan)',
           streaming: false,
           durationMs,
-          metadata: { cancelled: true, activities: turnActivities },
+          metadata: {
+            cancelled: true,
+            activities: turnActivities,
+            provider: effectiveProvider,
+            model: effectiveModel,
+          },
         });
         this.store.updateAgent(agent.id, {
           status: 'idle',
@@ -745,7 +756,11 @@ export class AgentRuntime {
               text: `${classified.label} on ${effectiveProvider}/${effectiveModel} — automatically switching to backup ${nextCandidate.provider}/${nextCandidate.model}…`,
               streaming: false,
               durationMs,
-              metadata: { activities: turnActivities },
+              metadata: {
+                activities: turnActivities,
+                provider: effectiveProvider,
+                model: effectiveModel,
+              },
             });
             this.store.enqueueItem({
               agentId: agent.id,
@@ -798,7 +813,11 @@ export class AgentRuntime {
           text: `Error: ${message}`,
           streaming: false,
           durationMs,
-          metadata: { activities: turnActivities },
+          metadata: {
+            activities: turnActivities,
+            provider: effectiveProvider,
+            model: effectiveModel,
+          },
         });
         this.store.updateAgent(agent.id, {
           status: 'error',

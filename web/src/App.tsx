@@ -294,10 +294,41 @@ export function App() {
   };
 
   const handleSelectModel = async (entry: ModelEntry) => {
+    if (activeAgent) {
+      await api.updateAgent(activeAgent.id, {
+        providerOverride: entry.provider,
+        modelOverride: entry.id,
+      });
+      if (activeAgent.status === 'working') {
+        toast.info(
+          tr('{agent} switched to {model} — applies next turn', {
+            agent: activeAgent.name,
+            model: entry.label,
+          }),
+        );
+      } else {
+        toast.success(
+          tr('{agent} now using {model}', {
+            agent: activeAgent.name,
+            model: entry.label,
+          }),
+        );
+      }
+      return;
+    }
     await api.updateSettings({
       provider: entry.provider,
       model: entry.id,
     });
+  };
+
+  const handleResetAgentModel = async () => {
+    if (!activeAgent) return;
+    await api.updateAgent(activeAgent.id, {
+      providerOverride: null,
+      modelOverride: null,
+    });
+    toast.info(tr('{agent} reset to workspace default model', { agent: activeAgent.name }));
   };
 
   const handleSavePreviewUrl = async (previewUrl: string | null) => {
@@ -810,6 +841,7 @@ export function App() {
               onStop={handleStop}
               onUpdateReasoning={handleUpdateReasoning}
               onSelectModel={handleSelectModel}
+              onResetAgentModel={handleResetAgentModel}
               onNewTask={() => setModal({ type: 'new-task' })}
               onCompactContext={() => void handleCompactContext()}
               onOpenLinkRepo={() => setModal({ type: 'link-repo' })}

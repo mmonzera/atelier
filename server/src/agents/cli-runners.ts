@@ -22,7 +22,12 @@ import {
 } from '../mcp/config.js';
 import type { AtelierStore } from '../store.js';
 import { ClaudeAgentRunner } from './claude-runner.js';
-import { resolveCliBinary, spawnCli } from './cli-spawn.js';
+import {
+  execCliCapture,
+  getOpenCodeCliCapabilities,
+  resolveCliBinary,
+  spawnCli,
+} from './cli-spawn.js';
 import { AttachmentStore } from '../attachments.js';
 import { conversationTail, estimateTokens, getScopeKey } from './compactor.js';
 import { resolveMcpAuth } from '../mcp/oauth.js';
@@ -208,6 +213,152 @@ function readJsonLines(
   });
 }
 
+export interface AntigravityInvocationOptions {
+  model: string;
+  effort: string;
+  allowShell: boolean;
+  allowFullPermissions: boolean;
+  memoryOnly: boolean;
+  attachmentDir: string;
+  artifactDir?: string | null;
+  resumeConversationId?: string | null;
+  fullPrompt: string;
+}
+
+/**
+ * Builds the `agy` CLI args and `stream-json` stdin payload without `-p` so option flags
+ * can never be misparsed as a prompt string.
+ */
+export function buildAntigravityCliInvocation(
+  opts: AntigravityInvocationOptions,
+): { args: string[]; stdinPayload: string } {
+  const hasEmbeddedEffort = /-(low|medium|high|xhigh|max)$/i.test(opts.model);
+  const isOrchestrator = /orchestrator/i.test(opts.model);
+  const shouldPassEffort = Boolean(opts.effort) && !hasEmbeddedEffort && !isOrchestrator;
+
+  let mode: string | null = null;
+  let skipPermissions = false;
+  let inlineSettings: Record<string, unknown> | null = null;
+
+  if (opts.memoryOnly) {
+    inlineSettings = { toolPermission: 'strict' };
+  } else if (!opts.allowShell) {
+    mode = 'accept-edits';
+    inlineSettings = { permissions: { deny: ['command(*)'] } };
+  } else if (opts.allowFullPermissions) {
+    mode = 'auto';
+    skipPermissions = true;
+  } else {
+    mode = 'auto';
+  }
+
+  const args = [
+    '--input-format=stream-json',
+    '--output-format=stream-json',
+    '--disable-slash-commands',
+    `--model=${opts.model}`,
+    ...(shouldPassEffort ? [`--effort=${opts.effort}`] : []),
+    ...(mode ? [`--mode=${mode}`] : []),
+    ...(skipPermissions ? ['--dangerously-skip-permissions'] : []),
+    ...(inlineSettings ? [`--settings=${JSON.stringify(inlineSettings)}`] : []),
+  ];
+
+  if (!opts.memoryOnly) {
+    args.push(`--add-dir=${opts.attachmentDir}`);
+    if (opts.artifactDir) {
+      args.push(`--add-dir=${opts.artifactDir}`);
+    }
+  }
+  if (opts.resumeConversationId && !opts.memoryOnly) {
+    args.push(`--conversation=${opts.resumeConversationId}`);
+  }
+
+  const stdinPayload = `${JSON.stringify({
+    event: 'user',
+    message: { content: opts.fullPrompt },
+  })}\n`;
+
+  return { args, stdinPayload };
+}
+
+/** Parses one NDJSON line emitted by `agy --output-format=stream-json`. */
+export function parseAntigravityStreamLine(
+  line: string,
+  acc: string,
+  cb: Pick<TurnCallbacks, 'onText' | 'onTool' | 'onSession' | 'onUsage' | 'onContextTokens'>,
+): { acc: string; error?: string } {
+  let ev: Record<string, unknown>;
+  try {
+    ev = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return { acc };
+  }
+
+  const stepUpdate =
+    ev.step_update && typeof ev.step_update === 'object'
+      ? (ev.step_update as Record<string, unknown>)
+      : null;
+  const resultObj =
+    ev.result && typeof ev.result === 'object'
+      ? (ev.result as Record<string, unknown>)
+      : null;
+
+  const conversationId =
+    (typeof ev.conversation_id === 'string' && ev.conversation_id) ||
+    (typeof stepUpdate?.conversation_id === 'string' && stepUpdate.conversation_id) ||
+    (typeof resultObj?.conversation_id === 'string' && resultObj.conversation_id) ||
+    null;
+  if (conversationId) {
+    cb.onSession(`antigravity:${conversationId}`);
+  }
+
+  if (ev.event === 'step_update' && stepUpdate) {
+    if (
+      stepUpdate.step_type === 'agent_response' &&
+      typeof stepUpdate.text_delta === 'string' &&
+      stepUpdate.text_delta
+    ) {
+      cb.onText(stepUpdate.text_delta);
+      return { acc: acc + stepUpdate.text_delta };
+    }
+    if (stepUpdate.step_type === 'tool' && stepUpdate.state === 'DONE') {
+      const toolInfo =
+        stepUpdate.tool_info && typeof stepUpdate.tool_info === 'object'
+          ? (stepUpdate.tool_info as Record<string, unknown>)
+          : null;
+      const toolName =
+        (typeof stepUpdate.tool_name === 'string' && stepUpdate.tool_name) ||
+        (typeof toolInfo?.name === 'string' && toolInfo.name) ||
+        '';
+      if (toolName) {
+        cb.onTool(toolName, toolInfo?.parameters ?? {});
+      }
+    }
+  } else if (ev.event === 'result' && resultObj) {
+    if (resultObj.usage && typeof resultObj.usage === 'object') {
+      const u = resultObj.usage as Record<string, unknown>;
+      const inputTok = Number(u.input_tokens ?? 0);
+      const outputTok = Number(u.output_tokens ?? 0);
+      const cacheTok = Number(u.cache_read_tokens ?? 0);
+      cb.onUsage?.(inputTok, outputTok);
+      cb.onContextTokens?.(inputTok + cacheTok);
+    }
+    if (typeof resultObj.status === 'string' && resultObj.status !== 'SUCCESS') {
+      const errMsg =
+        typeof resultObj.error === 'string' && resultObj.error.trim()
+          ? resultObj.error.trim()
+          : `Antigravity CLI ended with status ${resultObj.status}`;
+      return { acc, error: errMsg };
+    }
+    if (typeof resultObj.response === 'string' && resultObj.response && !acc) {
+      cb.onText(resultObj.response);
+      return { acc: resultObj.response };
+    }
+  }
+
+  return { acc };
+}
+
 /**
  * A natively resumed CLI session already holds the system prompt from its first turn, so a
  * resumed turn sends only the prompt body (plus a Canon update when it changed).
@@ -227,7 +378,10 @@ export function composeCliPrompt(
 
 export class CliAgentRunner implements AgentRunner {
   private readonly sdkFallback: ClaudeAgentRunner;
-  private readonly openCodeMajorCache = new Map<string, number>();
+  private readonly openCodeCustomProvidersCache = new Map<
+    string,
+    { at: number; ids: Set<string> }
+  >();
 
   constructor(
     private readonly store: AtelierStore,
@@ -533,7 +687,7 @@ export class CliAgentRunner implements AgentRunner {
       );
     }
 
-    const nativeResumeId = parseProviderSessionId(turn.resumeSessionId, 'claude');
+    const nativeResumeId = turn.memoryOnly ? null : parseProviderSessionId(turn.resumeSessionId, 'claude');
     const permissionMode = !turn.agent.allowShell
       ? 'acceptEdits'
       : turn.project?.allowFullPermissions
@@ -544,16 +698,12 @@ export class CliAgentRunner implements AgentRunner {
     const allowedTools = [...baseTools, ...claudeAllowedMcpTools(opts.mcpServers)].join(',');
     const args = [
       '-p',
-      '--output-format',
-      'stream-json',
+      '--output-format=stream-json',
       '--verbose',
       '--include-partial-messages',
-      '--model',
-      opts.model,
-      '--permission-mode',
-      permissionMode,
-      '--allowedTools',
-      allowedTools,
+      `--model=${opts.model}`,
+      `--permission-mode=${permissionMode}`,
+      `--allowedTools=${allowedTools}`,
     ];
     let mcpConfigPath: string | null = null;
     if (opts.mcpServers.length > 0) {
@@ -562,12 +712,12 @@ export class CliAgentRunner implements AgentRunner {
         turn.agent.id,
         opts.mcpServers,
       );
-      args.push('--mcp-config', mcpConfigPath);
+      args.push(`--mcp-config=${mcpConfigPath}`);
     }
     if (turn.memoryOnly) {
-      args.push('--tools', '', '--strict-mcp-config', '--no-session-persistence', '--max-turns', '1');
+      args.push('--tools=', '--strict-mcp-config', '--no-session-persistence', '--max-turns=1');
     } else if (!turn.agent.allowShell) {
-      args.push('--disallowedTools', 'Bash');
+      args.push('--disallowedTools=Bash');
     }
     // "=" form: --add-dir is variadic and would otherwise swallow the next flag.
     if (!turn.memoryOnly) {
@@ -576,14 +726,15 @@ export class CliAgentRunner implements AgentRunner {
       if (fs.existsSync(directory)) args.push(`--add-dir=${directory}`);
     }
     if (nativeResumeId) {
-      args.push('--resume', nativeResumeId);
+      args.push(`--resume=${nativeResumeId}`);
     }
 
     const promptBody = this.buildConversationContext(turn, cb, Boolean(nativeResumeId));
     const fullPrompt = this.composeCliPrompt(turn, opts.systemPrompt, promptBody, Boolean(nativeResumeId));
 
+    let claudeError: string | null = null;
     try {
-      return await this.execStreaming(binPath, args, opts.cwd, fullPrompt, turn.signal, (line, acc) => {
+      const out = await this.execStreaming(binPath, args, opts.cwd, fullPrompt, turn.signal, (line, acc) => {
         try {
           const ev = JSON.parse(line) as Record<string, unknown>;
           if (typeof ev.session_id === 'string') cb.onSession(`claude:${ev.session_id}`);
@@ -616,6 +767,15 @@ export class CliAgentRunner implements AgentRunner {
               cb.onContextTokens?.(Number(u.input_tokens ?? 0) +
                 Number(u.cache_read_input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0));
             }
+            if (ev.is_error === true) {
+              claudeError =
+                typeof ev.result === 'string' && ev.result.trim()
+                  ? ev.result.trim()
+                  : Array.isArray(ev.errors) && ev.errors.length > 0
+                    ? ev.errors.map(String).join('; ')
+                    : 'Claude CLI returned an error';
+              return acc;
+            }
             if (typeof ev.result === 'string' && !acc) {
               cb.onText(ev.result);
               return ev.result;
@@ -626,6 +786,15 @@ export class CliAgentRunner implements AgentRunner {
         }
         return acc;
       });
+      if (claudeError && !turn.signal.aborted) {
+        throw new Error(claudeError);
+      }
+      return out;
+    } catch (err) {
+      if (claudeError && !turn.signal.aborted) {
+        throw new Error(claudeError);
+      }
+      throw err;
     } finally {
       if (mcpConfigPath) {
         try {
@@ -663,7 +832,7 @@ export class CliAgentRunner implements AgentRunner {
 
     const imageArgs = this.attachmentStore
       .imagePaths(turn.attachments)
-      .flatMap((p) => ['--image', p]);
+      .map((p) => `--image=${p}`);
     const args = [
       'exec',
       ...(turn.memoryOnly ? ['--ephemeral', '--ignore-user-config', '--disable', 'shell_tool'] : []),
@@ -685,38 +854,59 @@ export class CliAgentRunner implements AgentRunner {
     const promptBody = this.buildConversationContext(turn, cb, false);
     const fullPrompt = `${opts.systemPrompt}\n\n---\n\n${promptBody}`;
 
-    return this.execStreaming(binPath, args, opts.cwd, fullPrompt, turn.signal, (line, acc) => {
-      try {
-        const ev = JSON.parse(line) as Record<string, unknown>;
-        if (ev.type === 'thread.started' && typeof ev.thread_id === 'string') {
-          cb.onSession(`openai:${ev.thread_id}`);
-        } else if (ev.type === 'item.completed' && ev.item && typeof ev.item === 'object') {
-          const item = ev.item as Record<string, unknown>;
-          if (item.type === 'agent_message' && typeof item.text === 'string') {
-            cb.onText(item.text);
-            return acc ? `${acc}\n${item.text}` : item.text;
+    let codexError: string | null = null;
+    let codexTurnFailed = false;
+    try {
+      const out = await this.execStreaming(binPath, args, opts.cwd, fullPrompt, turn.signal, (line, acc) => {
+        try {
+          const ev = JSON.parse(line) as Record<string, unknown>;
+          if (ev.type === 'thread.started' && typeof ev.thread_id === 'string') {
+            cb.onSession(`openai:${ev.thread_id}`);
+          } else if (ev.type === 'item.completed' && ev.item && typeof ev.item === 'object') {
+            const item = ev.item as Record<string, unknown>;
+            if (item.type === 'agent_message' && typeof item.text === 'string') {
+              cb.onText(item.text);
+              return acc ? `${acc}\n${item.text}` : item.text;
+            }
+            if (item.type === 'command_execution') {
+              cb.onTool('Bash', { command: item.command });
+            } else if (item.type === 'file_change') {
+              cb.onTool('Edit', { changes: item.changes });
+            } else if (item.type === 'mcp_tool_call') {
+              cb.onTool(String(item.tool || 'mcp'), item.arguments ?? {});
+            }
+          } else if (ev.type === 'turn.completed' && ev.usage && typeof ev.usage === 'object') {
+            const u = ev.usage as Record<string, unknown>;
+            const inputTok = Number(u.input_tokens ?? 0);
+            cb.onUsage?.(inputTok, Number(u.output_tokens ?? 0));
+            cb.onContextTokens?.(inputTok);
+          } else if (ev.type === 'error' && typeof ev.message === 'string' && ev.message.trim()) {
+            codexError = ev.message.trim();
+          } else if (ev.type === 'turn.failed' && ev.error && typeof ev.error === 'object') {
+            codexTurnFailed = true;
+            const errObj = ev.error as Record<string, unknown>;
+            if (typeof errObj.message === 'string' && errObj.message.trim()) {
+              codexError = errObj.message.trim();
+            }
           }
-          if (item.type === 'command_execution') {
-            cb.onTool('Bash', { command: item.command });
-          } else if (item.type === 'file_change') {
-            cb.onTool('Edit', { changes: item.changes });
-          } else if (item.type === 'mcp_tool_call') {
-            cb.onTool(String(item.tool || 'mcp'), item.arguments ?? {});
+        } catch {
+          if (line && !line.startsWith('{')) {
+            cb.onText(`${line}\n`);
+            return acc ? `${acc}\n${line}` : line;
           }
-        } else if (ev.type === 'turn.completed' && ev.usage && typeof ev.usage === 'object') {
-          const u = ev.usage as Record<string, unknown>;
-          const inputTok = Number(u.input_tokens ?? 0);
-          cb.onUsage?.(inputTok, Number(u.output_tokens ?? 0));
-          cb.onContextTokens?.(inputTok);
         }
-      } catch {
-        if (line && !line.startsWith('{')) {
-          cb.onText(`${line}\n`);
-          return acc ? `${acc}\n${line}` : line;
-        }
+        return acc;
+      });
+      if (!turn.signal.aborted && (codexTurnFailed || (!out && codexError))) {
+        throw new Error(codexError || 'Codex CLI turn failed');
       }
-      return acc;
-    });
+      return out;
+    } catch (err) {
+      if (codexError && !turn.signal.aborted) {
+        throw new Error(codexError);
+      }
+      throw err;
+    }
   }
 
   private async runAntigravity(
@@ -742,52 +932,54 @@ export class CliAgentRunner implements AgentRunner {
       cb.onTool('atelier.mcp_skipped', { reason: 'Antigravity CLI has no MCP flag' });
     }
 
-    const mode = !turn.agent.allowShell
-      ? 'plan'
-      : turn.project?.allowFullPermissions
-        ? 'auto'
-        : 'accept-edits';
+    const nativeResumeId = turn.memoryOnly
+      ? null
+      : parseProviderSessionId(turn.resumeSessionId, 'antigravity');
+    const promptBody = this.buildConversationContext(turn, cb, Boolean(nativeResumeId));
+    const fullPrompt = this.composeCliPrompt(
+      turn,
+      opts.systemPrompt,
+      promptBody,
+      Boolean(nativeResumeId),
+    );
 
-    const args = [
-      '-p',
-      '--output-format',
-      'stream-json',
-      '--model',
-      opts.model,
-      '--effort',
-      opts.effort,
-      '--mode',
-      mode,
-    ];
-
-    const promptBody = this.buildConversationContext(turn, cb, false);
-    const fullPrompt = `${opts.systemPrompt}\n\n---\n\n${promptBody}`;
-
-    return this.execStreaming(binPath, args, opts.cwd, fullPrompt, turn.signal, (line, acc) => {
-      try {
-        const ev = JSON.parse(line) as Record<string, unknown>;
-        if (typeof ev.session_id === 'string') cb.onSession(`antigravity:${ev.session_id}`);
-        if (typeof ev.delta === 'string') {
-          cb.onText(ev.delta);
-          return acc + ev.delta;
-        }
-        if (typeof ev.text === 'string') {
-          cb.onText(ev.text);
-          return acc + ev.text;
-        }
-        if (ev.type === 'tool_use' && typeof ev.name === 'string') {
-          cb.onTool(ev.name, ev.input ?? {});
-        }
-        if (typeof ev.result === 'string' && !acc) {
-          cb.onText(ev.result);
-          return ev.result;
-        }
-      } catch {
-        cb.onText(`${line}\n`);
-        return acc ? `${acc}\n${line}` : line;
-      }
-      return acc;
+    const artifactDir = this.store.artifactDirectory(turn.project?.id ?? null);
+    const { args, stdinPayload } = buildAntigravityCliInvocation({
+      model: opts.model,
+      effort: opts.effort,
+      allowShell: turn.agent.allowShell,
+      allowFullPermissions: Boolean(turn.project?.allowFullPermissions),
+      memoryOnly: Boolean(turn.memoryOnly),
+      attachmentDir: this.attachmentStore.directory,
+      artifactDir: fs.existsSync(artifactDir) ? artifactDir : null,
+      resumeConversationId: nativeResumeId,
+      fullPrompt,
     });
+
+    let streamError: string | null = null;
+    try {
+      const out = await this.execStreaming(
+        binPath,
+        args,
+        opts.cwd,
+        stdinPayload,
+        turn.signal,
+        (line, acc) => {
+          const parsed = parseAntigravityStreamLine(line, acc, cb);
+          if (parsed.error) streamError = parsed.error;
+          return parsed.acc;
+        },
+      );
+      if (streamError && !turn.signal.aborted) {
+        throw new Error(streamError);
+      }
+      return out;
+    } catch (err) {
+      if (streamError && !turn.signal.aborted) {
+        throw new Error(streamError);
+      }
+      throw err;
+    }
   }
 
   private runDeepSeek(turn: Turn, cb: TurnCallbacks, opts: { model: string; systemPrompt: string }): Promise<string> {
@@ -1098,26 +1290,60 @@ export class CliAgentRunner implements AgentRunner {
     return accumulatedAll;
   }
 
-  private async getOpenCodeMajorVersion(
+  private async getOpenCodeCustomProviderIds(
     binPath: string,
-    cwd: string,
+    standaloneArgs: string[],
     signal: AbortSignal,
-  ): Promise<number> {
-    const cached = this.openCodeMajorCache.get(binPath);
-    if (cached !== undefined) return cached;
-    const version = await this.execStreaming(
-      binPath,
-      ['--version'],
-      cwd,
-      '',
-      signal,
-      (line, output) => `${output} ${line}`,
-      5000,
-    ).catch(() => '');
-    const major = Number(/\b(\d+)\.\d+\.\d+/.exec(version)?.[1]);
-    const resolved = major || 2;
-    this.openCodeMajorCache.set(binPath, resolved);
-    return resolved;
+  ): Promise<Set<string>> {
+    if (signal.aborted) return new Set();
+    const cached = this.openCodeCustomProvidersCache.get(binPath);
+    if (cached && Date.now() - cached.at < 5 * 60_000) {
+      return cached.ids;
+    }
+
+    const res = await execCliCapture(binPath, [...standaloneArgs, 'debug', 'config'], 4000).catch(
+      () => null,
+    );
+    const ids = new Set<string>();
+    if (res && res.exitCode === 0 && res.stdout.trim()) {
+      try {
+        const parsed = JSON.parse(res.stdout.replace(/^\uFEFF/, '').trim());
+        const docs = Array.isArray(parsed)
+          ? parsed
+          : parsed && typeof parsed === 'object'
+            ? [parsed]
+            : [];
+        for (const doc of docs) {
+          if (!doc || typeof doc !== 'object') continue;
+          const d = doc as Record<string, unknown>;
+          const info =
+            d.info && typeof d.info === 'object' ? (d.info as Record<string, unknown>) : d;
+          for (const block of [info.providers, info.provider]) {
+            if (!block || typeof block !== 'object') continue;
+            for (const [rawId, rawCfg] of Object.entries(block as Record<string, unknown>)) {
+              const id = rawId.trim();
+              if (!id || !rawCfg || typeof rawCfg !== 'object') continue;
+              const cfg = rawCfg as Record<string, unknown>;
+              const settingsUrl =
+                cfg.settings && typeof cfg.settings === 'object'
+                  ? (cfg.settings as Record<string, unknown>).baseURL
+                  : undefined;
+              const optionsUrl =
+                cfg.options && typeof cfg.options === 'object'
+                  ? (cfg.options as Record<string, unknown>).baseURL
+                  : undefined;
+              if (typeof settingsUrl === 'string' || typeof optionsUrl === 'string') {
+                ids.add(id);
+              }
+            }
+          }
+        }
+        this.openCodeCustomProvidersCache.set(binPath, { at: Date.now(), ids });
+      } catch {
+        // ignore unparseable debug config
+      }
+    }
+    return ids;
   }
 
   private async runOpenCode(
@@ -1138,17 +1364,28 @@ export class CliAgentRunner implements AgentRunner {
       );
     }
 
-    const nativeResumeId = parseProviderSessionId(turn.resumeSessionId, 'opencode');
-    let isolation: string[] = [];
-    let tempConfigPath: string | null = null;
-    let major = 2;
-
-    if (turn.memoryOnly || opts.mcpServers.length > 0) {
-      major = await this.getOpenCodeMajorVersion(binPath, opts.cwd, turn.signal);
+    const nativeResumeId = turn.memoryOnly ? null : parseProviderSessionId(turn.resumeSessionId, 'opencode');
+    const { major, standaloneArgs } = await getOpenCodeCliCapabilities(binPath);
+    const customProviderIds = turn.memoryOnly
+      ? new Set<string>()
+      : await this.getOpenCodeCustomProviderIds(binPath, standaloneArgs, turn.signal);
+    let matchedCustom: { providerId: string; subModelId: string } | null = null;
+    for (const providerId of customProviderIds) {
+      if (opts.model.startsWith(`${providerId}/`)) {
+        const subModelId = opts.model.slice(providerId.length + 1);
+        if (subModelId) {
+          matchedCustom = { providerId, subModelId };
+          break;
+        }
+      }
     }
 
+    const isolation: string[] = [...standaloneArgs];
+    let tempConfigPath: string | null = null;
+
+    let configObj: Record<string, unknown> | null = null;
     if (turn.memoryOnly) {
-      const config =
+      configObj =
         major >= 2
           ? {
               policies: ['tool.use', 'mcp.use', 'plugin.use', 'skill.use', 'websearch.use'].map(
@@ -1156,30 +1393,37 @@ export class CliAgentRunner implements AgentRunner {
               ),
             }
           : { permission: { '*': 'deny' } };
+    } else if (opts.mcpServers.length > 0 || matchedCustom) {
+      configObj =
+        opts.mcpServers.length > 0
+          ? buildOpenCodeMcpConfig(opts.mcpServers, major)
+          : { $schema: 'https://opencode.ai/config.json' };
+      if (matchedCustom) {
+        const rootKey = major >= 2 ? 'providers' : 'provider';
+        configObj[rootKey] = {
+          [matchedCustom.providerId]: {
+            models: {
+              [matchedCustom.subModelId]: { name: matchedCustom.subModelId },
+            },
+          },
+        };
+      }
+    }
+
+    if (configObj) {
       tempConfigPath = writeOpenCodeConfigFile(
         this.config.dataDir,
-        `mem-${turn.agent.id}-${Date.now()}`,
-        config,
-      );
-      if (major >= 2) isolation = ['--standalone'];
-    } else if (opts.mcpServers.length > 0) {
-      const configObj = buildOpenCodeMcpConfig(opts.mcpServers, major);
-      tempConfigPath = writeOpenCodeConfigFile(
-        this.config.dataDir,
-        `${turn.agent.id}-${Date.now()}`,
+        `${turn.memoryOnly ? 'mem-' : ''}${turn.agent.id}-${Date.now()}`,
         configObj,
       );
-      if (major >= 2) isolation = ['--standalone'];
     }
 
     const args = [
       ...isolation,
       'run',
-      '--format',
-      'json',
-      '--model',
-      opts.model,
-      ...(nativeResumeId ? ['--session', nativeResumeId] : []),
+      '--format=json',
+      `--model=${opts.model}`,
+      ...(nativeResumeId ? [`--session=${nativeResumeId}`] : []),
     ];
 
     const promptBody = this.buildConversationContext(turn, cb, Boolean(nativeResumeId));
@@ -1188,8 +1432,9 @@ export class CliAgentRunner implements AgentRunner {
       ? { ...process.env, OPENCODE_CONFIG: tempConfigPath }
       : undefined;
 
+    let openCodeError: string | null = null;
     try {
-      return await this.execStreaming(
+      const out = await this.execStreaming(
         binPath,
         args,
         opts.cwd,
@@ -1205,6 +1450,24 @@ export class CliAgentRunner implements AgentRunner {
                   ? ev.session_id
                   : null;
             if (sid) cb.onSession(`opencode:${sid}`);
+
+            if (ev.type === 'error') {
+              const errObj =
+                ev.error && typeof ev.error === 'object'
+                  ? (ev.error as Record<string, unknown>)
+                  : null;
+              const dataObj =
+                errObj?.data && typeof errObj.data === 'object'
+                  ? (errObj.data as Record<string, unknown>)
+                  : null;
+              openCodeError =
+                (typeof errObj?.message === 'string' && errObj.message.trim()) ||
+                (typeof dataObj?.message === 'string' && dataObj.message.trim()) ||
+                (typeof ev.error === 'string' && ev.error.trim()) ||
+                (typeof ev.message === 'string' && ev.message.trim()) ||
+                (ev.error ? JSON.stringify(ev.error) : 'OpenCode CLI returned an error');
+              return acc;
+            }
 
             const part = ev.part && typeof ev.part === 'object' ? (ev.part as Record<string, unknown>) : null;
             if (ev.type === 'text' && part && typeof part.text === 'string') {
@@ -1246,6 +1509,15 @@ export class CliAgentRunner implements AgentRunner {
         15 * 60_000,
         spawnEnv,
       );
+      if (openCodeError && !turn.signal.aborted) {
+        throw new Error(openCodeError);
+      }
+      return out;
+    } catch (err) {
+      if (openCodeError && !turn.signal.aborted) {
+        throw new Error(openCodeError);
+      }
+      throw err;
     } finally {
       if (tempConfigPath) {
         try {

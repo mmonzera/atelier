@@ -55,6 +55,7 @@ interface FloatingComposerProps {
   onStop: () => Promise<void>;
   onUpdateReasoning: (effort: ReasoningEffort) => Promise<void>;
   onSelectModel: (entry: ModelEntry) => Promise<void>;
+  onResetAgentModel?: () => Promise<void>;
   onNewTask: () => void;
   onCompactContext?: () => void;
   onOpenLinkRepo: () => void;
@@ -205,6 +206,7 @@ export function FloatingComposer({
   onStop,
   onUpdateReasoning,
   onSelectModel,
+  onResetAgentModel,
   onNewTask,
   onCompactContext,
   onOpenLinkRepo,
@@ -1157,6 +1159,54 @@ export function FloatingComposer({
                   transformOrigin: 'bottom right',
                 }}
               >
+                {agent && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                      padding: '2px 4px 0',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        fontSize: 11.5,
+                      }}
+                    >
+                      <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>
+                        {t('Model for {name}', { name: agent.name })}
+                      </span>
+                      {agent.providerOverride || agent.modelOverride ? (
+                        onResetAgentModel && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEffortMenuOpen(false);
+                              void onResetAgentModel();
+                            }}
+                            style={{ color: 'var(--agent-blue)', fontSize: 11 }}
+                          >
+                            {t('Use default')}
+                          </button>
+                        )
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                          {t('Default')}
+                        </span>
+                      )}
+                    </div>
+                    {agent.status === 'working' && (
+                      <div style={{ fontSize: 11, color: 'var(--agent-amber)' }}>
+                        {t('Currently running — new model applies next turn')}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Provider tabs: 3 top, 2 bottom with trailing empty slot */}
                 <div
                   style={{

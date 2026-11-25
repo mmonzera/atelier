@@ -567,26 +567,51 @@ export function ModelsProvidersPanel({
                             </button>
 
                             {p.authenticated ? (
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                onClick={() => void handleLogout(p.provider)}
-                                className="transition-atelier"
-                                style={{
-                                  height: 30,
-                                  padding: '0 12px',
-                                  borderRadius: 'var(--radius-full)',
-                                  background: 'var(--surface-1)',
-                                  border: '1px solid var(--border-subtle)',
-                                  fontSize: 12,
-                                  color: 'var(--text-secondary)',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 5,
-                                }}
-                              >
-                                <LogOut size={12} strokeWidth={1.5} />{t('Sign out')}
-                              </button>
+                              <>
+                                {p.provider === 'opencode' && (
+                                  <button
+                                    type="button"
+                                    disabled={isBusy || !p.cliInstalled}
+                                    onClick={() => void handleLogin('opencode')}
+                                    className="transition-atelier"
+                                    style={{
+                                      height: 30,
+                                      padding: '0 12px',
+                                      borderRadius: 'var(--radius-full)',
+                                      background: 'rgba(255, 255, 255, 0.11)',
+                                      border: '1px solid var(--border-default)',
+                                      fontSize: 12,
+                                      fontWeight: 500,
+                                      color: 'var(--text-primary)',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 5,
+                                    }}
+                                  >
+                                    <LogIn size={12} strokeWidth={1.5} />{t('+ Add provider')}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => void handleLogout(p.provider)}
+                                  className="transition-atelier"
+                                  style={{
+                                    height: 30,
+                                    padding: '0 12px',
+                                    borderRadius: 'var(--radius-full)',
+                                    background: 'var(--surface-1)',
+                                    border: '1px solid var(--border-subtle)',
+                                    fontSize: 12,
+                                    color: 'var(--text-secondary)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                  }}
+                                >
+                                  <LogOut size={12} strokeWidth={1.5} />{t('Sign out')}
+                                </button>
+                              </>
                             ) : (
                               <button
                                 type="button"

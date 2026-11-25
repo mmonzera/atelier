@@ -885,6 +885,9 @@ export interface MessageMetadata {
   attachments?: MessageAttachment[];
   /** Skills the user invoked by hand (via /skill) for this message. */
   skills?: Array<{ id: string; name: string }>;
+  /** Provider & model that actually executed this assistant turn. */
+  provider?: ModelProvider;
+  model?: string;
 }
 
 export type QaStepAction =

@@ -217,6 +217,27 @@ export function ModelBrowser({
         >
           <RefreshCw size={13} strokeWidth={1.5} />{t('Refresh')}
         </button>
+        {provider === 'opencode' && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              void api
+                .loginProvider('opencode')
+                .then(() => {
+                  toast.info(
+                    t('Complete provider login in the opened OpenCode window, then click Refresh.'),
+                  );
+                })
+                .catch((err) => {
+                  toast.error(err instanceof Error ? err.message : t('Failed to start login'));
+                });
+            }}
+            style={{ ...secondaryBtnStyle, height: 34, padding: '0 12px', fontSize: 12 }}
+          >
+            {t('+ Add provider')}
+          </button>
+        )}
       </div>
 
       <div

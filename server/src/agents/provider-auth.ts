@@ -4,7 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ProviderAuthStatus, RealProvider, Settings } from '@atelier/contracts';
 import type { AtelierStore } from '../store.js';
-import { execCliCapture, resolveCliBinary, spawnCli } from './cli-spawn.js';
+import {
+  execCliCapture,
+  getOpenCodeCliCapabilities,
+  resolveCliBinary,
+  spawnCli,
+} from './cli-spawn.js';
 
 interface ActiveLoginState {
   child: ChildProcess;
@@ -20,6 +25,29 @@ const PROVIDER_LABELS: Record<RealProvider, string> = {
   opencode: 'OpenCode CLI',
   openrouter: 'OpenRouter (API)',
 };
+
+const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
+
+const OPENCODE_EMPTY_AUTH_RE = /no\s+(?:credentials|providers|auth|authenticated\s+integrations|integrations)|0\s+credentials/i;
+
+/** Extracts connected integration names from `opencode auth list` output. */
+export function parseOpenCodeAuthList(stdout: string): string[] {
+  const clean = stdout.replace(ANSI_ESCAPE_RE, '');
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of clean.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (OPENCODE_EMPTY_AUTH_RE.test(line)) continue;
+    if (/^[-─=_]+$/.test(line) || /^(provider|integration|name)\s{2,}/i.test(line)) continue;
+    const col1 = line.split(/\s{2,}/)[0]?.trim();
+    if (col1 && !seen.has(col1)) {
+      seen.add(col1);
+      names.push(col1);
+    }
+  }
+  return names;
+}
 
 function maskApiKey(key: string): string {
   const trimmed = key.trim();
@@ -326,21 +354,26 @@ export class ProviderAuthManager {
       };
     }
 
+    const { standaloneArgs } = await getOpenCodeCliCapabilities(cliPath);
     const [verRes, listRes] = await Promise.all([
       execCliCapture(cliPath, ['--version'], 3500),
-      execCliCapture(cliPath, ['auth', 'list'], 3500),
+      execCliCapture(cliPath, [...standaloneArgs, 'auth', 'list'], 3500),
     ]);
     const versionLabel = verRes.stdout.trim().split(/\r?\n/)[0] || 'opencode CLI';
     const listOut = `${listRes.stdout}\n${listRes.stderr}`.trim();
+    const connectedNames = listRes.exitCode === 0 ? parseOpenCodeAuthList(listRes.stdout) : [];
     const hasListedCreds =
-      listRes.exitCode === 0 &&
-      listOut.length > 0 &&
-      !/no\s+(credentials|providers|auth)|0\s+credentials/i.test(listOut);
+      connectedNames.length > 0 ||
+      (listRes.exitCode === 0 &&
+        listOut.length > 0 &&
+        !OPENCODE_EMPTY_AUTH_RE.test(listOut));
     const hasEnvKey = Boolean(
       process.env.ANTHROPIC_API_KEY?.trim() ||
         process.env.OPENAI_API_KEY?.trim() ||
         process.env.DEEPSEEK_API_KEY?.trim() ||
-        process.env.OPENROUTER_API_KEY?.trim(),
+        process.env.OPENROUTER_API_KEY?.trim() ||
+        process.env.OPENCODE_API_KEY?.trim() ||
+        process.env.OPENCODE_ZEN_API_KEY?.trim(),
     );
     const authenticated = this.hasOpenCodeAuthFile() || hasListedCreds || hasEnvKey;
 
@@ -351,11 +384,17 @@ export class ProviderAuthManager {
       cliInstalled: true,
       cliPath,
       authenticated,
-      accountLabel: authenticated ? versionLabel : null,
+      accountLabel: authenticated
+        ? connectedNames.length > 0
+          ? `${connectedNames.join(', ')} (${versionLabel})`
+          : versionLabel
+        : null,
       loginInProgress: Boolean(activeLogin),
       authUrl: activeLogin?.authUrl ?? null,
       message: authenticated
-        ? `Ready (${versionLabel})`
+        ? connectedNames.length > 0
+          ? `Connected: ${connectedNames.join(', ')} (${versionLabel})`
+          : `Ready (${versionLabel})`
         : activeLogin
           ? 'Complete OpenCode authentication in the opened window…'
           : 'CLI found. Click Sign in or configure a provider inside OpenCode.',
@@ -377,8 +416,8 @@ export class ProviderAuthManager {
       return this.getStatus(provider, settings, store);
     }
 
-    // Return existing active login if already running
-    if (this.activeLogins.has(provider)) {
+    // Return existing active login if already running (OpenCode allows launching multiple times to add providers)
+    if (provider !== 'opencode' && this.activeLogins.has(provider)) {
       return this.getStatus(provider, settings, store);
     }
 
@@ -462,8 +501,17 @@ export class ProviderAuthManager {
     const customPath = settings.cliPaths?.[provider];
     const cliPath = await resolveCliBinary(provider, customPath);
     if (cliPath) {
-      if (provider === 'claude' || provider === 'opencode') {
+      if (provider === 'claude') {
         await execCliCapture(cliPath, ['auth', 'logout'], 4000);
+      } else if (provider === 'opencode') {
+        if (process.platform === 'win32') {
+          spawnCli('cmd.exe', ['/c', 'start', 'OpenCode Logout', cliPath, 'auth', 'logout'], {
+            stdin: 'ignore',
+          });
+          await new Promise((r) => setTimeout(r, 300));
+        } else {
+          await execCliCapture(cliPath, ['auth', 'logout'], 4000);
+        }
       } else if (provider === 'openai') {
         await execCliCapture(cliPath, ['logout'], 4000);
       }
