@@ -438,13 +438,16 @@ export class AtelierStore {
       'gpt-5.3-codex': 'gpt-6.2-astra',
       'gpt-5.2': 'gpt-6.2-sol',
       o3: 'gpt-6.1-terra',
-      'gemini-2.5-pro': 'gemini-4-neon',
-      'gemini-2.5-flash': 'gemini-4-hydrogen',
+      // earlier placeholder names that Google's API never had
+      'gemini-4-neon': 'gemini-2.5-pro',
+      'gemini-4-carbon': 'gemini-2.5-pro',
+      'gemini-4-hydrogen': 'gemini-2.5-flash',
+      'gemini-4-argon': 'gemini-2.5-flash-lite',
     };
     if (model && legacyToModern[model]) return legacyToModern[model];
     if (model) return model;
     if (provider === 'openai') return 'gpt-6.2-astra';
-    if (provider === 'antigravity') return 'gemini-4-neon';
+    if (provider === 'antigravity') return 'gemini-2.5-pro';
     if (provider === 'deepseek') return 'deepseek-chat';
     if (provider === 'opencode') return 'opencode/big-pickle';
     if (provider === 'openrouter') return 'openrouter/auto';

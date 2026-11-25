@@ -1574,7 +1574,7 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
       return c.json(apiError('invalid_provider', 'Unsupported provider.'), 400);
     }
     const refresh = c.req.query('refresh') === '1';
-    return c.json(await getModelCatalog(parsed.data, config, store.getSettings(), refresh));
+    return c.json(await getModelCatalog(parsed.data, config, store.getSettings(), refresh, store.getProviderSecret('antigravity') || config.geminiApiKey || undefined));
   });
 
   api.post('/providers/:provider/login', async (c) => {

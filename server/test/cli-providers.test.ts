@@ -166,9 +166,21 @@ describe('CliAgentRunner end-to-end provider invocations & error surfacing', () 
       let raw = '';
       req.on('data', (c) => (raw += c));
       req.on('end', () => {
+        if (req.url?.startsWith('/models')) {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              models: [
+                { name: 'models/gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', supportedGenerationMethods: ['generateContent'] },
+                { name: 'models/gemini-fail-rate-limit', displayName: 'x', supportedGenerationMethods: ['generateContent'] },
+              ],
+            }),
+          );
+          return;
+        }
         const body = raw ? (JSON.parse(raw) as { model?: string }) : null;
         seen.push({ url: req.url ?? '', auth: req.headers.authorization, body });
-        if (body?.model === 'fail-rate-limit') {
+        if (body?.model === 'gemini-fail-rate-limit') {
           res.statusCode = 429;
           res.end('rate limit exceeded');
           return;
@@ -217,7 +229,7 @@ describe('CliAgentRunner end-to-end provider invocations & error surfacing', () 
     expect(seen[0]!.auth).toBe('Bearer AIza-test-key');
     expect(seen[0]!.body?.model).toBe('gemini-2.5-flash');
 
-    await expect(run('fail-rate-limit')).rejects.toThrow('429');
+    await expect(run('gemini-fail-rate-limit')).rejects.toThrow('429');
   });
 
   it('surfaces structured JSON errors across claude, openai (codex), and opencode and avoids flag swallowing', async () => {
@@ -514,7 +526,7 @@ describe('OpenCode custom provider discovery and auth parsing', () => {
     try {
       store.updateAgentConfig(agent.id, {
         providerOverride: 'antigravity',
-        modelOverride: 'gemini-4-hydrogen',
+        modelOverride: 'gemini-2.5-flash',
       });
       runtime.enqueue({ agentId: agent.id, projectId: project.id, kind: 'user', prompt: 'turn 1' });
       await new Promise((r) => setTimeout(r, 80));
@@ -537,7 +549,7 @@ describe('OpenCode custom provider discovery and auth parsing', () => {
         .filter((m) => m.author === 'agent');
       expect(replies).toHaveLength(2);
       expect(replies[0]!.metadata?.provider).toBe('antigravity');
-      expect(replies[0]!.metadata?.model).toBe('gemini-4-hydrogen');
+      expect(replies[0]!.metadata?.model).toBe('gemini-2.5-flash');
       expect(replies[1]!.metadata?.provider).toBe('claude');
       expect(replies[1]!.metadata?.model).toBe('sonnet');
     } finally {

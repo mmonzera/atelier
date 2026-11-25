@@ -22,6 +22,7 @@ import {
 } from '../mcp/config.js';
 import type { AtelierStore } from '../store.js';
 import { ClaudeAgentRunner } from './claude-runner.js';
+import { resolveGeminiModel } from './gemini-models.js';
 import {
   execCliCapture,
   getOpenCodeCliCapabilities,
@@ -42,7 +43,7 @@ import {
 } from './studio-tools.js';
 
 const MEMORY_MODELS: Record<ModelProvider, string> = {
-  claude: 'haiku', openai: 'gpt-6.2-sol', antigravity: 'gemini-4-hydrogen',
+  claude: 'haiku', openai: 'gpt-6.2-sol', antigravity: 'gemini-2.5-flash',
   deepseek: 'deepseek-chat', opencode: 'opencode/big-pickle', openrouter: 'openrouter/auto',
 };
 const SUMMARY_INSTRUCTIONS = [
@@ -671,15 +672,32 @@ export class CliAgentRunner implements AgentRunner {
   }
 
   /** Antigravity runs on the Gemini API (API key) via Google's OpenAI-compatible endpoint, never the agy CLI. */
-  private runAntigravity(turn: Turn, cb: TurnCallbacks, opts: { model: string; systemPrompt: string }): Promise<string> {
+  private async runAntigravity(turn: Turn, cb: TurnCallbacks, opts: { model: string; systemPrompt: string }): Promise<string> {
     const apiKey = this.store.getProviderSecret('antigravity') || this.config.geminiApiKey;
     if (!apiKey) {
       throw new Error(
         'Antigravity (Gemini) API key not configured. Add it in Accounts & Models or set GEMINI_API_KEY in .env.',
       );
     }
+    // The stored id may be a UI-only name (e.g. "gemini-3.8-flash-high"); map it to a model the API serves.
+    const model = await resolveGeminiModel(this.config.geminiBaseUrl, apiKey, opts.model);
+    if (model !== opts.model.replace(/^models\//, '')) {
+      // Make the correction stick so the picker shows a model the key can really use.
+      const agent = turn.agent;
+      if (agent.providerOverride === 'antigravity' && agent.modelOverride === opts.model) {
+        this.store.updateAgentConfig(agent.id, { modelOverride: model });
+      }
+      const settings = this.store.getSettings();
+      if (settings.provider === 'antigravity' && settings.model === opts.model) {
+        this.store.updateSettings({ model });
+      }
+      cb.onText(
+        `_Model "${opts.model}" tidak tersedia di Gemini API key kamu, otomatis diganti ke "${model}". Pilih model lain di picker kalau mau._\n\n`,
+      );
+    }
     return this.runOpenAiCompatible(turn, cb, {
       ...opts,
+      model,
       label: 'Antigravity (Gemini)',
       baseUrl: this.config.geminiBaseUrl,
       apiKey,

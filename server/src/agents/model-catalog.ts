@@ -1,6 +1,7 @@
 import { BUILT_IN_MODELS, type ModelCatalog, type ModelEntry, type RealProvider, type Settings } from '@atelier/contracts';
 import type { AppConfig } from '../config.js';
 import { discoverLocalCodexModels } from './cli-runners.js';
+import { fetchGeminiModels } from './gemini-models.js';
 import { execCliCapture, getOpenCodeCliCapabilities, resolveCliBinary } from './cli-spawn.js';
 
 const CACHE_MS = 10 * 60 * 1000;
@@ -309,6 +310,7 @@ async function load(
   provider: RealProvider,
   config: AppConfig,
   settings: Settings,
+  geminiKey?: string,
 ): Promise<ModelCatalog> {
   try {
     switch (provider) {
@@ -335,6 +337,11 @@ async function load(
           source: detected.length > 0 ? 'live' : 'builtin',
           note: detected.length > 0 ? 'Read from your Codex CLI.' : undefined,
         };
+      }
+      case 'antigravity': {
+        if (!geminiKey) return { provider, models: builtIn(provider), source: 'builtin' };
+        const live = await fetchGeminiModels(config.geminiBaseUrl, geminiKey);
+        return { provider, models: live.length ? live : builtIn(provider), source: live.length ? 'live' : 'builtin' };
       }
       case 'claude':
         return {
@@ -365,10 +372,11 @@ export async function getModelCatalog(
   config: AppConfig,
   settings: Settings,
   refresh = false,
+  geminiKey?: string,
 ): Promise<ModelCatalog> {
   const hit = cache.get(provider);
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value;
-  const value = await load(provider, config, settings);
+  const value = await load(provider, config, settings, geminiKey);
   // a failed live lookup is not worth remembering
   if (!value.note?.startsWith('Could not')) cache.set(provider, { at: Date.now(), value });
   return value;
