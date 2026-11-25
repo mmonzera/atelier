@@ -107,11 +107,11 @@ export async function applyBrowserAtelierActions(
   return { cleanText: cleanText.trim(), results };
 }
 
+/** Default: no timeout at all. Set ATELIER_AGENT_IDLE_TIMEOUT_MIN=N to kill a CLI silent for N minutes. */
 function idleTimeoutMs(): number {
-  const min = Number(process.env.ATELIER_AGENT_IDLE_TIMEOUT_MIN);
-  return Number.isFinite(min) && min >= 0 && process.env.ATELIER_AGENT_IDLE_TIMEOUT_MIN !== undefined
-    ? min * 60_000
-    : 30 * 60_000;
+  const raw = process.env.ATELIER_AGENT_IDLE_TIMEOUT_MIN;
+  const min = raw === undefined ? 0 : Number(raw);
+  return Number.isFinite(min) && min > 0 ? min * 60_000 : 0;
 }
 
 function validateModelId(model: string): string {
