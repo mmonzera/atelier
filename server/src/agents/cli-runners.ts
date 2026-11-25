@@ -341,6 +341,13 @@ export class CliAgentRunner implements AgentRunner {
   }
 
   private buildConversationContext(turn: Turn, cb: TurnCallbacks, hasNativeResume: boolean): string {
+    const body = this.buildConversationBody(turn, cb, hasNativeResume);
+    return turn.memoryBlock && !turn.memoryOnly && !turn.recallContinuation
+      ? `${turn.memoryBlock}\n\n${body}`
+      : body;
+  }
+
+  private buildConversationBody(turn: Turn, cb: TurnCallbacks, hasNativeResume: boolean): string {
     if (turn.memoryOnly || turn.recallContinuation) return turn.prompt;
     const channel = turn.channelId ? this.store.channels.getChannel(turn.channelId) : null;
     if (channel) {
@@ -366,6 +373,7 @@ export class CliAgentRunner implements AgentRunner {
         trust: turn.trust,
         tailTokens: this.store.getSettings().autoCompact.tailTokens,
         attachmentNote: (m) => files.describe(m.metadata?.attachments),
+        omitSummary: turn.omitCompaction,
       });
       cb.onMemoryTail?.(built.memoryTokens.tail, {
         stubs: built.memoryTokens.stubs,
@@ -452,7 +460,7 @@ export class CliAgentRunner implements AgentRunner {
       attachedMcp,
       settings.mcpServers,
       agentProjects,
-      compaction,
+      turn.omitCompaction ? null : compaction,
       [],
       turn.canonText ?? renderCanon(this.store.listCanon(scopeKey)).text,
     );

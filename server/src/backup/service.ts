@@ -355,7 +355,11 @@ export class BackupService {
       try {
         for (const table of mainTables) {
           // Copy messages through their triggers so the local archive index stays consistent.
-          if (keep.has(table) || table === 'messages_fts' || table.startsWith('messages_fts_')) continue;
+          if (
+            keep.has(table) ||
+            table === 'messages_fts' || table.startsWith('messages_fts_') ||
+            table === 'memory_items' || table === 'memory_fts' || table.startsWith('memory_fts_')
+          ) continue;
           const t = quoteIdent(table);
           sqlite.exec(`DELETE FROM main.${t};`);
           if (!impTables.has(table)) continue;
@@ -376,6 +380,8 @@ export class BackupService {
     } finally {
       sqlite.exec('PRAGMA foreign_keys = ON;');
       sqlite.exec('DETACH DATABASE imp');
+      // Index memory adalah proyeksi: setelah isi diganti, bangun ulang saat dibutuhkan.
+      this.db.memoryGeneration += 1;
     }
   }
 

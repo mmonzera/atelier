@@ -15,6 +15,10 @@ export interface Turn {
   replyMessageId?: string | null;
   canonText?: string;
   canonChanged?: boolean;
+  /** Selective memory: blok memory untuk turn ini (ditaruh di user prompt, bukan system prompt). */
+  memoryBlock?: string;
+  /** Selective memory: ringkasan compaction tidak ikut system prompt/room summary. */
+  omitCompaction?: boolean;
   memoryOnly?: boolean;
   recallContinuation?: boolean;
   providerOverride?: ModelProvider;

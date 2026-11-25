@@ -43,6 +43,9 @@ export interface ChannelCursor {
  * per-agent read cursors, cursor pagination, and message forwarding.
  */
 export class ChannelService {
+  /** Dipanggil setelah ringkasan channel berubah (untuk menyegarkan index memory). */
+  public onCompactionChange?: (channel: Channel) => void;
+
   constructor(
     private readonly sqlite: DatabaseSync,
     private readonly broadcast: (events: ServerEvent[]) => void,
@@ -208,6 +211,7 @@ export class ChannelService {
       .prepare(`UPDATE channels SET data = ? WHERE id = ?`)
       .run(JSON.stringify(updated), channelId);
     this.broadcast([{ type: 'channel-upserted', payload: updated }]);
+    if (patch.compaction !== undefined) this.onCompactionChange?.(updated);
     return updated;
   }
 

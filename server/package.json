@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
-    "lock:reset": "tsx src/cli/reset-lock.ts"
+    "lock:reset": "tsx src/cli/reset-lock.ts",
+    "memory:report": "tsx src/cli/memory-report.ts"
   },
   "dependencies": {
     "@atelier/contracts": "*",

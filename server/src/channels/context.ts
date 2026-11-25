@@ -83,6 +83,8 @@ export class RoomContextBuilder {
     trust?: 'user' | 'teammate';
     tailTokens?: number;
     attachmentNote?: (m: Message) => string;
+    /** Selective memory: ringkasan sudah diwakili blok Relevant Memory, jangan kirim utuh. */
+    omitSummary?: boolean;
   }): BuiltRoomContext {
     const budget = Math.min(DEFAULT_TAIL_TOKENS, Math.max(500, opts.tailTokens ?? DEFAULT_TAIL_TOKENS));
     const protocolHeader = this.buildProtocolHeader(opts);
@@ -100,7 +102,7 @@ export class RoomContextBuilder {
             opts.triggerMessage?.id,
             opts.attachmentNote,
           );
-      const summary = opts.agent.contextCompactions?.direct?.summary?.trim() || '';
+      const summary = opts.omitSummary ? '' : opts.agent.contextCompactions?.direct?.summary?.trim() || '';
       const parts = [
         digest,
         summary ? `Previous conversation summary:\n${summary}` : '',
@@ -128,7 +130,7 @@ export class RoomContextBuilder {
     const sessionId = opts.channel.currentSessionId;
     const session = sessionId ? this.channels.getRoomSession(sessionId) : null;
     const carryover = session?.carryoverSummary?.trim() || '';
-    const sharedSummary = opts.channel.compaction?.summary?.trim() || '';
+    const sharedSummary = opts.omitSummary ? '' : opts.channel.compaction?.summary?.trim() || '';
     const combinedSummary = [
       carryover ? `Previous session carryover:\n${carryover}` : '',
       sharedSummary ? `Room summary:\n${sharedSummary}` : '',
@@ -160,11 +162,13 @@ export class RoomContextBuilder {
             r.message.text.trim().length > 0,
         );
 
+      // Measure the delta UNTRIMMED: formatHistoryLines drops the oldest lines to fit a budget,
+      // which would make a too-large delta look like it fits while silently losing messages.
       const formattedDelta = this.formatHistoryLines(
         deltaRows.map((r) => r.message),
         opts.agent.id,
         opts.allAgents,
-        budget,
+        Number.MAX_SAFE_INTEGER / 8,
         opts.triggerMessage?.id,
         opts.attachmentNote,
         'Since your last turn in the room:',
@@ -226,6 +230,41 @@ export class RoomContextBuilder {
         delta: deltaTokenCount,
       },
     };
+  }
+
+  /**
+   * True when the messages this agent has not seen yet no longer fit the tail budget. The provider
+   * session must then be dropped (not resumed): `build()` falls back to the full tail, and
+   * resuming on top of it would duplicate everything the old session already contains.
+   */
+  public isDeltaStale(opts: {
+    channel: Channel;
+    agent: Agent;
+    allAgents: Agent[];
+    triggerMessageId?: string;
+    tailTokens?: number;
+  }): boolean {
+    if (opts.channel.kind !== 'room') return false;
+    const cursor = this.channels.getCursor(opts.channel.id, opts.agent.id);
+    if (!cursor || cursor.lastSeenRowid <= 0) return false;
+    const budget = Math.min(DEFAULT_TAIL_TOKENS, Math.max(500, opts.tailTokens ?? DEFAULT_TAIL_TOKENS));
+    const rows = this.channels
+      .listChannelMessagesWithRowids(opts.channel.id, {
+        sessionId: opts.channel.currentSessionId,
+        afterRowid: cursor.lastSeenRowid,
+        excludeAgentId: opts.agent.id,
+      })
+      .filter(
+        (r) => !r.message.streaming && r.message.id !== opts.triggerMessageId && r.message.text.trim().length > 0,
+      );
+    const formatted = this.formatHistoryLines(
+      rows.map((r) => r.message),
+      opts.agent.id,
+      opts.allAgents,
+      Number.MAX_SAFE_INTEGER / 8,
+      opts.triggerMessageId,
+    );
+    return formatted.tailTokens + formatted.stubTokens > budget;
   }
 
   private buildProtocolHeader(opts: {

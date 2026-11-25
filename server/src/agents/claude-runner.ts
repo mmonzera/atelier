@@ -91,7 +91,7 @@ export class ClaudeAgentRunner implements AgentRunner {
       attachedMcp,
       settings.mcpServers,
       agentProjects,
-      compaction,
+      turn.omitCompaction ? null : compaction,
       [],
       turn.canonText ?? renderCanon(this.store.listCanon(scopeKey)).text,
     );
@@ -117,6 +117,7 @@ export class ClaudeAgentRunner implements AgentRunner {
         trust: turn.trust,
         tailTokens: settings.autoCompact.tailTokens,
         attachmentNote: (m) => attachmentStore.describe(m.metadata?.attachments),
+        omitSummary: turn.omitCompaction,
       });
       cb.onMemoryTail?.(built.memoryTokens.tail, {
         stubs: built.memoryTokens.stubs,
@@ -141,6 +142,8 @@ export class ClaudeAgentRunner implements AgentRunner {
           ? `Canon update since last turn (replaces previous Canon):\n${turn.canonText}\n\n${turn.prompt}`
           : turn.prompt;
     }
+
+    if (turn.memoryBlock && !turn.recallContinuation) promptText = `${turn.memoryBlock}\n\n${promptText}`;
 
     const tools = createStudioTools({
       store: this.store,

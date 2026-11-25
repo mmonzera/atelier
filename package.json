@@ -19,6 +19,7 @@
     "typecheck": "npm.cmd --workspace @atelier/contracts run build && npm.cmd --workspace @atelier/server run typecheck && npm.cmd --workspace @atelier/web run typecheck",
     "test": "npm.cmd --workspace @atelier/contracts run build && vitest run",
     "lock:reset": "npm.cmd --workspace @atelier/server run lock:reset",
+    "memory:report": "npm.cmd --workspace @atelier/server run memory:report --",
     "migrate:group-chat": "npx tsx server/src/channels/migrate-cli.ts",
     "desktop": "npm.cmd run build && npm.cmd --workspace @atelier/desktop run dev",
     "desktop:build": "npm.cmd run build && npm.cmd --workspace @atelier/desktop run build"

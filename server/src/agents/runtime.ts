@@ -19,6 +19,7 @@ import {
 } from '@atelier/contracts';
 import { AttachmentStore } from '../attachments.js';
 import type { BrowserManager } from '../browser/manager.js';
+import { RoomContextBuilder } from '../channels/context.js';
 import { LoopGuard } from '../channels/loop-guard.js';
 import { routeRoomMessage } from '../channels/router.js';
 import { RoomScheduler, type LeaseReleaseReason, type RoomLease } from '../channels/scheduler.js';
@@ -49,7 +50,9 @@ import {
 import type { AgentRunner } from './runner.js';
 import type { EnqueueTaskFn } from './studio-tools.js';
 import { estimateTurnCostUsd } from './usage.js';
-import { renderCanon } from './prompts.js';
+import { renderCanon, SELECTIVE_MEMORY_PROMPT } from './prompts.js';
+import { selectMemory, type SelectResult } from '../memory/selector.js';
+import { memoryOwners } from '../memory/owners.js';
 
 export class AgentRuntime {
   private readonly draining = new Set<string>();
@@ -113,7 +116,7 @@ export class AgentRuntime {
         },
       });
     }
-    this.scheduler.release(lease.channelId, reason);
+    this.scheduler.release(lease.channelId, reason, lease.queueItemId);
     this.emitRoomQueue(lease.channelId);
     this.kickNextInChannel(lease.channelId);
   }
@@ -131,12 +134,26 @@ export class AgentRuntime {
     });
   }
 
+  /** Queued room items whose chain budget still allows them to run (§10.9). */
+  private runnableRoomItems(channelId: string): QueueItem[] {
+    return this.store.listAllQueuedItems(channelId).filter((q) => {
+      if (!q.rootMessageId) return true;
+      const chain = this.loopGuard.getChain(q.rootMessageId);
+      if (!chain) return true;
+      return (
+        chain.status === 'active' &&
+        chain.turnsUsed < chain.maxTurns &&
+        chain.tokensUsed < chain.maxTokens
+      );
+    });
+  }
+
   private kickNextInChannel(channelId: string): void {
     if (this.shuttingDown) return;
     const channel = this.store.channels.getChannel(channelId);
     if (!channel || channel.kind !== 'room') return;
     if (!channel.settings?.parallel && this.scheduler.getLease(channelId)) return;
-    const queued = this.store.listAllQueuedItems(channelId);
+    const queued = this.runnableRoomItems(channelId);
     const tasks = channel.projectId ? this.store.listProjectTasks(channel.projectId) : [];
     const next = this.scheduler.pickNext(queued, tasks);
     if (next) {
@@ -248,6 +265,7 @@ export class AgentRuntime {
         priority: 'normal',
         rootMessageId: posted.id,
         hop: 0,
+        turnPurpose: routed.turnPurpose,
         kind: 'user',
         prompt: finalPrompt,
         refId: posted.id,
@@ -303,6 +321,38 @@ export class AgentRuntime {
     this.scheduler.release(channelId, 'stopped');
     this.emitRoomQueue(channelId);
     return { stopped: Boolean(lease) };
+  }
+
+  /**
+   * "Izinkan sekali": the user approves a sensitive command a teammate-triggered turn was denied.
+   * Marks the approval card as approved and posts a user message (trust `user`) that re-runs the
+   * request for that agent.
+   */
+  public approveRoomAction(
+    channelId: string,
+    approvalMessageId: string,
+  ): { ok: boolean; reason?: 'not_found' | 'not_approval' | 'already_approved' | 'agent_missing' } {
+    const channel = this.store.channels.getChannel(channelId);
+    const msg = this.store.getMessage(approvalMessageId);
+    if (!channel || channel.kind !== 'room' || !msg || msg.channelId !== channelId) {
+      return { ok: false, reason: 'not_found' };
+    }
+    const req = msg.metadata?.approvalRequest;
+    if (msg.author !== 'system' || !req) return { ok: false, reason: 'not_approval' };
+    if (req.approved) return { ok: false, reason: 'already_approved' };
+    const agent = req.agentId ? this.store.getAgent(req.agentId) : null;
+    if (!agent) return { ok: false, reason: 'agent_missing' };
+
+    this.store.finalizeMessage(msg.id, {
+      streaming: false,
+      metadata: { ...msg.metadata, approvalRequest: { ...req, approved: true } },
+    });
+    this.postToChannel(channelId, {
+      text: `Approved (one time): you may run \`${req.command}\` now. Continue the work you were doing.`,
+      mentionAgentIds: [agent.id],
+      replyToMessageId: msg.id,
+    });
+    return { ok: true };
   }
 
   public continueRoomChain(channelId: string, rootMessageId: string, extraTurns = 6): boolean {
@@ -456,6 +506,7 @@ export class AgentRuntime {
     priority?: 'resume' | 'normal';
     rootMessageId?: string | null;
     hop?: number;
+    turnPurpose?: 'dispatch' | 'work';
     kind: QueueKind;
     prompt: string;
     refId?: string | null;
@@ -491,23 +542,21 @@ export class AgentRuntime {
         maxTurns: roomSettings.maxTurnsPerChain,
         maxTokens: roomSettings.maxTokensPerChain,
       });
-      if (!check.allowed) {
-        if (check.reason === 'max_hops') {
-          this.store.channels.postMessage({
-            channelId: channel.id,
-            author: 'system',
-            agentId: null,
-            text: `Agent-to-agent chain stopped at ${check.maxHops ?? 6} steps — reply to continue.`,
-            metadata: {
-              event: {
-                kind: 'loop_stopped',
-                rootMessageId: rootId,
-                hop,
-                maxHops: check.maxHops ?? 6,
-              },
+      if (!check.allowed && check.reason === 'max_hops') {
+        this.store.channels.postMessage({
+          channelId: channel.id,
+          author: 'system',
+          agentId: null,
+          text: `Agent-to-agent chain stopped at ${check.maxHops ?? 6} steps — reply to continue.`,
+          metadata: {
+            event: {
+              kind: 'loop_stopped',
+              rootMessageId: rootId,
+              hop,
+              maxHops: check.maxHops ?? 6,
             },
-          });
-        }
+          },
+        });
         return {
           agent,
           item: {
@@ -522,6 +571,8 @@ export class AgentRuntime {
           },
         };
       }
+      // chain_budget_exhausted: the item is still queued but held (see runnableRoomItems) until
+      // the user presses "Continue", so nothing is silently dropped.
       if (this.store.hasQueuedRootForAgent(channel.id, agent.id, rootId)) {
         return {
           agent,
@@ -548,6 +599,7 @@ export class AgentRuntime {
         priority: input.priority ?? 'normal',
         rootMessageId: rootId,
         hop,
+        ...(input.turnPurpose ? { turnPurpose: input.turnPurpose } : {}),
         kind: input.kind,
         prompt,
         refId: input.refId ?? input.triggerMessageId,
@@ -928,46 +980,45 @@ export class AgentRuntime {
         if (!current || current.status === 'working') break;
 
         const agentQueue = this.store.listQueue(agentId);
-        const peek = agentQueue[0];
-        if (!peek) break;
+        if (agentQueue.length === 0) break;
 
         let item: QueueItem | null = null;
         let leaseController: AbortController | undefined;
         let leaseChannelId: string | null = null;
+        let retry = false;
 
-        const peekChannel = peek.channelId ? this.store.channels.getChannel(peek.channelId) : null;
-        if (peekChannel?.kind === 'room') {
-          const roomSettings = { ...(this.store.getSettings().room ?? {}), ...(peekChannel.settings ?? {}) };
-          const parallel = Boolean(roomSettings.parallel);
-          const allRoomItems = this.store.listAllQueuedItems(peekChannel.id);
-          const projectTasks = peekChannel.projectId
-            ? this.store.listProjectTasks(peekChannel.projectId)
-            : [];
-          const picked = this.scheduler.pickNext(allRoomItems, projectTasks);
-          if (!picked || picked.agentId !== agentId) {
-            break;
-          }
-          leaseController = new AbortController();
-          const lease = this.scheduler.tryAcquire(
-            peekChannel.id,
-            agentId,
-            picked.id,
-            leaseController,
-            parallel,
-          );
-          if (!lease) {
-            break;
-          }
-          leaseChannelId = peekChannel.id;
-          item = this.store.shiftQueueItemById(picked.id);
-          if (!item) {
-            this.scheduler.release(peekChannel.id, 'done');
+        // Walk the agent's own queue in order: a room item that is not this agent's turn (or is
+        // held by a paused chain) must not block a runnable DM/direct item behind it.
+        for (const cand of agentQueue) {
+          const candChannel = cand.channelId ? this.store.channels.getChannel(cand.channelId) : null;
+          if (candChannel?.kind !== 'room') {
+            item = this.store.shiftQueueItemById(cand.id);
+            if (item) break;
             continue;
           }
-          this.emitRoomQueue(peekChannel.id);
-        } else {
-          item = this.store.shiftQueue(agentId).item;
+          const roomSettings = { ...(this.store.getSettings().room ?? {}), ...(candChannel.settings ?? {}) };
+          const parallel = Boolean(roomSettings.parallel);
+          const projectTasks = candChannel.projectId
+            ? this.store.listProjectTasks(candChannel.projectId)
+            : [];
+          const picked = this.scheduler.pickNext(this.runnableRoomItems(candChannel.id), projectTasks);
+          if (!picked || picked.agentId !== agentId) continue;
+          const controller = new AbortController();
+          const lease = this.scheduler.tryAcquire(candChannel.id, agentId, picked.id, controller, parallel);
+          if (!lease) continue;
+          const shifted = this.store.shiftQueueItemById(picked.id);
+          if (!shifted) {
+            this.scheduler.release(candChannel.id, 'done', picked.id);
+            retry = true;
+            break;
+          }
+          item = shifted;
+          leaseController = controller;
+          leaseChannelId = candChannel.id;
+          this.emitRoomQueue(candChannel.id);
+          break;
         }
+        if (retry) continue;
 
         if (!item) break;
 
@@ -994,7 +1045,7 @@ export class AgentRuntime {
     const project = item.projectId ? this.store.getProject(item.projectId) : null;
     if (item.projectId && !project) {
       if (leaseChannelId) {
-        this.scheduler.release(leaseChannelId, 'error');
+        this.scheduler.release(leaseChannelId, 'error', item.id);
         this.emitRoomQueue(leaseChannelId);
       }
       return;
@@ -1002,7 +1053,7 @@ export class AgentRuntime {
     let agent = this.store.getAgent(item.agentId);
     if (!agent) {
       if (leaseChannelId) {
-        this.scheduler.release(leaseChannelId, 'error');
+        this.scheduler.release(leaseChannelId, 'error', item.id);
         this.emitRoomQueue(leaseChannelId);
       }
       return;
@@ -1050,7 +1101,17 @@ export class AgentRuntime {
     const effectiveModel = item.modelOverride?.model || agent.modelOverride || settings.model;
     const switchingProvider =
       Boolean(item.modelOverride) && item.modelOverride!.provider !== primaryProvider;
-    const initialResumeId = switchingProvider
+    const roomDeltaStale =
+      isRoom && channel
+        ? new RoomContextBuilder(this.store.channels).isDeltaStale({
+            channel,
+            agent,
+            allAgents: this.store.listAgents(),
+            triggerMessageId: item.triggerMessageId ?? item.refId ?? undefined,
+            tailTokens: settings.autoCompact.tailTokens,
+          })
+        : false;
+    const initialResumeId = switchingProvider || roomDeltaStale
       ? null
       : (agent.sessions?.[scopeKey] ??
         (project &&
@@ -1076,12 +1137,51 @@ export class AgentRuntime {
     const activeSummaryText = isRoom && channel
       ? (channel.compaction?.summary ?? '')
       : (agent.contextCompactions?.[scopeKey]?.summary ?? '');
-    const memoryTokens: { canon: number; summary: number; tail: number; stubs?: number; delta?: number } = {
-      canon: estimateTokens(canon.text),
-      summary: estimateTokens(activeSummaryText.slice(0, 8000)),
-      tail: 0,
-    };
-    if (canon.omitted) {
+    const selective = settings.memory?.mode === 'selective';
+    let memorySelection: SelectResult | null = null;
+    let memoryCarry: Record<string, string> = {};
+    if (selective && settings.memory) {
+      const sentRecord = agent.sessionMemorySent?.[scopeKey];
+      if (initialResumeId && sentRecord?.sessionId === initialResumeId) memoryCarry = sentRecord.ids;
+      const triggerId = item.triggerMessageId ?? item.refId;
+      const triggerText = triggerId ? (this.store.getMessage(triggerId)?.text ?? '') : '';
+      const taskRef = item.kind === 'task' && item.refId ? this.store.getTask(item.refId) : null;
+      const queryText = [item.prompt, triggerText, taskRef ? `${taskRef.title} ${taskRef.description}` : '']
+        .join('\n')
+        .slice(0, 2500);
+      memorySelection = selectMemory({
+        index: this.store.memory,
+        scopeKey: canonScope,
+        owners: memoryOwners(this.store, agent.id, channel?.id),
+        queryText,
+        settings: settings.memory,
+        alreadySent: Object.keys(memoryCarry).length ? memoryCarry : undefined,
+      });
+    }
+    const memoryTokens: {
+      canon: number; summary: number; tail: number; stubs?: number; delta?: number;
+      relevant?: number; catalog?: number; pinned?: number;
+    } = memorySelection
+      ? {
+          canon: 0,
+          summary: 0,
+          tail: 0,
+          pinned: memorySelection.tokens.pinned,
+          relevant: memorySelection.tokens.relevant,
+          catalog: memorySelection.tokens.catalog,
+        }
+      : {
+          canon: estimateTokens(canon.text),
+          summary: estimateTokens(activeSummaryText.slice(0, 8000)),
+          tail: 0,
+        };
+    if (memorySelection?.pinnedOverflow) {
+      this.store.addActivity({
+        projectId, agentId: agent.id, kind: 'status', label: 'Pinned memory budget reached',
+        detail: `${memorySelection.pinnedOverflow} pinned entries did not fit the pinned budget. Raise the budget or unpin entries.`,
+      });
+    }
+    if (!selective && canon.omitted) {
       this.store.addActivity({
         projectId, agentId: agent.id, kind: 'status', label: 'Canon prompt budget reached',
         detail: `${canon.omitted} entries remain available in the Canon panel.`,
@@ -1143,6 +1243,7 @@ export class AgentRuntime {
       this.store.appendMessageDelta(replyMsg.id, delta);
     });
 
+    this.store.memory.beginTurn(agent.id);
     try {
       const refMessageId = item.triggerMessageId ?? item.refId;
       const { finalText: rawFinalText } = await this.runner.run(
@@ -1151,14 +1252,16 @@ export class AgentRuntime {
           project,
           channelId: channel?.id ?? null,
           trust: item.trust ?? 'user',
+          turnPurpose: item.turnPurpose ?? 'work',
           rootMessageId: item.rootMessageId ?? refMessageId ?? null,
           prompt: item.prompt,
           attachments: refMessageId ? this.store.getMessage(refMessageId)?.metadata?.attachments : undefined,
           resumeSessionId: initialResumeId,
           currentMessageId: item.kind === 'user' ? refMessageId : null,
           replyMessageId: replyMsg.id,
-          canonText: canon.text,
-          canonChanged,
+          canonText: selective ? SELECTIVE_MEMORY_PROMPT : canon.text,
+          canonChanged: selective ? false : canonChanged,
+          ...(selective ? { memoryBlock: memorySelection?.text ?? '', omitCompaction: true } : {}),
           providerOverride: item.modelOverride?.provider,
           modelOverride: item.modelOverride?.model,
           signal: controller.signal,
@@ -1244,6 +1347,15 @@ export class AgentRuntime {
         streaming: false,
         durationMs,
         metadata: {
+          ...(memorySelection
+            ? {
+                memoryUsed: {
+                  pushed: memorySelection.pushedIds,
+                  recalled: this.store.memory.endTurn(agent.id),
+                  tokens: memorySelection.tokens.total,
+                },
+              }
+            : {}),
           ...(Object.keys(designArtifacts).length ? { designArtifacts } : {}),
           ...(roomMentions.length ? { mentions: roomMentions, toAgentIds: roomMentions } : {}),
           activities: turnActivities,
@@ -1305,12 +1417,20 @@ export class AgentRuntime {
         ...(isRoom && projectId ? { [projectId]: activeConversationTokens } : {}),
       };
 
+      const sessionMemorySent = { ...(latestAgent.sessionMemorySent ?? {}) };
+      if (memorySelection && sessionId && !switchingProvider) {
+        const entry = { sessionId, ids: { ...memoryCarry, ...memorySelection.written } };
+        sessionMemorySent[scopeKey] = entry;
+        if (isRoom && projectId) sessionMemorySent[projectId] = entry;
+      }
+
       this.store.updateAgent(agent.id, {
         status: 'idle',
         currentTask: null,
         sessionId: (!switchingProvider ? sessionId : null) ?? latestAgent.sessionId,
         sessions: nextSessions,
         sessionCanon,
+        ...(memorySelection ? { sessionMemorySent } : {}),
         scopeTokens: nextScopeTokens,
         conversationTokens: nextConversationTokens,
         lastError: null,
@@ -1335,6 +1455,7 @@ export class AgentRuntime {
         outputTokens: loggedOut,
         memoryTokens,
         rootMessageId: item.rootMessageId ?? null,
+        turnPurpose: item.turnPurpose ?? 'work',
         estimatedCostUsd: costUsd,
       });
       if (process.env.ATELIER_LOG_LEVEL === 'debug') {
@@ -1429,6 +1550,7 @@ export class AgentRuntime {
         });
       }
     } catch (err) {
+      this.store.memory.endTurn(agent.id);
       const durationMs = Math.max(100, Date.now() - startedAt);
       const isAbort =
         controller.signal.aborted || (err instanceof Error && err.name === 'AbortError');
@@ -1509,6 +1631,7 @@ export class AgentRuntime {
               priority: 'resume',
               rootMessageId: item.rootMessageId ?? null,
               hop: item.hop ?? 0,
+              ...(item.turnPurpose ? { turnPurpose: item.turnPurpose } : {}),
               kind: item.kind,
               prompt: item.prompt,
               refId: item.refId,
@@ -1580,7 +1703,9 @@ export class AgentRuntime {
         });
       }
       if (leaseChannelId) {
-        this.scheduler.release(leaseChannelId, releaseReason);
+        // Only release our own lease: a timed-out turn may finish long after its lease was
+        // handed to another agent.
+        this.scheduler.release(leaseChannelId, releaseReason, item.id);
         this.emitRoomQueue(leaseChannelId);
         this.kickNextInChannel(leaseChannelId);
       }

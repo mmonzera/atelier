@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import { MemoryChip } from '../components/MemoryChip';
 import { FormattedText, getColorVar } from '../components/Atoms';
 import { MessageAttachments, isAttachmentOnlyText } from '../components/AttachmentViews';
 import { WorkPointsChecklist } from '../components/ChatWorkPanel';
@@ -60,6 +61,8 @@ interface RoomViewProps {
   onSkipTurn: () => Promise<void>;
   onStopRoom: () => Promise<void>;
   onContinueChain: (rootMessageId: string) => Promise<void>;
+  onApproveAction: (messageId: string) => Promise<void>;
+  onReorderQueue: (order: string[]) => Promise<void>;
   onRetryAgent: (
     agentId: string,
     opts?: { provider?: ModelProvider; model?: string; makeDefault?: boolean },
@@ -154,6 +157,8 @@ export function RoomView({
   onSkipTurn,
   onStopRoom,
   onContinueChain,
+  onApproveAction,
+  onReorderQueue,
   onRetryAgent,
   onCreateTaskFromReply,
   onOpenTask,
@@ -380,6 +385,54 @@ export function RoomView({
               <span style={{ color: 'var(--text-tertiary)' }}>
                 · {tr('next:')} {nextQueuedAgent.name}
                 {(queue?.queued.length ?? 0) > 1 ? ` (+${queue!.queued.length - 1})` : ''}
+              </span>
+            )}
+            {queue && queue.queued.length > 1 && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                {queue.queued.map((q, i) => {
+                  const qa = agentById.get(q.agentId);
+                  const move = (delta: number) => {
+                    const order = queue.queued.map((x) => x.queueItemId);
+                    const j = i + delta;
+                    if (j < 0 || j >= order.length) return;
+                    [order[i], order[j]] = [order[j]!, order[i]!];
+                    void onReorderQueue(order);
+                  };
+                  return (
+                    <span
+                      key={q.queueItemId}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 2,
+                        padding: '0 5px',
+                        borderRadius: 'var(--radius-full)',
+                        border: '1px solid var(--border-subtle)',
+                        fontSize: 11,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        disabled={i === 0}
+                        onClick={() => move(-1)}
+                        title={tr('Move earlier')}
+                        style={{ opacity: i === 0 ? 0.3 : 1 }}
+                      >
+                        ‹
+                      </button>
+                      {qa?.name ?? tr('Agent')}
+                      <button
+                        type="button"
+                        disabled={i === queue.queued.length - 1}
+                        onClick={() => move(1)}
+                        title={tr('Move later')}
+                        style={{ opacity: i === queue.queued.length - 1 ? 0.3 : 1 }}
+                      >
+                        ›
+                      </button>
+                    </span>
+                  );
+                })}
               </span>
             )}
             {activeTurnAgent && (
@@ -610,6 +663,26 @@ export function RoomView({
                 >
                   <span>{msg.text}</span>
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    {msg.metadata?.approvalRequest && (
+                      msg.metadata.approvalRequest.approved ? (
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tr('Approved')}</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void onApproveAction(msg.id)}
+                          style={{
+                            padding: '3px 9px',
+                            borderRadius: 'var(--radius-full)',
+                            background: 'var(--action-primary)',
+                            color: 'var(--action-primary-fg)',
+                            fontSize: 11.5,
+                            fontWeight: 500,
+                          }}
+                        >
+                          {tr('Allow once')}
+                        </button>
+                      )
+                    )}
                     {ev?.kind === 'chain_budget' && !ev.warningOnly && (
                       <button
                         type="button"
@@ -818,6 +891,8 @@ export function RoomView({
                     onToggle={() => toggleWork(msg.id, msg.streaming)}
                   />
                 )}
+
+                {!msg.streaming && <MemoryChip used={msg.metadata?.memoryUsed} scope={msg.projectId ?? null} />}
 
                 {msg.text &&
                   parseMessageSegments(msg.text).map((seg, i) => {

@@ -2,6 +2,7 @@ import { LANGUAGES, type Lang, setLang, useLang, useT } from '../i18n';
 import {
   BUILT_IN_MODELS,
   DEFAULT_AUTO_COMPACT_SETTINGS,
+  DEFAULT_MEMORY_SETTINGS,
   type FallbackMode,
   type ModelEntry,
   type ModelRef,
@@ -15,6 +16,7 @@ import {
   ArrowDown,
   ArrowUp,
   CheckCircle2,
+  Brain,
   CircleAlert,
   Minimize2,
   RefreshCw,
@@ -60,11 +62,18 @@ export function SettingsView({
   const t = useT();
   const lang = useLang();
   const initialCompact = settings.autoCompact ?? DEFAULT_AUTO_COMPACT_SETTINGS;
+  const initialMemory = { ...DEFAULT_MEMORY_SETTINGS, ...(settings.memory ?? {}) };
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
   const [model, setModel] = useState(settings.model);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(settings.reasoningEffort);
   const [autoCompactEnabled, setAutoCompactEnabled] = useState(initialCompact.enabled);
+  const [selectiveMemory, setSelectiveMemory] = useState(initialMemory.mode === 'selective');
+  const [memPush, setMemPush] = useState(String(initialMemory.pushBudgetTokens));
+  const [memPinned, setMemPinned] = useState(String(initialMemory.pinnedBudgetTokens));
+  const [memCatalog, setMemCatalog] = useState(String(initialMemory.catalogBudgetTokens));
+  const [memTopK, setMemTopK] = useState(String(initialMemory.topK));
+  const [rebuildingMemory, setRebuildingMemory] = useState(false);
   const [maxMessages, setMaxMessages] = useState(String(initialCompact.maxMessages));
   const [keepRecentMessages, setKeepRecentMessages] = useState(
     String(initialCompact.keepRecentMessages),
@@ -172,6 +181,13 @@ export function SettingsView({
           providerContextLimit: parsedProviderLimit,
           tailTokens: Math.min(6000, Math.max(1000, Math.round(Number(tailTokens) || 6000))),
           summarizerModel: summarizerModel.trim(),
+        },
+        memory: {
+          mode: selectiveMemory ? 'selective' : 'full',
+          pushBudgetTokens: Math.min(8000, Math.max(200, Math.round(Number(memPush) || DEFAULT_MEMORY_SETTINGS.pushBudgetTokens))),
+          pinnedBudgetTokens: Math.min(4000, Math.max(0, Math.round(Number(memPinned) || 0))),
+          catalogBudgetTokens: Math.min(2000, Math.max(0, Math.round(Number(memCatalog) || 0))),
+          topK: Math.min(30, Math.max(1, Math.round(Number(memTopK) || DEFAULT_MEMORY_SETTINGS.topK))),
         },
         fallbackMode,
         fallbackChain,
@@ -508,6 +524,89 @@ export function SettingsView({
                       style={inputStyle}
                     />
                   </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border-subtle)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+            }}
+          >
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 12.5,
+                fontWeight: 500,
+                color: 'var(--text-primary)',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={selectiveMemory}
+                onChange={(e) => setSelectiveMemory(e.target.checked)}
+              />
+              <Brain size={14} strokeWidth={1.5} style={{ color: 'var(--agent-blue)' }} />{t('Selective memory (beta)')}
+            </label>
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>
+              {t('Send only the memory relevant to each request (pinned entries, matches and a title index) instead of all Canon and summaries. Agents fetch the rest with search_memory.')}
+            </div>
+            {selectiveMemory && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingLeft: 22 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
+                  <div>
+                    <label htmlFor="mem-push" style={labelStyle}>{t('Push budget')}</label>
+                    <input id="mem-push" type="number" min={200} max={8000} step={100} value={memPush}
+                      onChange={(e) => setMemPush(e.target.value)} className="mono-num" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label htmlFor="mem-pinned" style={labelStyle}>{t('Pinned budget')}</label>
+                    <input id="mem-pinned" type="number" min={0} max={4000} step={50} value={memPinned}
+                      onChange={(e) => setMemPinned(e.target.value)} className="mono-num" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label htmlFor="mem-catalog" style={labelStyle}>{t('Index budget')}</label>
+                    <input id="mem-catalog" type="number" min={0} max={2000} step={50} value={memCatalog}
+                      onChange={(e) => setMemCatalog(e.target.value)} className="mono-num" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label htmlFor="mem-topk" style={labelStyle}>{t('Top matches')}</label>
+                    <input id="mem-topk" type="number" min={1} max={30} value={memTopK}
+                      onChange={(e) => setMemTopK(e.target.value)} className="mono-num" style={inputStyle} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <button
+                    type="button"
+                    disabled={rebuildingMemory}
+                    style={secondaryBtnStyle}
+                    onClick={async () => {
+                      setRebuildingMemory(true);
+                      try {
+                        await api.rebuildMemoryIndex();
+                        toast.success(t('Memory index will be rebuilt on the next turn'));
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : t('Could not rebuild the memory index.'));
+                      } finally {
+                        setRebuildingMemory(false);
+                      }
+                    }}
+                  >
+                    {t('Rebuild memory index')}
+                  </button>
+                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                    {t('Tokens are estimated. Pin Canon entries in the Canon panel to always send them.')}
+                  </span>
                 </div>
               </div>
             )}

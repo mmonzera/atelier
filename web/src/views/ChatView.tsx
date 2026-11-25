@@ -37,6 +37,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { shownModels } from '../state/models';
 import { api, browserApi } from '../api';
+import { MemoryChip } from '../components/MemoryChip';
 import {
   FormattedText,
   TaskStatusIcon,
@@ -755,6 +756,8 @@ export function ChatView({
                     onToggle={() => toggleWork(msg.id, msg.streaming)}
                   />
                 )}
+
+                {!msg.streaming && <MemoryChip used={msg.metadata?.memoryUsed} scope={msg.projectId ?? null} />}
 
                 {msg.metadata?.fallbackTo && (
                   <div

@@ -34,6 +34,8 @@ export function applyAtelierActions(
         if (Object.hasOwn(MEMORY_ACTIONS, toolName)) {
           const isRecall =
             toolName === 'search_history' ||
+            toolName === 'search_memory' ||
+            toolName === 'get_memory' ||
             toolName === 'get_message' ||
             toolName === 'get_artifact' ||
             toolName === 'get_skill';

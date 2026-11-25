@@ -552,9 +552,49 @@ export interface CanonEntry {
   artifactId?: string;
   path?: string;
   source: 'user_pick' | 'agent_recorded' | 'user_edited';
+  /** Selalu dikirim ke agent di mode selective memory. Kalau kosong: rule/user_pick/user_edited dianggap pinned. */
+  pinned?: boolean;
   createdAt: string;
   updatedAt: string;
   supersededBy?: string;
+}
+
+export type MemorySource = 'canon' | 'summary' | 'task' | 'artifact' | 'message';
+
+export interface MemoryHit {
+  id: string;
+  source: MemorySource;
+  kind: string;
+  title: string;
+  snippet: string;
+  score: number;
+  updatedAt: string;
+}
+
+export interface MemorySettings {
+  /** full = kirim semua seperti dulu; selective = hanya memory yang relevan + pinned + katalog judul */
+  mode: 'full' | 'selective';
+  pushBudgetTokens: number;
+  pinnedBudgetTokens: number;
+  catalogBudgetTokens: number;
+  topK: number;
+  /** skor ternormalisasi 0..1; di bawah ini item tidak di-push */
+  minScore: number;
+}
+
+export const DEFAULT_MEMORY_SETTINGS: MemorySettings = {
+  mode: 'full',
+  pushBudgetTokens: 1200,
+  pinnedBudgetTokens: 500,
+  catalogBudgetTokens: 250,
+  topK: 8,
+  minScore: 0.15,
+};
+
+export interface MessageMemoryUsed {
+  pushed: string[];
+  recalled: string[];
+  tokens: number;
 }
 
 export interface Artifact {
@@ -840,6 +880,8 @@ export interface Agent {
   sessionId: string | null;
   sessions?: Record<string, string>;
   sessionCanon?: Record<string, { sessionId: string; version: string }>;
+  /** id item memory yang sudah dikirim ke sesi provider ini (mode selective), per scope */
+  sessionMemorySent?: Record<string, { sessionId: string; ids: Record<string, string> }>;
   contextCompactions?: Record<string, ThreadCompaction>;
   scopeTokens?: Record<string, number>;
   conversationTokens?: Record<string, number>;
@@ -958,6 +1000,7 @@ export interface RoomQueueSnapshot {
 }
 
 export interface MessageMetadata {
+  memoryUsed?: MessageMemoryUsed;
   designArtifacts?: Record<string, string>;
   designPick?: { messageId: string; optionId: string; segmentIndex?: number; canonId?: string };
   taskId?: string;
@@ -1140,7 +1183,16 @@ export interface RollingWindowUsage {
 }
 
 export interface UsageLogEntry {
-  memoryTokens?: { canon: number; summary: number; tail: number; stubs?: number; delta?: number };
+  memoryTokens?: {
+    canon: number;
+    summary: number;
+    tail: number;
+    stubs?: number;
+    delta?: number;
+    relevant?: number;
+    catalog?: number;
+    pinned?: number;
+  };
   turnPurpose?: 'dispatch' | 'work';
   rootMessageId?: string | null;
   id: string;
@@ -1476,6 +1528,7 @@ export interface Settings {
   mcpServers: McpServerConfig[];
   onboardingCompleted: boolean;
   autoCompact: AutoCompactSettings;
+  memory?: MemorySettings;
   usageLimits?: Partial<Record<ModelProvider, ProviderUsageLimit>>;
   fallbackMode?: FallbackMode;
   fallbackChain?: ModelRef[];
@@ -1498,6 +1551,8 @@ export interface QueueItem {
   priority?: 'resume' | 'normal';
   rootMessageId?: string | null;
   hop?: number;
+  /** 'dispatch' = Chief of Staff only routes the request to the right teammate. */
+  turnPurpose?: 'dispatch' | 'work';
   kind: QueueKind;
   prompt: string;
   refId: string | null;
@@ -1626,6 +1681,7 @@ export interface SettingsInput {
   cliPaths?: Partial<Record<RealProvider, string>>;
   onboardingCompleted?: boolean;
   autoCompact?: Partial<AutoCompactSettings>;
+  memory?: Partial<MemorySettings>;
   usageLimits?: Partial<Record<ModelProvider, ProviderUsageLimit>>;
   fallbackMode?: FallbackMode;
   fallbackChain?: ModelRef[];

@@ -867,6 +867,12 @@ export function App() {
                 onStopRoom={async () => {
                   await api.stopRoom(activeProjectRoom.id);
                 }}
+                onReorderQueue={async (order) => {
+                  await api.reorderRoomQueue(activeProjectRoom.id, order);
+                }}
+                onApproveAction={async (messageId) => {
+                  await api.approveRoomAction(activeProjectRoom.id, messageId);
+                }}
                 onContinueChain={async (rootMessageId) => {
                   await api.continueRoomChain(activeProjectRoom.id, rootMessageId);
                 }}

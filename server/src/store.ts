@@ -9,10 +9,14 @@ import {
   BUILT_IN_SKILLS,
   DEFAULT_AUTO_COMPACT_SETTINGS,
   DEFAULT_MEETING_SETTINGS,
+  DEFAULT_MEMORY_SETTINGS,
   parseMessageSegments,
   type Artifact,
   type CanonEntry,
   type Channel,
+  type MemoryHit,
+  type MemorySettings,
+  type MemorySource,
   type DesignOption,
   type Activity,
   type ActivityKind,
@@ -58,6 +62,8 @@ import { ChannelService } from './channels/service.js';
 import type { AppConfig } from './config.js';
 import type { AtelierDb } from './db.js';
 import { getAgentWorkspacePath, getDirectAgentWorkspacePath, getProjectRepoPath } from './github.js';
+import { type IndexedSource, MemoryIndex } from './memory/indexer.js';
+import { buildFtsQuery, expandSynonyms, extractTerms } from './memory/query.js';
 import { CanonInputSchema, memoryFilePath, readDesignImage, validateArtifactSize, writeMemoryFile } from './memory-files.js';
 
 const AGENT_COLOR_SET = new Set<string>(AGENT_COLORS);
@@ -74,6 +80,8 @@ export function nowIso(): string {
 
 export class AtelierStore {
   public readonly channels: ChannelService;
+  /** Proyeksi Canon/ringkasan/task/artifact untuk selective memory. Cache, bukan sumber kebenaran. */
+  public readonly memory: MemoryIndex;
   private bus: EventBus | null = null;
   private transactionEvents?: ServerEvent[];
   private snapshotAugmenter?: (base: WorkspaceState) => WorkspaceState;
@@ -87,6 +95,25 @@ export class AtelierStore {
         this.appendEvent(ev);
         this.broadcast(ev);
       }
+    });
+    this.channels.onCompactionChange = (channel) => this.memory.markDirty(channel.projectId ?? 'direct');
+    this.memory = new MemoryIndex(this.db, {
+      canon: (scopeKey) => this.listCanon(scopeKey),
+      tasks: (projectId) => this.listProjectTasks(projectId),
+      artifacts: (projectId) => this.listArtifacts(projectId),
+      projectExists: (projectId) => Boolean(this.getProject(projectId)),
+      summaries: (scopeKey) => {
+        const out: Array<{ owner: string; compaction: ThreadCompaction }> = [];
+        for (const agent of this.listAgents()) {
+          const compaction = agent.contextCompactions?.[scopeKey];
+          if (compaction?.summary?.trim()) out.push({ owner: `agent:${agent.id}`, compaction });
+        }
+        for (const channel of this.channels.listChannels()) {
+          if ((channel.projectId ?? 'direct') !== scopeKey) continue;
+          if (channel.compaction?.summary?.trim()) out.push({ owner: `channel:${channel.id}`, compaction: channel.compaction });
+        }
+        return out;
+      },
     });
     this.seedSettings();
   }
@@ -159,6 +186,7 @@ export class AtelierStore {
         mcpServers: [],
         onboardingCompleted: false,
         autoCompact: DEFAULT_AUTO_COMPACT_SETTINGS,
+        memory: DEFAULT_MEMORY_SETTINGS,
         usageLimits: {},
       };
       this.db.sqlite
@@ -263,6 +291,7 @@ export class AtelierStore {
           ? (raw.sessions as Record<string, string>)
           : {},
       sessionCanon: raw.sessionCanon as Agent['sessionCanon'],
+      sessionMemorySent: raw.sessionMemorySent as Agent['sessionMemorySent'],
       contextCompactions:
         raw.contextCompactions && typeof raw.contextCompactions === 'object'
           ? (raw.contextCompactions as Record<string, ThreadCompaction>)
@@ -577,12 +606,33 @@ export class AtelierStore {
       onboardingCompleted:
         typeof parsed.onboardingCompleted === 'boolean' ? parsed.onboardingCompleted : false,
       autoCompact: this.normalizeAutoCompact(parsed.autoCompact),
+      memory: this.normalizeMemory(parsed.memory),
       usageLimits:
         parsed.usageLimits && typeof parsed.usageLimits === 'object' ? parsed.usageLimits : {},
       fallbackMode: parsed.fallbackMode === 'auto' ? 'auto' : 'ask',
       fallbackChain: Array.isArray(parsed.fallbackChain) ? parsed.fallbackChain : [],
       sitePresets: Array.isArray(parsed.sitePresets) ? (parsed.sitePresets as SitePreset[]) : [],
       meeting: this.normalizeMeetingSettings(parsed.meeting),
+    };
+  }
+
+  private normalizeMemory(raw?: Partial<MemorySettings> | null): MemorySettings {
+    const base = DEFAULT_MEMORY_SETTINGS;
+    const int = (value: unknown, fallback: number, min: number, max: number) =>
+      typeof value === 'number' && Number.isFinite(value)
+        ? Math.min(max, Math.max(min, Math.round(value)))
+        : fallback;
+    const minScore =
+      typeof raw?.minScore === 'number' && Number.isFinite(raw.minScore)
+        ? Math.min(1, Math.max(0, raw.minScore))
+        : base.minScore;
+    return {
+      mode: raw?.mode === 'selective' ? 'selective' : 'full',
+      pushBudgetTokens: int(raw?.pushBudgetTokens, base.pushBudgetTokens, 200, 8000),
+      pinnedBudgetTokens: int(raw?.pinnedBudgetTokens, base.pinnedBudgetTokens, 0, 4000),
+      catalogBudgetTokens: int(raw?.catalogBudgetTokens, base.catalogBudgetTokens, 0, 2000),
+      topK: int(raw?.topK, base.topK, 1, 30),
+      minScore,
     };
   }
 
@@ -619,6 +669,9 @@ export class AtelierStore {
         autoCompact: input.autoCompact
           ? this.normalizeAutoCompact({ ...current.autoCompact, ...input.autoCompact })
           : current.autoCompact,
+        memory: input.memory
+          ? this.normalizeMemory({ ...this.normalizeMemory(current.memory), ...input.memory })
+          : this.normalizeMemory(current.memory),
         usageLimits: input.usageLimits
           ? { ...(current.usageLimits ?? {}), ...input.usageLimits }
           : (current.usageLimits ?? {}),
@@ -1294,6 +1347,7 @@ export class AtelierStore {
         | 'sessionId'
         | 'sessions'
         | 'sessionCanon'
+        | 'sessionMemorySent'
         | 'contextCompactions'
         | 'scopeTokens'
         | 'conversationTokens'
@@ -1315,6 +1369,8 @@ export class AtelierStore {
         sessionId: patch.sessionId !== undefined ? patch.sessionId : existing.sessionId,
         sessions: patch.sessions !== undefined ? patch.sessions : existing.sessions,
         sessionCanon: patch.sessionCanon !== undefined ? patch.sessionCanon : existing.sessionCanon,
+        sessionMemorySent:
+          patch.sessionMemorySent !== undefined ? patch.sessionMemorySent : existing.sessionMemorySent,
         contextCompactions:
           patch.contextCompactions !== undefined
             ? patch.contextCompactions
@@ -1337,6 +1393,9 @@ export class AtelierStore {
         .run(JSON.stringify(updated), updated.id);
       return [{ type: 'agent-upserted', payload: updated }];
     });
+    if (patch.contextCompactions !== undefined) {
+      for (const key of Object.keys(patch.contextCompactions)) this.memory.markDirty(key);
+    }
     return updated;
   }
 
@@ -1363,6 +1422,7 @@ export class AtelierStore {
     };
     this.runTx(() => {
       const previous = this.listCanon(scopeKey).find((item) => item.key === entry.key);
+      if (previous?.pinned !== undefined) entry.pinned = previous.pinned;
       if (previous) {
         this.db.sqlite.prepare('UPDATE canon SET data = ? WHERE id = ?')
           .run(JSON.stringify({ ...previous, supersededBy: entry.id, updatedAt: createdAt }), previous.id);
@@ -1374,10 +1434,31 @@ export class AtelierStore {
         { type: 'canon-upserted', payload: entry },
       ];
     });
+    this.memory.markDirty(scopeKey);
     return entry;
   }
 
+  /** Pin/unpin entri Canon: entri pinned selalu dikirim di mode selective memory. */
+  public setCanonPinned(id: string, pinned: boolean): CanonEntry | null {
+    let updated: CanonEntry | null = null;
+    this.runTx(() => {
+      const row = this.db.sqlite.prepare('SELECT data FROM canon WHERE id = ?').get(id) as { data: string } | undefined;
+      if (!row) return [];
+      const entry = JSON.parse(row.data) as CanonEntry;
+      if (entry.supersededBy) return [];
+      updated = { ...entry, pinned, updatedAt: nowIso() };
+      this.db.sqlite.prepare('UPDATE canon SET data = ? WHERE id = ?').run(JSON.stringify(updated), id);
+      return [{ type: 'canon-upserted', payload: updated }];
+    });
+    if (updated) this.memory.markDirty((updated as CanonEntry).scopeKey);
+    return updated;
+  }
+
   public deleteCanon(id: string): void {
+    const scope = this.db.sqlite.prepare('SELECT project_id FROM canon WHERE id = ?').get(id) as
+      | { project_id: string | null }
+      | undefined;
+    if (scope) this.memory.markDirty(scope.project_id ?? 'direct');
     this.runTx(() => {
       const result = this.db.sqlite.prepare('DELETE FROM canon WHERE id = ?').run(id);
       return result.changes ? [{ type: 'canon-deleted', payload: { id } }] : [];
@@ -1399,6 +1480,7 @@ export class AtelierStore {
           .run(id, artifact.projectId, artifact.createdAt, JSON.stringify(artifact), bytes);
         return [{ type: 'artifact-created', payload: artifact }];
       });
+      this.memory.markDirty(artifact.projectId ?? 'direct');
     } catch (err) {
       fs.rmSync(memoryFilePath(this.config.dataDir, artifact.path), { force: true });
       throw err;
@@ -1619,6 +1701,87 @@ export class AtelierStore {
     }
     return rows.map(({ id, author, createdAt, snippet }) => ({
       messageId: id, author, createdAt, snippet: snippet.slice(0, 300),
+    }));
+  }
+
+  /**
+   * Pencarian memory terpadu (Canon, ringkasan, task, artifact, pesan) dengan semantik OR + prefix.
+   * `searchHistory` sengaja dibiarkan ketat (AND) agar perilaku lamanya tidak berubah.
+   */
+  public searchMemory(
+    projectId: string | null,
+    owners: string[],
+    query: string,
+    opts: { sources?: MemorySource[]; limit?: number } = {},
+  ): MemoryHit[] {
+    const scope = projectId ?? 'direct';
+    const limit = Math.min(10, Math.max(1, opts.limit ?? 6));
+    const wanted: MemorySource[] = opts.sources?.length
+      ? opts.sources
+      : ['canon', 'summary', 'task', 'artifact', 'message'];
+    const hits: MemoryHit[] = [];
+    const indexed = wanted.filter((source): source is IndexedSource => source !== 'message');
+    if (indexed.length) {
+      for (const { item, score } of this.memory.search(scope, owners, query, { sources: indexed, limit })) {
+        hits.push({
+          id: item.id,
+          source: item.source,
+          kind: item.kind,
+          title: item.title.slice(0, 120),
+          snippet: item.line.slice(0, 300),
+          score: Math.round(score * 1000) / 1000,
+          updatedAt: item.updatedAt,
+        });
+      }
+    }
+    if (wanted.includes('message')) hits.push(...this.searchMessagesAny(projectId, query, limit));
+    return hits.sort((a, b) => b.score - a.score || b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
+  }
+
+  private searchMessagesAny(projectId: string | null, query: string, limit: number): MemoryHit[] {
+    const terms = expandSynonyms(extractTerms(query));
+    if (!terms.length) return [];
+    type Row = { id: string; author: string; createdAt: string; snippet: string; rank: number };
+    let rows: Row[];
+    if (this.db.hasMessageFts) {
+      try {
+        rows = this.db.sqlite.prepare(`
+          SELECT m.id, json_extract(m.data, '$.author') AS author, m.created_at AS createdAt,
+            snippet(messages_fts, 0, '', '', '…', 24) AS snippet, -bm25(messages_fts) AS rank
+          FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid
+          WHERE messages_fts MATCH ? AND scope = ? AND m.project_id IS ?
+          ORDER BY bm25(messages_fts), m.created_at DESC LIMIT ?
+        `).all(buildFtsQuery(terms), projectId ?? 'direct', projectId, limit) as Row[];
+      } catch {
+        rows = [];
+      }
+    } else {
+      const recent = this.db.sqlite.prepare(`
+        SELECT id, created_at AS createdAt, json_extract(data, '$.author') AS author, json_extract(data, '$.text') AS text
+        FROM messages WHERE project_id IS ? AND coalesce(json_extract(data, '$.streaming'), 0) = 0
+          AND coalesce(json_extract(data, '$.metadata.compacted'), 0) = 0
+        ORDER BY created_at DESC LIMIT 1500
+      `).all(projectId) as Array<{ id: string; createdAt: string; author: string; text: string }>;
+      rows = [];
+      for (const r of recent) {
+        const lower = (r.text ?? '').toLowerCase();
+        const matched = terms.filter((t) => lower.includes(t));
+        if (!matched.length) continue;
+        const at = Math.max(0, lower.indexOf(matched[0]!) - 80);
+        rows.push({ id: r.id, author: r.author, createdAt: r.createdAt, snippet: r.text.slice(at, at + 300), rank: matched.length });
+      }
+      rows = rows.sort((a, b) => b.rank - a.rank).slice(0, limit);
+    }
+    const max = Math.max(0.0001, ...rows.map((r) => r.rank));
+    return rows.map((r) => ({
+      id: r.id,
+      source: 'message' as const,
+      kind: r.author,
+      title: `${r.author} message`,
+      snippet: r.snippet.slice(0, 300),
+      // Pesan diberi bobot lebih rendah dari memory terkurasi (Canon/summary/task).
+      score: Math.round(0.6 * (r.rank / max) * 1000) / 1000,
+      updatedAt: r.createdAt,
     }));
   }
 
@@ -2013,6 +2176,7 @@ export class AtelierStore {
         .run(task.id, task.projectId, task.createdAt, JSON.stringify(task));
       return [{ type: 'task-upserted', payload: task }];
     });
+    this.memory.markDirty(projectId);
     const room = this.channels.getRoomByProject(projectId);
     if (room) {
       const assignee = task.assigneeAgentId ? this.getAgent(task.assigneeAgentId) : null;
@@ -2071,6 +2235,7 @@ export class AtelierStore {
         .run(JSON.stringify(updated), updated.id);
       return [{ type: 'task-upserted', payload: updated }];
     });
+    if (updated) this.memory.markDirty((updated as Task).projectId);
     if (updated && prevStatus && (updated as Task).status !== prevStatus) {
       const t = updated as Task;
       const room = this.channels.getRoomByProject(t.projectId);
@@ -2108,6 +2273,7 @@ export class AtelierStore {
       if (!existing) return [];
       this.db.sqlite.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
       deleted = true;
+      this.memory.markDirty(existing.projectId);
       return [{ type: 'task-deleted', payload: { id, projectId: existing.projectId } }];
     });
     return deleted;
@@ -2175,6 +2341,7 @@ export class AtelierStore {
     priority?: 'resume' | 'normal';
     rootMessageId?: string | null;
     hop?: number;
+    turnPurpose?: 'dispatch' | 'work';
     kind: QueueKind;
     prompt: string;
     refId: string | null;
@@ -2196,6 +2363,7 @@ export class AtelierStore {
       priority: input.priority ?? 'normal',
       rootMessageId: input.rootMessageId ?? null,
       hop: input.hop ?? 0,
+      ...(input.turnPurpose ? { turnPurpose: input.turnPurpose } : {}),
       kind: input.kind,
       prompt: input.prompt,
       refId: input.refId,

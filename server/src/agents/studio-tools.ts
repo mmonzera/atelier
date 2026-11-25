@@ -18,11 +18,17 @@ import type { BrowserManager } from '../browser/manager.js';
 import { runBrowserQa } from '../qa/browser-qa.js';
 import { type AtelierStore, newId } from '../store.js';
 import { CANON_KEY, CanonInputFields, CanonInputSchema } from '../memory-files.js';
+import { memoryOwners } from '../memory/owners.js';
 
 const CanonKeySchema = z.object({ key: z.string().regex(CANON_KEY) });
 const SearchHistorySchema = z.object({
   query: z.string().trim().min(1).max(200),
   limit: z.number().int().min(1).max(8).optional(),
+});
+const SearchMemorySchema = z.object({
+  query: z.string().trim().min(1).max(300),
+  sources: z.array(z.enum(['canon', 'summary', 'task', 'artifact', 'message'])).max(5).optional(),
+  limit: z.number().int().min(1).max(10).optional(),
 });
 const ArchiveIdSchema = z.object({ id: z.string().min(1).max(80) });
 const GetSkillSchema = z.object({ id: z.string().trim().min(1).max(120) });
@@ -32,6 +38,8 @@ export const MEMORY_ACTIONS = {
   record_decision: CanonInputSchema,
   forget_decision: CanonKeySchema,
   search_history: SearchHistorySchema,
+  search_memory: SearchMemorySchema,
+  get_memory: ArchiveIdSchema,
   get_message: ArchiveIdSchema,
   get_artifact: ArchiveIdSchema,
   get_skill: GetSkillSchema,
@@ -157,6 +165,13 @@ export function createStudioTools(deps: {
 }): StudioTools {
   const { store, projectId, actingAgentId, enqueue, dataDir = './data', trust = 'user' } = deps;
 
+  const readMessage = (id: string) => {
+    const message = store.getMessage(id);
+    if (!message || message.projectId !== projectId || message.streaming) return { found: false };
+    return { id, author: message.author, createdAt: message.createdAt, text: message.text.slice(0, 6000),
+      truncated: message.text.length > 6000 };
+  };
+
   return {
     memoryAction(name, rawInput) {
       switch (name) {
@@ -176,12 +191,36 @@ export function createStudioTools(deps: {
           const { query, limit } = SearchHistorySchema.parse(rawInput);
           return store.searchHistory(projectId, query, limit ?? 5);
         }
+        case 'search_memory': {
+          const { query, sources, limit } = SearchMemorySchema.parse(rawInput);
+          const hits = store.searchMemory(projectId, memoryOwners(store, actingAgentId, deps.channelId), query, { sources, limit });
+          store.memory.noteRecalled(actingAgentId, hits.map((hit) => hit.id));
+          return hits;
+        }
+        case 'get_memory': {
+          const { id } = ArchiveIdSchema.parse(rawInput);
+          if (!id.startsWith('mem_')) return readMessage(id);
+          const scope = projectId ?? 'direct';
+          const item = store.memory.get(scope, id, memoryOwners(store, actingAgentId, deps.channelId));
+          if (!item) return { found: false };
+          store.memory.noteRecalled(actingAgentId, [id]);
+          if (item.source === 'canon') {
+            const entry = store.listCanon(scope).find((c) => `${scope}:${c.key}` === item.sourceId);
+            return entry ? { found: true, id, source: 'canon', entry } : { found: false };
+          }
+          if (item.source === 'task') {
+            const task = store.getTask(item.sourceId);
+            return task ? { found: true, id, source: 'task', task } : { found: false };
+          }
+          if (item.source === 'artifact') {
+            return { found: true, id, source: 'artifact', artifactId: item.artifactId, path: item.path,
+              hint: 'Use get_artifact(artifactId) to read the contents.' };
+          }
+          return { found: true, id, source: item.source, kind: item.kind, text: item.body.slice(0, 6000) };
+        }
         case 'get_message': {
           const { id } = ArchiveIdSchema.parse(rawInput);
-          const message = store.getMessage(id);
-          if (!message || message.projectId !== projectId || message.streaming) return { found: false };
-          return { id, author: message.author, createdAt: message.createdAt, text: message.text.slice(0, 6000),
-            truncated: message.text.length > 6000 };
+          return readMessage(id);
         }
         case 'get_skill': {
           const { id } = GetSkillSchema.parse(rawInput);
@@ -612,6 +651,8 @@ export async function createAtelierSdkMcpServer(
             record_decision: 'Save a durable project decision, rule, or asset reference.',
             forget_decision: 'Remove a Canon entry by key at the user’s request.',
             search_history: 'Search archived messages within the current scope.',
+            search_memory: 'Search project memory (canon, summary, task, artifact, message) for anything not shown in the Relevant Memory block.',
+            get_memory: 'Read a memory item by ID (mem_...) or an archived message by ID.',
             get_message: 'Read an archived message by ID.',
             get_artifact: 'Read an archived artifact by ID.',
             get_skill: 'Read the full instructions of an installed skill by ID before using it.',

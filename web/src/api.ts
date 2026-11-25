@@ -277,6 +277,15 @@ export const api = {
     request<{ entry: CanonEntry }>(`/api/projects/${encodeURIComponent(entry.scopeKey)}/canon/${encodeURIComponent(entry.id)}`, {
       method: 'PATCH', body: JSON.stringify(patch),
     }),
+  pinCanon: (entry: CanonEntry, pinned: boolean) =>
+    request<{ entry: CanonEntry }>(`/api/projects/${encodeURIComponent(entry.scopeKey)}/canon/${encodeURIComponent(entry.id)}/pin`, {
+      method: 'PATCH', body: JSON.stringify({ pinned }),
+    }),
+  rebuildMemoryIndex: () => request<{ ok: boolean }>('/api/memory/rebuild', { method: 'POST' }),
+  memoryItems: (scope: string | null, ids: string[]) =>
+    request<{ items: Array<{ id: string; source: string; kind: string; title: string; line: string; pinned: boolean; updatedAt: string }> }>(
+      `/api/projects/${encodeURIComponent(scope ?? 'direct')}/memory?ids=${encodeURIComponent(ids.join(','))}`,
+    ),
   deleteCanon: (entry: CanonEntry) =>
     request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(entry.scopeKey)}/canon/${encodeURIComponent(entry.id)}`, {
       method: 'DELETE',
@@ -394,6 +403,11 @@ export const api = {
     request<{ ok: boolean; queue: RoomQueueSnapshot }>(`/api/channels/${channelId}/queue`, {
       method: 'PATCH',
       body: JSON.stringify({ order }),
+    }),
+
+  approveRoomAction: (channelId: string, messageId: string) =>
+    request<{ ok: boolean }>(`/api/channels/${channelId}/approvals/${messageId}/approve`, {
+      method: 'POST',
     }),
 
   continueRoomChain: (channelId: string, rootMessageId: string) =>

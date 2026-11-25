@@ -5,6 +5,9 @@ import { applyGroupChatMigration } from './channels/migration.js';
 
 export class AtelierDb {
   public readonly sqlite: DatabaseSync;
+  /** Naik setiap kali isi tabel diganti dari luar (restore backup) sehingga index memory harus dibangun ulang. */
+  public memoryGeneration = 0;
+  public readonly hasMemoryFts: boolean;
   public readonly hasMessageFts: boolean;
   private backfill?: NodeJS.Immediate;
 
@@ -15,6 +18,7 @@ export class AtelierDb {
     this.sqlite.exec('PRAGMA foreign_keys = ON;');
     this.initSchema(path.dirname(dbPath));
     this.hasMessageFts = this.initMessageFts();
+    this.hasMemoryFts = this.initMemoryFts();
   }
 
   private initSchema(dataDir?: string): void {
@@ -190,6 +194,22 @@ export class AtelierDb {
       );
 
       -- Machine-local tables: never exported in backups, never overwritten on import.
+      -- Proyeksi (cache) dari Canon, ringkasan, task, dan artifact. Selalu bisa dibangun ulang.
+      CREATE TABLE IF NOT EXISTS memory_items (
+        id         TEXT PRIMARY KEY,
+        scope_key  TEXT NOT NULL,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        owner      TEXT NOT NULL DEFAULT '',
+        source     TEXT NOT NULL,
+        source_id  TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        pinned     INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        data       TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_source ON memory_items(source, source_id);
+      CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory_items(scope_key, source);
+
       CREATE TABLE IF NOT EXISTS app_lock (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         data TEXT NOT NULL
@@ -268,6 +288,23 @@ export class AtelierDb {
       if (rows.length === 250) this.backfill = setImmediate(nextBatch).unref();
     };
     this.backfill = setImmediate(nextBatch).unref();
+    return true;
+  }
+
+  private initMemoryFts(): boolean {
+    try {
+      this.sqlite.exec(
+        `CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(title, body, tokenize = 'unicode61 remove_diacritics 2')`,
+      );
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.includes('no such module: fts5')) throw err;
+      return false;
+    }
+    this.sqlite.exec(`
+      CREATE TRIGGER IF NOT EXISTS memory_items_fts_delete AFTER DELETE ON memory_items BEGIN
+        DELETE FROM memory_fts WHERE rowid = old.rowid;
+      END;
+    `);
     return true;
   }
 

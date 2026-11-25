@@ -522,6 +522,31 @@ export function createHttpRouter(deps: {
     }) });
   });
 
+  api.patch('/projects/:id/canon/:entryId/pin', async (c) => {
+    const body = await c.req.json().catch(() => null) as { pinned?: unknown } | null;
+    if (!body || typeof body.pinned !== 'boolean') {
+      return c.json(apiError('invalid_canon', 'pinned must be a boolean.'), 400);
+    }
+    const entry = store.listCanon(c.req.param('id')).find((item) => item.id === c.req.param('entryId'));
+    if (!entry) return c.json(apiError('not_found', 'Canon entry not found.'), 404);
+    const updated = store.setCanonPinned(entry.id, body.pinned);
+    return updated ? c.json({ entry: updated }) : c.json(apiError('not_found', 'Canon entry not found.'), 404);
+  });
+
+  api.get('/projects/:id/memory', (c) => {
+    const ids = (c.req.query('ids') ?? '').split(',').map((v) => v.trim()).filter(Boolean).slice(0, 50);
+    const items = store.memory.getByIds(c.req.param('id'), ids).map((item) => ({
+      id: item.id, source: item.source, kind: item.kind, title: item.title,
+      line: item.line, pinned: item.pinned, updatedAt: item.updatedAt,
+    }));
+    return c.json({ items });
+  });
+
+  api.post('/memory/rebuild', (c) => {
+    store.memory.rebuild();
+    return c.json({ ok: true });
+  });
+
   api.delete('/projects/:id/canon/:entryId', (c) => {
     const entry = store.listCanon(c.req.param('id')).find((item) => item.id === c.req.param('entryId'));
     if (!entry) return c.json(apiError('not_found', 'Canon entry not found.'), 404);
@@ -890,6 +915,16 @@ export function createHttpRouter(deps: {
     return c.json({ ok: true, queue: snapshot });
   });
 
+  api.post('/channels/:id/approvals/:messageId/approve', (c) => {
+    const channelId = c.req.param('id');
+    const res = runtime.approveRoomAction(channelId, c.req.param('messageId'));
+    if (!res.ok) {
+      const status = res.reason === 'already_approved' ? 409 : 404;
+      return c.json(apiError(`approval_${res.reason ?? 'failed'}`, 'Approval request cannot be approved.'), status);
+    }
+    return c.json({ ok: true });
+  });
+
   api.post('/channels/:id/chains/:rootMessageId/continue', (c) => {
     const channelId = c.req.param('id');
     const rootMessageId = c.req.param('rootMessageId');
@@ -1110,6 +1145,16 @@ export function createHttpRouter(deps: {
             providerContextLimit: z.number().int().min(8000).max(2000000).optional(),
             tailTokens: z.number().int().min(1000).max(6000).optional(),
             summarizerModel: z.string().max(120).regex(/^[a-zA-Z0-9._:/-]*$/).optional(),
+          })
+          .optional(),
+        memory: z
+          .object({
+            mode: z.enum(['full', 'selective']).optional(),
+            pushBudgetTokens: z.number().int().min(200).max(8000).optional(),
+            pinnedBudgetTokens: z.number().int().min(0).max(4000).optional(),
+            catalogBudgetTokens: z.number().int().min(0).max(2000).optional(),
+            topK: z.number().int().min(1).max(30).optional(),
+            minScore: z.number().min(0).max(1).optional(),
           })
           .optional(),
         fallbackMode: z.enum(['ask', 'auto']).optional(),
