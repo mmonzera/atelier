@@ -185,6 +185,11 @@ describe('CliAgentRunner end-to-end provider invocations & error surfacing', () 
           res.end('rate limit exceeded');
           return;
         }
+        if (body?.model === 'gemini-2.5-flash' && failAll) {
+          res.statusCode = 400;
+          res.end('bad request');
+          return;
+        }
         res.setHeader('Content-Type', 'text/event-stream');
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'PO' } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'NG' } }] })}\n\n`);
@@ -216,6 +221,7 @@ describe('CliAgentRunner end-to-end provider invocations & error surfacing', () 
         },
       );
     let usage: [number, number] | null = null;
+    let failAll = false;
 
     // No key configured -> clear error, nothing sent.
     await expect(run('gemini-2.5-flash')).rejects.toThrow(/API key not configured/);
@@ -229,7 +235,19 @@ describe('CliAgentRunner end-to-end provider invocations & error surfacing', () 
     expect(seen[0]!.auth).toBe('Bearer AIza-test-key');
     expect(seen[0]!.body?.model).toBe('gemini-2.5-flash');
 
-    await expect(run('gemini-fail-rate-limit')).rejects.toThrow('429');
+    // Old UI id with an effort suffix maps to the real model.
+    seen.length = 0;
+    expect((await run('gemini-2.5-flash-high')).finalText).toBe('PONG');
+    expect(seen[0]!.body?.model).toBe('gemini-2.5-flash');
+
+    // A model without quota (429) falls through to one the key can use.
+    seen.length = 0;
+    expect((await run('gemini-fail-rate-limit')).finalText).toBe('PONG');
+    expect(seen.map((s) => s.body?.model)).toEqual(['gemini-fail-rate-limit', 'gemini-2.5-flash']);
+
+    // Errors that are not about the model (e.g. 400) still surface.
+    failAll = true;
+    await expect(run('gemini-2.5-flash')).rejects.toThrow('400');
   });
 
   it('surfaces structured JSON errors across claude, openai (codex), and opencode and avoids flag swallowing', async () => {

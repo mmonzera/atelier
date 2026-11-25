@@ -23,7 +23,6 @@ export const id: Record<string, string> = {
   "Browser": "Browser",
   "Browser & Login": "Browser & Login",
   "Browser & Login settings": "Pengaturan Browser & Login",
-  "Browser is not available for Antigravity CLI yet. Switch to Claude, Codex, OpenCode, DeepSeek, or OpenRouter.": "Browser belum tersedia untuk Antigravity CLI. Ganti ke Claude, Codex, OpenCode, DeepSeek, atau OpenRouter.",
   "Browser needs your help": "Browser butuh bantuan kamu",
   "Browser profile": "Profil browser",
   "Browser profiles (saved cookies)": "Profil browser (cookie tersimpan)",

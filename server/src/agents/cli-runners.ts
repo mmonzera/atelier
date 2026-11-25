@@ -22,7 +22,18 @@ import {
 } from '../mcp/config.js';
 import type { AtelierStore } from '../store.js';
 import { ClaudeAgentRunner } from './claude-runner.js';
-import { resolveGeminiModel } from './gemini-models.js';
+import {
+  geminiCandidates,
+  geminiErrorStatus,
+  isGeminiModelError,
+  markGeminiModelFailed,
+} from './gemini-models.js';
+
+function geminiFailureLabel(status: number): string {
+  if (status === 429) return 'kuotanya habis/tidak ada di API key kamu';
+  if (status === 404) return 'tidak tersedia untuk API key kamu';
+  return 'sedang overload di Google';
+}
 import {
   execCliCapture,
   getOpenCodeCliCapabilities,
@@ -43,7 +54,7 @@ import {
 } from './studio-tools.js';
 
 const MEMORY_MODELS: Record<ModelProvider, string> = {
-  claude: 'haiku', openai: 'gpt-6.2-sol', antigravity: 'gemini-2.5-flash',
+  claude: 'haiku', openai: 'gpt-6.2-sol', antigravity: 'gemini-3.5-flash',
   deepseek: 'deepseek-chat', opencode: 'opencode/big-pickle', openrouter: 'openrouter/auto',
 };
 const SUMMARY_INSTRUCTIONS = [
@@ -679,29 +690,59 @@ export class CliAgentRunner implements AgentRunner {
         'Antigravity (Gemini) API key not configured. Add it in Accounts & Models or set GEMINI_API_KEY in .env.',
       );
     }
-    // The stored id may be a UI-only name (e.g. "gemini-3.8-flash-high"); map it to a model the API serves.
-    const model = await resolveGeminiModel(this.config.geminiBaseUrl, apiKey, opts.model);
-    if (model !== opts.model.replace(/^models\//, '')) {
-      // Make the correction stick so the picker shows a model the key can really use.
-      const agent = turn.agent;
-      if (agent.providerOverride === 'antigravity' && agent.modelOverride === opts.model) {
-        this.store.updateAgentConfig(agent.id, { modelOverride: model });
+    // The stored id may be an old UI name (e.g. "gemini-3.8-flash-high") or a model this key has no
+    // quota for. Try the models the key really serves, in order, until one answers.
+    const candidates = await geminiCandidates(this.config.geminiBaseUrl, apiKey, opts.model);
+    const failures: string[] = [];
+    let lastErr: unknown = null;
+    let firstBusy: string | null = null;
+    for (const model of candidates) {
+      let wroteText = false;
+      const guardedCb: TurnCallbacks = {
+        ...cb,
+        onText: (t: string) => {
+          wroteText = true;
+          cb.onText(t);
+        },
+      };
+      if (failures.length > 0) {
+        guardedCb.onText(`_${failures.join('; ')}. Pakai "${model}"._\n\n`);
+        wroteText = false;
       }
-      const settings = this.store.getSettings();
-      if (settings.provider === 'antigravity' && settings.model === opts.model) {
-        this.store.updateSettings({ model });
+      try {
+        const out = await this.runOpenAiCompatible(turn, guardedCb, {
+          ...opts,
+          model,
+          label: 'Antigravity (Gemini)',
+          baseUrl: this.config.geminiBaseUrl,
+          apiKey,
+        });
+        // A model that was only busy (503) stays the user's pick; quota/404 failures move it for good.
+        const keep = firstBusy ?? model;
+        if (keep !== opts.model) this.persistAntigravityModel(turn, opts.model, keep);
+        return out;
+      } catch (err) {
+        const status = geminiErrorStatus(err);
+        if (turn.signal.aborted || wroteText || !isGeminiModelError(status)) throw err;
+        markGeminiModelFailed(model, status!);
+        if (model === candidates[0] && (status === 503 || status === 500)) firstBusy = model;
+        failures.splice(0, failures.length, `"${model}" ${geminiFailureLabel(status!)}`);
+        lastErr = err;
       }
-      cb.onText(
-        `_Model "${opts.model}" tidak tersedia di Gemini API key kamu, otomatis diganti ke "${model}". Pilih model lain di picker kalau mau._\n\n`,
-      );
     }
-    return this.runOpenAiCompatible(turn, cb, {
-      ...opts,
-      model,
-      label: 'Antigravity (Gemini)',
-      baseUrl: this.config.geminiBaseUrl,
-      apiKey,
-    });
+    throw lastErr ?? new Error('Antigravity (Gemini): no model available for this API key.');
+  }
+
+  /** Saves the model that actually worked so the picker and later turns use it. */
+  private persistAntigravityModel(turn: Turn, requested: string, model: string): void {
+    const agent = turn.agent;
+    if (agent.providerOverride === 'antigravity' && agent.modelOverride === requested) {
+      this.store.updateAgentConfig(agent.id, { modelOverride: model });
+    }
+    const settings = this.store.getSettings();
+    if (settings.provider === 'antigravity' && settings.model === requested) {
+      this.store.updateSettings({ model });
+    }
   }
 
   private runDeepSeek(turn: Turn, cb: TurnCallbacks, opts: { model: string; systemPrompt: string }): Promise<string> {

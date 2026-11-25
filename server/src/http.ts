@@ -1165,7 +1165,6 @@ export function createHttpRouter(deps: {
           .object({
             claude: z.string().optional(),
             openai: z.string().optional(),
-            antigravity: z.string().optional(),
             opencode: z.string().optional(),
           })
           .optional(),

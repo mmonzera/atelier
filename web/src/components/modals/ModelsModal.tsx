@@ -46,7 +46,7 @@ const PROVIDER_SHORT: Record<RealProvider, string> = {
 const MODEL_PLACEHOLDER: Record<RealProvider, { id: string; label: string }> = {
   claude: { id: 'e.g. sonnet', label: 'e.g. Claude Sonnet 5.5' },
   openai: { id: 'e.g. gpt-6.2-astra', label: 'e.g. GPT-6.2 Astra' },
-  antigravity: { id: 'e.g. gemini-2.5-pro', label: 'e.g. Gemini 2.5 Pro' },
+  antigravity: { id: 'e.g. gemini-3.5-flash', label: 'e.g. Gemini 3.5 Flash' },
   deepseek: { id: 'e.g. deepseek-reasoner', label: 'e.g. DeepSeek R1' },
   opencode: { id: 'e.g. opencode/big-pickle', label: 'e.g. OpenCode Big Pickle' },
   openrouter: { id: 'e.g. anthropic/claude-sonnet-4.5', label: 'e.g. OpenRouter · Claude Sonnet' },

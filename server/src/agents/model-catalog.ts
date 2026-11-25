@@ -378,6 +378,9 @@ export async function getModelCatalog(
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value;
   const value = await load(provider, config, settings, geminiKey);
   // a failed live lookup is not worth remembering
-  if (!value.note?.startsWith('Could not')) cache.set(provider, { at: Date.now(), value });
+  // antigravity keeps its own list cache and hides models that just failed, so don't freeze it here
+  if (provider !== 'antigravity' && !value.note?.startsWith('Could not')) {
+    cache.set(provider, { at: Date.now(), value });
+  }
   return value;
 }
