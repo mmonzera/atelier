@@ -121,8 +121,17 @@ export class RoomScheduler {
     }
   }
 
-  public release(channelId: string, _reason: LeaseReleaseReason): void {
+  /**
+   * Releases the room lease. When `queueItemId` is given, only the lease held by that item is
+   * released, so a late `finally` from a timed-out turn can never free a newer agent's lease.
+   * Returns true when a lease was actually removed.
+   */
+  public release(channelId: string, _reason: LeaseReleaseReason, queueItemId?: string): boolean {
+    const lease = this.leases.get(channelId);
+    if (!lease) return false;
+    if (queueItemId && lease.queueItemId !== queueItemId) return false;
     this.leases.delete(channelId);
+    return true;
   }
 
   public skip(channelId: string): RoomLease | null {

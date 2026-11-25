@@ -15,6 +15,7 @@ import { BrowserManager } from './browser/manager.js';
 import { createBrowserMcpRouter } from './browser/mcp-endpoint.js';
 import { createBrowserRoutes } from './browser/routes.js';
 import { type AppConfig, loadConfig } from './config.js';
+import { GroupChatMigrationError } from './channels/migration.js';
 import { AtelierDb } from './db.js';
 import { createHttpRouter } from './http.js';
 import type { MeetingAudioCapture } from './meetings/capture.js';
@@ -316,7 +317,12 @@ if (isMain) {
       );
     })
     .catch((err) => {
-      console.error('Failed to start Atelier server:', err);
+      if (err instanceof GroupChatMigrationError) {
+        // Data is untouched (rolled back / never started): print the actionable message only.
+        console.error(`Failed to start Atelier server: ${err.message}`);
+      } else {
+        console.error('Failed to start Atelier server:', err);
+      }
       process.exit(1);
     });
 }

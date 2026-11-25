@@ -166,3 +166,65 @@ describe('RoomContextBuilder (stubs, cursor delta, tailTokens, DM digest)', () =
     }
   });
 });
+
+describe('RoomContextBuilder stale delta', () => {
+  it('flags the provider session stale (and sends the full tail) when unseen messages exceed the budget', () => {
+    const dir = makeTempDir('atelier-stale-');
+    const db = new AtelierDb(path.join(dir, 'atelier.db'));
+    try {
+      const store = new AtelierStore(db, loadConfig({ dataDir: dir, workspacesDir: path.join(dir, 'ws'), dbPath: path.join(dir, 'atelier.db') }));
+      const { project, agents } = store.createProject({
+        name: 'Stale Project',
+        starterAgents: [
+          { name: 'Builder', role: 'Frontend' },
+          { name: 'QA', role: 'QA' },
+        ],
+      });
+      const [builder, qa] = agents as [(typeof agents)[number], (typeof agents)[number]];
+      const room = store.channels.getRoomByProject(project.id)!;
+      const builderCtx = new RoomContextBuilder(store.channels);
+
+      const seen = store.channels.postMessage({ channelId: room.id, author: 'agent', agentId: builder.id, text: 'seen' });
+      store.channels.upsertCursor(room.id, builder.id, seen.rowid, seen.message.id);
+
+      // A few small messages: delta fits, session stays resumable.
+      store.channels.postMessage({ channelId: room.id, author: 'user', agentId: null, text: 'small note' });
+      expect(
+        builderCtx.isDeltaStale({ channel: room, agent: builder, allAgents: agents, tailTokens: 1000 }),
+      ).toBe(false);
+
+      // Flood of unseen user messages well past the tail budget.
+      for (let i = 0; i < 40; i += 1) {
+        store.channels.postMessage({
+          channelId: room.id,
+          author: 'user',
+          agentId: null,
+          text: `unseen message ${i} ${'x'.repeat(400)}`,
+        });
+      }
+      expect(
+        builderCtx.isDeltaStale({ channel: room, agent: builder, allAgents: agents, tailTokens: 1000 }),
+      ).toBe(true);
+
+      const trigger = store.channels.postMessage({ channelId: room.id, author: 'user', agentId: null, text: '@Builder go' });
+      const built = builderCtx.build({
+        channel: room,
+        agent: builder,
+        project,
+        projectAgents: agents,
+        allAgents: agents,
+        tasks: [],
+        triggerMessage: trigger.message,
+        currentPrompt: trigger.message.text,
+        hasResumeSession: true,
+        tailTokens: 1000,
+      });
+      // Must not pretend a trimmed delta is complete.
+      expect(built.usedDelta).toBe(false);
+      expect(built.fullPrompt).toContain('Recent room messages:');
+      expect(qa.id).toBeTruthy();
+    } finally {
+      db.close();
+    }
+  });
+});

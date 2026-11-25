@@ -439,6 +439,22 @@ export function planGroupChatMigration(sqlite: DatabaseSync): GroupChatMigration
   return computeMigration(sqlite).plan;
 }
 
+/**
+ * Thrown when the group-chat migration cannot run safely. The database is left exactly as it was
+ * (the transaction is rolled back, or nothing was started), so fixing the cause and restarting
+ * retries the migration.
+ */
+export class GroupChatMigrationError extends Error {
+  constructor(
+    message: string,
+    public readonly backupPath: string | null = null,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'GroupChatMigrationError';
+  }
+}
+
 function writePreMigrationBackup(sqlite: DatabaseSync, dataDir: string): string | null {
   const backupDir = path.join(dataDir, 'backup');
   fs.mkdirSync(backupDir, { recursive: true });
@@ -518,11 +534,30 @@ export function applyGroupChatMigration(
       return Boolean(mSql?.sql && /agent_id\s+TEXT\s+NOT\s+NULL/i.test(mSql.sql));
     })();
 
+  let backupPath: string | null = null;
   if (hasAnyMessages && opts?.dataDir && !opts?.forceReconcile) {
-    writePreMigrationBackup(sqlite, opts.dataDir);
+    backupPath = writePreMigrationBackup(sqlite, opts.dataDir);
+    if (!backupPath) {
+      // Never migrate real chat history without a restorable copy.
+      throw new GroupChatMigrationError(
+        'Group chat migration aborted: could not write the pre-migration backup. Your data was not changed. Free disk space or check permissions on the data folder, then restart.',
+      );
+    }
   }
 
-  const computed = computeMigration(sqlite);
+  let computed: ComputedMigration;
+  try {
+    computed = computeMigration(sqlite);
+  } catch (err) {
+    // Planning only reads; nothing has been written yet.
+    throw new GroupChatMigrationError(
+      `Group chat migration could not read your existing chats; your data was not changed.${
+        backupPath ? ` A pre-migration backup is at ${backupPath}.` : ''
+      } Cause: ${err instanceof Error ? err.message : String(err)}`,
+      backupPath,
+      { cause: err },
+    );
+  }
   const now = new Date().toISOString();
 
   sqlite.exec('PRAGMA foreign_keys = OFF;');
@@ -833,7 +868,13 @@ export function applyGroupChatMigration(
     } catch {
       // ignore
     }
-    throw err;
+    throw new GroupChatMigrationError(
+      `Group chat migration failed and was rolled back; your data was not changed.${
+        backupPath ? ` A pre-migration backup is at ${backupPath}.` : ''
+      } Cause: ${err instanceof Error ? err.message : String(err)}`,
+      backupPath,
+      { cause: err },
+    );
   } finally {
     sqlite.exec('PRAGMA foreign_keys = ON;');
   }
