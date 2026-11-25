@@ -33,6 +33,7 @@ import {
   SkipForward,
   Sparkles,
   Square,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
@@ -172,6 +173,19 @@ export function RoomView({
   const [oldestRowid, setOldestRowid] = useState<number | null>(null);
   const [hasMoreOlder, setHasMoreOlder] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const agentMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!agentMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (agentMenuRef.current && !agentMenuRef.current.contains(e.target as Node)) {
+        setAgentMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [agentMenuOpen]);
 
   useEffect(() => {
     setOlderMessages([]);
@@ -302,7 +316,7 @@ export function RoomView({
         flexDirection: 'column',
       }}
     >
-      {/* Filter chips + serial queue bar */}
+      {/* Filter bar + serial queue status (single clean row) */}
       <div
         style={{
           display: 'flex',
@@ -310,48 +324,261 @@ export function RoomView({
           justifyContent: 'space-between',
           gap: 8,
           padding: '0 22px 8px',
-          flexWrap: 'wrap',
+          minHeight: 32,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          {[
-            { key: 'all', label: tr('All') },
-            ...agents.map((a) => ({ key: a.id, label: a.name, color: a.color })),
-            { key: 'tasks', label: tr('Task events') },
-          ].map((chip) => {
-            const active = filter === chip.key;
-            return (
-              <button
-                key={chip.key}
-                type="button"
-                onClick={() => setFilter(chip.key)}
-                className="transition-atelier"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  padding: '3px 9px',
-                  borderRadius: 'var(--radius-full)',
-                  fontSize: 11.5,
-                  background: active ? 'var(--surface-2)' : 'transparent',
-                  border: active ? '1px solid var(--border-default)' : '1px solid var(--border-subtle)',
-                  color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                }}
-              >
-                {'color' in chip && chip.color && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'nowrap',
+            minWidth: 0,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setFilter('all');
+              setAgentMenuOpen(false);
+            }}
+            className="transition-atelier"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '3px 10px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: 11.5,
+              whiteSpace: 'nowrap',
+              background: filter === 'all' ? 'var(--surface-2)' : 'transparent',
+              border: filter === 'all' ? '1px solid var(--border-default)' : '1px solid var(--border-subtle)',
+              color: filter === 'all' ? 'var(--text-primary)' : 'var(--text-tertiary)',
+            }}
+          >
+            {tr('All')}
+          </button>
+
+          {agents.length <= 3 ? (
+            agents.map((a) => {
+              const active = filter === a.id;
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => setFilter(active ? 'all' : a.id)}
+                  className="transition-atelier"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '3px 9px',
+                    borderRadius: 'var(--radius-full)',
+                    fontSize: 11.5,
+                    whiteSpace: 'nowrap',
+                    background: active ? 'var(--surface-2)' : 'transparent',
+                    border: active ? '1px solid var(--border-default)' : '1px solid var(--border-subtle)',
+                    color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                  }}
+                >
                   <span
                     style={{
                       width: 6,
                       height: 6,
                       borderRadius: '9999px',
-                      background: getColorVar(chip.color),
+                      background: getColorVar(a.color),
                     }}
                   />
-                )}
-                {chip.label}
-              </button>
-            );
-          })}
+                  {a.name}
+                </button>
+              );
+            })
+          ) : (
+            <div ref={agentMenuRef} style={{ position: 'relative' }}>
+              {(() => {
+                const selectedAgent = filter !== 'all' && filter !== 'tasks' ? agentById.get(filter) : undefined;
+                return (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      borderRadius: 'var(--radius-full)',
+                      background: selectedAgent || agentMenuOpen ? 'var(--surface-2)' : 'transparent',
+                      border: selectedAgent || agentMenuOpen
+                        ? '1px solid var(--border-default)'
+                        : '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setAgentMenuOpen((v) => !v)}
+                      aria-expanded={agentMenuOpen}
+                      className="transition-atelier"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        padding: selectedAgent ? '3px 6px 3px 9px' : '3px 9px',
+                        fontSize: 11.5,
+                        whiteSpace: 'nowrap',
+                        color: selectedAgent ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                      }}
+                    >
+                      {selectedAgent ? (
+                        <>
+                          <span
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: '9999px',
+                              background: getColorVar(selectedAgent.color),
+                            }}
+                          />
+                          <span>{selectedAgent.name}</span>
+                        </>
+                      ) : (
+                        <span>{tr('Agents ({count})', { count: agents.length })}</span>
+                      )}
+                      <ChevronDown size={12} style={{ opacity: 0.7 }} />
+                    </button>
+                    {selectedAgent && (
+                      <button
+                        type="button"
+                        aria-label={tr('Clear filter')}
+                        onClick={() => {
+                          setFilter('all');
+                          setAgentMenuOpen(false);
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          padding: '3px 7px 3px 2px',
+                          color: 'var(--text-tertiary)',
+                        }}
+                      >
+                        <X size={11} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {agentMenuOpen && (
+                <div
+                  className="popover-shadow"
+                  style={{
+                    position: 'absolute',
+                    top: 30,
+                    left: 0,
+                    minWidth: 230,
+                    maxHeight: 260,
+                    overflowY: 'auto',
+                    background: 'var(--surface-1)',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: 6,
+                    zIndex: 45,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: '4px 8px 5px',
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      color: 'var(--text-tertiary)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    {tr('Filter by agent')}
+                  </div>
+                  {agents.map((a) => {
+                    const active = filter === a.id;
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => {
+                          setFilter(active ? 'all' : a.id);
+                          setAgentMenuOpen(false);
+                        }}
+                        className="transition-atelier"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 8,
+                          padding: '6px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          background: active ? 'var(--surface-3)' : 'transparent',
+                          textAlign: 'left',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!active) e.currentTarget.style.background = 'var(--surface-2)';
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!active) e.currentTarget.style.background = 'transparent';
+                        }}
+                      >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                          <span
+                            style={{
+                              width: 7,
+                              height: 7,
+                              borderRadius: '9999px',
+                              background: getColorVar(a.color),
+                              flexShrink: 0,
+                            }}
+                          />
+                          <span style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 12.5, color: 'var(--text-primary)', fontWeight: 500 }}>
+                              {a.name}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: 'var(--text-tertiary)',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                              }}
+                            >
+                              {a.role}
+                            </div>
+                          </span>
+                        </span>
+                        {active && <Check size={13} style={{ color: 'var(--text-primary)', flexShrink: 0 }} />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setFilter(filter === 'tasks' ? 'all' : 'tasks');
+              setAgentMenuOpen(false);
+            }}
+            className="transition-atelier"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '3px 10px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: 11.5,
+              whiteSpace: 'nowrap',
+              background: filter === 'tasks' ? 'var(--surface-2)' : 'transparent',
+              border: filter === 'tasks' ? '1px solid var(--border-default)' : '1px solid var(--border-subtle)',
+              color: filter === 'tasks' ? 'var(--text-primary)' : 'var(--text-tertiary)',
+            }}
+          >
+            {tr('Task events')}
+          </button>
         </div>
 
         {(activeTurnAgent || (queue?.queued.length ?? 0) > 0) && (
@@ -366,6 +593,8 @@ export function RoomView({
               border: '1px solid var(--border-subtle)',
               fontSize: 11.5,
               color: 'var(--text-secondary)',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
             }}
           >
             {activeTurnAgent && (

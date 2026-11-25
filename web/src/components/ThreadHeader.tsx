@@ -112,12 +112,12 @@ export function ThreadHeader({
     <header
       style={{
         width: '100%',
-        maxWidth: isWide ? 1080 : 650,
+        maxWidth: isWide ? 1080 : 666,
         margin: '0 auto',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: 10,
         padding: '4px 0 12px',
         flexShrink: 0,
         transition: 'max-width 200ms var(--ease-atelier)',
@@ -125,7 +125,14 @@ export function ThreadHeader({
     >
       <div
         ref={leftRef}
-        style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, position: 'relative' }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flex: 1,
+          minWidth: 0,
+          position: 'relative',
+        }}
       >
         {isRoomHeader && roomAgents.length > 0 ? (
           <button
@@ -135,18 +142,19 @@ export function ThreadHeader({
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 8,
+              gap: 7,
+              maxWidth: '100%',
               minWidth: 0,
               padding: '2px 6px 2px 2px',
               borderRadius: 'var(--radius-full)',
             }}
           >
-            <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-              {roomAgents.slice(0, 4).map((m, idx) => (
+            <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
+              {roomAgents.slice(0, 3).map((m, idx) => (
                 <span
                   key={m.id}
                   style={{
-                    marginLeft: idx === 0 ? 0 : -8,
+                    marginLeft: idx === 0 ? 0 : -6,
                     position: 'relative',
                     display: 'inline-flex',
                     borderRadius: '9999px',
@@ -154,7 +162,7 @@ export function ThreadHeader({
                   }}
                 >
                   <BotMascot
-                    size={26}
+                    size={22}
                     color={m.color}
                     shape={m.avatarShape}
                     seed={m.id}
@@ -165,7 +173,7 @@ export function ThreadHeader({
             </span>
             <span
               style={{
-                fontSize: 14,
+                fontSize: 13.5,
                 lineHeight: '20px',
                 fontWeight: 500,
                 color: 'var(--text-primary)',
@@ -179,12 +187,13 @@ export function ThreadHeader({
             <span
               className="mono-num"
               style={{
-                fontSize: 11,
+                fontSize: 10.5,
                 color: 'var(--text-tertiary)',
-                padding: '1px 7px',
+                padding: '1px 6px',
                 borderRadius: '9999px',
                 background: 'var(--surface-1)',
                 border: '1px solid var(--border-subtle)',
+                flexShrink: 0,
               }}
             >
               {roomAgents.length}
@@ -348,7 +357,10 @@ export function ThreadHeader({
       </div>
 
       {hasContext && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }} ref={menuRef}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, position: 'relative' }}
+          ref={menuRef}
+        >
           <nav
             aria-label={t('Workspace views')}
             style={{
@@ -380,6 +392,7 @@ export function ThreadHeader({
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: 5,
+                        whiteSpace: 'nowrap',
                       }}
                     >
                       {t(tab.label)}
@@ -414,6 +427,7 @@ export function ThreadHeader({
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: 5,
+                        whiteSpace: 'nowrap',
                       }}
                     >
                       {t(tab.label)}
@@ -439,7 +453,7 @@ export function ThreadHeader({
               title={t('Stop room')}
               style={{
                 height: 28,
-                padding: '0 10px',
+                padding: '0 9px',
                 borderRadius: 'var(--radius-full)',
                 background: 'rgba(248, 113, 113, 0.12)',
                 border: '1px solid rgba(248, 113, 113, 0.3)',
@@ -449,37 +463,46 @@ export function ThreadHeader({
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 5,
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >
-              <Square size={11} fill="var(--agent-red)" />
-              {t('Stop room')}
+              <Square size={10} fill="var(--agent-red)" />
+              {t('Stop')}
             </button>
           )}
 
           {isRoomHeader && activeTab === 'chat' && onNewRoomSession && (
-            <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative', flexShrink: 0 }}>
               <button
                 type="button"
                 onClick={() => {
                   setSessionOpen((v) => !v);
                   setMenuOpen(false);
                 }}
-                title={t('Start a new room session')}
+                aria-label={t('New session')}
+                title={t('New session')}
+                className="transition-atelier"
                 style={{
+                  width: 28,
                   height: 28,
-                  padding: '0 10px',
-                  borderRadius: 'var(--radius-full)',
-                  background: 'var(--surface-1)',
-                  border: '1px solid var(--border-subtle)',
-                  color: 'var(--text-secondary)',
-                  fontSize: 11.5,
-                  display: 'inline-flex',
+                  borderRadius: 'var(--radius-sm)',
+                  display: 'flex',
                   alignItems: 'center',
-                  gap: 5,
+                  justifyContent: 'center',
+                  color: sessionOpen ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  background: sessionOpen ? 'var(--surface-2)' : 'transparent',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--surface-2)';
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = sessionOpen ? 'var(--surface-2)' : 'transparent';
+                  e.currentTarget.style.color = sessionOpen ? 'var(--text-primary)' : 'var(--text-secondary)';
                 }}
               >
-                <RotateCcw size={11} strokeWidth={1.75} />
-                {t('New session')}
+                <RotateCcw size={14} strokeWidth={1.6} />
               </button>
               {sessionOpen && (
                 <div
@@ -488,7 +511,7 @@ export function ThreadHeader({
                     position: 'absolute',
                     top: 34,
                     right: 0,
-                    width: 220,
+                    width: 224,
                     background: 'var(--surface-1)',
                     border: '1px solid var(--border-default)',
                     borderRadius: 'var(--radius-md)',
@@ -499,6 +522,18 @@ export function ThreadHeader({
                     gap: 2,
                   }}
                 >
+                  <div
+                    style={{
+                      padding: '4px 10px 5px',
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      color: 'var(--text-tertiary)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    {t('Start new session')}
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
