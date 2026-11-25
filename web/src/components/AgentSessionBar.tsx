@@ -9,6 +9,9 @@ export function sessionLabel(s: Pick<RoomSession, 'name' | 'seq'>, tr: TFn): str
   return s.name?.trim() || tr('Session {v0}', { v0: s.seq });
 }
 
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+const NEW_SESSION_KEY = IS_MAC ? '⌘T' : 'Ctrl T';
+
 const fieldStyle: CSSProperties = {
   flex: 1,
   minWidth: 0,
@@ -132,6 +135,20 @@ export function AgentSessionBar({
     };
   }, [open]);
 
+  // Cmd/Ctrl+T starts a new session (when the agent is idle).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 't') {
+        if (busy || pending) return;
+        e.preventDefault();
+        setOpen(true);
+        setCreating(true);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [busy, pending]);
+
   const run = async (fn: () => Promise<unknown>, fallback: string) => {
     setPending(true);
     try {
@@ -171,7 +188,7 @@ export function AgentSessionBar({
   };
 
   return (
-    <div ref={rootRef} style={{ position: 'relative', minWidth: 0 }}>
+    <div ref={rootRef} style={{ position: 'relative', minWidth: 0, flexShrink: 0 }}>
       <button
         type="button"
         onClick={() => (open ? close() : setOpen(true))}
@@ -181,19 +198,34 @@ export function AgentSessionBar({
         className="transition-atelier"
         style={{
           maxWidth: 240,
-          height: 28,
-          padding: '0 10px',
-          borderRadius: 'var(--radius-full)',
+          height: 36,
+          padding: '0 12px 0 6px',
+          borderRadius: 'var(--radius-md)',
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 6,
-          fontSize: 12,
+          gap: 8,
+          fontSize: 13.5,
+          fontWeight: 600,
           color: 'var(--text-primary)',
           background: open ? 'var(--surface-2)' : 'var(--surface-1)',
           border: `1px solid ${open ? 'var(--border-default)' : 'var(--border-subtle)'}`,
         }}
       >
-        <MessagesSquare size={13} strokeWidth={1.6} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+        <span
+          style={{
+            width: 24,
+            height: 24,
+            borderRadius: 7,
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#fff',
+            background: 'linear-gradient(135deg, var(--agent-cobalt), var(--agent-purple))',
+          }}
+        >
+          <MessagesSquare size={13} strokeWidth={1.8} />
+        </span>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentLabel}</span>
         <ChevronDown
           size={12}
@@ -206,17 +238,17 @@ export function AgentSessionBar({
           role="listbox"
           style={{
             position: 'absolute',
-            top: 34,
+            top: 44,
             left: 0,
             zIndex: 30,
             width: 300,
-            maxHeight: 380,
+            maxHeight: 400,
             overflowY: 'auto',
             padding: 6,
-            borderRadius: 12,
+            borderRadius: 'var(--radius-lg)',
             border: '1px solid var(--border-default)',
             background: 'var(--surface-2)',
-            boxShadow: '0 16px 40px rgba(0,0,0,0.45)',
+            boxShadow: '0 16px 40px rgba(0,0,0,0.5)',
             display: 'flex',
             flexDirection: 'column',
             gap: 2,
@@ -227,59 +259,17 @@ export function AgentSessionBar({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              padding: '4px 4px 4px 8px',
+              padding: '6px 10px',
+              fontSize: 11,
+              fontWeight: 500,
+              letterSpacing: 0.8,
+              textTransform: 'uppercase',
+              color: 'var(--text-muted)',
             }}
           >
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 500,
-                letterSpacing: 0.4,
-                textTransform: 'uppercase',
-                color: 'var(--text-tertiary)',
-              }}
-            >
-              {tr('Sessions')}
-            </span>
-            {!creating && (
-              <button
-                type="button"
-                disabled={pending || busy}
-                onClick={() => setCreating(true)}
-                title={busy ? tr('Wait for the agent to finish first') : tr('New session')}
-                className="transition-atelier"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  height: 24,
-                  padding: '0 8px',
-                  borderRadius: 7,
-                  fontSize: 12,
-                  color: 'var(--text-primary)',
-                  background: 'var(--surface-1)',
-                  border: '1px solid var(--border-subtle)',
-                  opacity: busy ? 0.5 : 1,
-                }}
-              >
-                <Plus size={12} /> {tr('New session')}
-              </button>
-            )}
+            <span>{tr('Sessions')}</span>
+            <span className="mono-num">{ordered.length}</span>
           </div>
-
-          {creating && (
-            <InlineNameForm
-              value={newName}
-              onChange={setNewName}
-              onSubmit={() => void createSession()}
-              onCancel={() => setCreating(false)}
-              placeholder={tr('Session name (optional)')}
-              submitTitle={tr('Start session')}
-              pending={pending}
-            />
-          )}
-
-          <div style={{ height: 1, background: 'var(--border-subtle)', margin: '2px 4px 4px' }} />
 
           {ordered.map((s) => {
             const isCurrent = s.id === channel.currentSessionId;
@@ -307,8 +297,8 @@ export function AgentSessionBar({
                   display: 'flex',
                   alignItems: 'center',
                   gap: 2,
-                  paddingRight: 4,
-                  borderRadius: 8,
+                  paddingRight: 6,
+                  borderRadius: 10,
                   background: isCurrent ? 'var(--surface-3)' : 'transparent',
                 }}
               >
@@ -320,41 +310,48 @@ export function AgentSessionBar({
                   style={{
                     flex: 1,
                     minWidth: 0,
-                    padding: '7px 8px',
+                    padding: '9px 10px',
                     textAlign: 'left',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 8,
+                    gap: 10,
                     opacity: busy && !isCurrent ? 0.5 : 1,
                   }}
                 >
                   <span
                     style={{
-                      width: 6,
-                      height: 6,
+                      width: 8,
+                      height: 8,
                       borderRadius: '50%',
                       flexShrink: 0,
-                      background: isCurrent ? 'var(--agent-green)' : 'var(--border-default)',
+                      boxSizing: 'border-box',
+                      background: isCurrent ? 'var(--agent-green)' : 'transparent',
+                      border: isCurrent ? 'none' : '1.5px solid var(--text-muted)',
                     }}
                   />
-                  <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <span
-                      style={{
-                        fontSize: 12.5,
-                        color: 'var(--text-primary)',
-                        fontWeight: isCurrent ? 500 : 400,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {sessionLabel(s, tr)}
-                    </span>
-                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                      {new Date(s.startedAt).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}
-                      {isCurrent ? ` · ${tr('Active')}` : ''}
-                    </span>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: 14,
+                      color: 'var(--text-primary)',
+                      fontWeight: isCurrent ? 600 : 400,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {sessionLabel(s, tr)}
                   </span>
+                  {isCurrent ? (
+                    <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--agent-green)', whiteSpace: 'nowrap' }}>
+                      ✓ {tr('Active')}
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 12.5, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                      {new Date(s.startedAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}
+                    </span>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -374,9 +371,70 @@ export function AgentSessionBar({
           })}
 
           {ordered.length === 0 && (
-            <div style={{ padding: '6px 8px', fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: '17px' }}>
+            <div style={{ padding: '6px 10px', fontSize: 12, color: 'var(--text-tertiary)', lineHeight: '17px' }}>
               {tr('This chat has one session so far. Start a new one to keep topics separate.')}
             </div>
+          )}
+
+          <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 6px' }} />
+
+          {creating ? (
+            <InlineNameForm
+              value={newName}
+              onChange={setNewName}
+              onSubmit={() => void createSession()}
+              onCancel={() => setCreating(false)}
+              placeholder={tr('Session name (optional)')}
+              submitTitle={tr('Start session')}
+              pending={pending}
+            />
+          ) : (
+            <button
+              type="button"
+              disabled={pending || busy}
+              onClick={() => setCreating(true)}
+              title={busy ? tr('Wait for the agent to finish first') : undefined}
+              className="session-row transition-atelier"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '8px 10px',
+                borderRadius: 10,
+                textAlign: 'left',
+                opacity: busy ? 0.5 : 1,
+              }}
+            >
+              <span
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 7,
+                  flexShrink: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--text-secondary)',
+                  border: '1px dashed var(--text-muted)',
+                }}
+              >
+                <Plus size={13} />
+              </span>
+              <span style={{ flex: 1, fontSize: 14, color: 'var(--text-primary)' }}>{tr('New session')}</span>
+              <kbd
+                style={{
+                  padding: '2px 7px',
+                  borderRadius: 6,
+                  fontSize: 11.5,
+                  fontFamily: 'inherit',
+                  color: 'var(--text-tertiary)',
+                  border: '1px solid var(--border-default)',
+                  background: 'var(--surface-1)',
+                }}
+              >
+                {NEW_SESSION_KEY}
+              </kbd>
+            </button>
           )}
         </div>
       )}
