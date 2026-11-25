@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildAntigravityCliInvocation } from '../src/agents/cli-runners.js';
 import type { AgentRunner } from '../src/agents/runner.js';
 import { AgentRuntime } from '../src/agents/runtime.js';
 import { createStudioTools } from '../src/agents/studio-tools.js';
@@ -99,18 +98,6 @@ describe('Cross-agent trust isolation (§10.4)', () => {
           allowShell: true,
         }),
       ).toThrow(/needs_user_approval/);
-
-      // Antigravity CLI flags never pass --dangerously-skip-permissions when allowFullPermissions=false
-      const { args } = buildAntigravityCliInvocation({
-        model: 'gemini-4-hydrogen',
-        allowShell: true,
-        allowFullPermissions: false,
-        memoryOnly: false,
-        attachmentDir: dir,
-        artifactDir: null,
-        fullPrompt: 'hi',
-      });
-      expect(args).not.toContain('--dangerously-skip-permissions');
 
       await runtime.shutdown();
     } finally {

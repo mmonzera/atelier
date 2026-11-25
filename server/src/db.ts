@@ -226,6 +226,7 @@ export class AtelierDb {
     this.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_messages_scope_agent ON messages(project_id, agent_id, created_at)');
     this.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at)');
     // Chunks recorded before timestamps existed have no position on the timeline.
+    this.ensureColumn('room_sessions', 'name', 'TEXT');
     this.ensureColumn('meeting_chunks', 'start_ms', 'INTEGER');
     this.ensureColumn('meeting_chunks', 'energy_path', 'TEXT');
     this.ensureColumn('agent_queue', 'channel_id', 'TEXT');

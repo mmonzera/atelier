@@ -305,27 +305,6 @@ async function fetchOpenCode(settings: Settings): Promise<{ models: ModelEntry[]
   return { models, ...(note ? { note } : {}) };
 }
 
-async function fetchAntigravity(settings: Settings): Promise<ModelEntry[]> {
-  const bin = await resolveCliBinary('antigravity', settings.cliPaths?.antigravity);
-  if (!bin) return [];
-  const res = await execCliCapture(bin, ['models'], 10_000);
-  if (res.exitCode !== 0 && !res.stdout.trim()) {
-    throw new Error(res.stderr.trim().split('\n').pop() || 'agy models failed');
-  }
-  const out: ModelEntry[] = [];
-  for (const raw of res.stdout.split(/\r?\n/)) {
-    const line = raw.trim();
-    const match = /^(\S+)(?:\t+|\s{2,})(.+)$/.exec(line);
-    if (!match) continue;
-    const id = match[1]!.trim();
-    const label = match[2]!.trim();
-    if (MODEL_ID_RE.test(id)) {
-      out.push({ id, label: label || id, provider: 'antigravity' });
-    }
-  }
-  return out;
-}
-
 async function load(
   provider: RealProvider,
   config: AppConfig,
@@ -346,14 +325,6 @@ async function load(
           models: mergeCatalog(provider, models),
           source: 'live',
           ...(note ? { note } : {}),
-        };
-      }
-      case 'antigravity': {
-        const detected = await fetchAntigravity(settings);
-        return {
-          provider,
-          models: mergeCatalog(provider, detected),
-          source: detected.length > 0 ? 'live' : 'builtin',
         };
       }
       case 'openai': {

@@ -134,6 +134,8 @@ export const BUILT_IN_MODELS: ModelEntry[] = [
   { id: 'gemini-4-carbon', label: 'Gemini 4 Carbon', provider: 'antigravity', builtIn: true },
   { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen', provider: 'antigravity', builtIn: true },
   { id: 'gemini-4-argon', label: 'Gemini 4 Argon', provider: 'antigravity', builtIn: true },
+  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'antigravity', builtIn: true },
+  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'antigravity', builtIn: true },
   { id: 'deepseek-chat', label: 'DeepSeek V3 (Chat)', provider: 'deepseek', builtIn: true },
   { id: 'deepseek-reasoner', label: 'DeepSeek R1 (Reasoner)', provider: 'deepseek', builtIn: true },
   { id: 'openrouter/auto', label: 'OpenRouter · Auto', provider: 'openrouter', builtIn: true },
@@ -985,6 +987,8 @@ export interface RoomSession {
   startedAt: string;
   startedBy: 'user' | 'system';
   carryoverSummary: string | null;
+  /** User-given title. Used by personal agent chats (DM); rooms keep numbered sessions. */
+  name?: string | null;
 }
 
 export interface RoomQueueSnapshot {

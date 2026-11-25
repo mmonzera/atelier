@@ -373,6 +373,17 @@ a {
     transform: translateY(0);
   }
 }
+/* In-chat search hits (see components/ChatSearch.tsx) */
+[data-msg-id][data-search-hit] {
+  border-radius: 12px;
+  background: rgba(244, 188, 46, 0.07);
+  box-shadow: 0 0 0 1px rgba(244, 188, 46, 0.3);
+}
+[data-msg-id][data-search-active] {
+  background: rgba(244, 188, 46, 0.12);
+  box-shadow: 0 0 0 2px rgba(244, 188, 46, 0.75);
+}
+
 .msg-enter {
   animation: glass-rise 320ms var(--ease-atelier) both;
 }

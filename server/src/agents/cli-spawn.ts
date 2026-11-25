@@ -26,15 +26,6 @@ function getCandidatePaths(provider: RealProvider): string[] {
           path.join(home, '.local', 'bin', 'codex.exe'),
           path.join(appData, 'npm', 'codex.cmd'),
         ];
-      case 'antigravity':
-        return [
-          path.join(localAppData, 'agy', 'bin', 'agy.exe'),
-          path.join(localAppData, 'Programs', 'antigravity', 'bin', 'agy.exe'),
-          path.join(home, '.local', 'bin', 'agy.exe'),
-          path.join(localAppData, 'agy', 'bin', 'agy.cmd'),
-          path.join(appData, 'npm', 'agy.cmd'),
-          path.join(localAppData, 'Programs', 'antigravity', 'bin', 'agy.cmd'),
-        ];
       case 'opencode':
         return [
           path.join(home, '.opencode', 'bin', 'opencode.exe'),
@@ -44,6 +35,7 @@ function getCandidatePaths(provider: RealProvider): string[] {
           path.join(home, '.local', 'bin', 'opencode.exe'),
           path.join(home, 'scoop', 'shims', 'opencode.exe'),
         ];
+      case 'antigravity':
       case 'deepseek':
       case 'openrouter':
         return [];
@@ -53,7 +45,7 @@ function getCandidatePaths(provider: RealProvider): string[] {
   const binNames: Record<RealProvider, string[]> = {
     claude: ['claude'],
     openai: ['codex'],
-    antigravity: ['agy'],
+    antigravity: [],
     opencode: ['opencode'],
     deepseek: [],
     openrouter: [],
@@ -95,7 +87,7 @@ export async function resolveCliBinary(
   provider: RealProvider,
   customPath?: string,
 ): Promise<string | null> {
-  if (provider === 'deepseek' || provider === 'openrouter') {
+  if (provider === 'antigravity' || provider === 'deepseek' || provider === 'openrouter') {
     return null;
   }
   if (customPath && customPath.trim()) {
@@ -115,7 +107,7 @@ export async function resolveCliBinary(
   const pathNames: Record<RealProvider, string[]> = {
     claude: process.platform === 'win32' ? ['claude.exe', 'claude.cmd', 'claude'] : ['claude'],
     openai: process.platform === 'win32' ? ['codex.exe', 'codex.cmd', 'codex'] : ['codex'],
-    antigravity: process.platform === 'win32' ? ['agy.exe', 'agy.cmd', 'agy'] : ['agy'],
+    antigravity: [],
     opencode:
       process.platform === 'win32' ? ['opencode.exe', 'opencode.cmd', 'opencode'] : ['opencode'],
     deepseek: [],

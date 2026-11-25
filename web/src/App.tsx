@@ -227,6 +227,17 @@ export function App() {
         : null,
     [scopedProject, groupChatEnabled, state.channels],
   );
+  const activeAgentDm = useMemo(
+    () =>
+      activeAgent
+        ? ((state.channels ?? []).find((c) => c.kind === 'dm' && c.agentId === activeAgent.id) ?? null)
+        : null,
+    [state.channels, activeAgent],
+  );
+  const activeAgentDmSessions = useMemo(
+    () => (activeAgentDm ? (state.roomSessions ?? []).filter((s) => s.channelId === activeAgentDm.id) : []),
+    [state.roomSessions, activeAgentDm],
+  );
   const activeRoomSessions = useMemo(
     () =>
       activeProjectRoom
@@ -650,6 +661,8 @@ export function App() {
                 ) : (
                   <ChatView
                     project={null}
+                    channel={activeAgentDm}
+                    sessions={activeAgentDmSessions}
                     agent={activeAgent}
                     agents={state.agents}
                     projects={visibleProjects}

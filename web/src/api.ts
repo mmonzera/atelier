@@ -382,6 +382,24 @@ export const api = {
       body: JSON.stringify({ carryover }),
     }),
 
+  /** Starts a named, clean session in an agent's personal chat (DM channel). */
+  startAgentSession: (channelId: string, name?: string) =>
+    request<{ session: RoomSession; channel: Channel }>(`/api/channels/${channelId}/sessions`, {
+      method: 'POST',
+      body: JSON.stringify({ carryover: 'clean', ...(name ? { name } : {}) }),
+    }),
+
+  activateAgentSession: (channelId: string, sessionId: string) =>
+    request<{ channel: Channel }>(`/api/channels/${channelId}/sessions/${sessionId}/activate`, {
+      method: 'POST',
+    }),
+
+  renameSession: (channelId: string, sessionId: string, name: string) =>
+    request<{ session: RoomSession }>(`/api/channels/${channelId}/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+
   forwardToChannel: (channelId: string, fromChannelId: string, messageIds: string[]) =>
     request<{ ok: boolean; message: Message }>(`/api/channels/${channelId}/forward`, {
       method: 'POST',

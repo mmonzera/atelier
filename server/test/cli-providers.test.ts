@@ -7,8 +7,6 @@ import type { Agent, Project } from '@atelier/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CliAgentRunner,
-  buildAntigravityCliInvocation,
-  parseAntigravityStreamLine,
 } from '../src/agents/cli-runners.js';
 import {
   buildWindowsCmdCommand,
@@ -98,216 +96,6 @@ function createFakeCli(dir: string, binName: string, jsBody: string): { binPath:
   return { binPath: shPath, scriptPath };
 }
 
-describe('buildAntigravityCliInvocation', () => {
-  it('never emits -p and passes stream-json stdin payload', () => {
-    const inv = buildAntigravityCliInvocation({
-      model: 'gemini-4-hydrogen',
-      effort: 'medium',
-      allowShell: true,
-      allowFullPermissions: false,
-      memoryOnly: false,
-      attachmentDir: 'D:\\Mark Zuckenberg\\CanvasBot\\attachments',
-      artifactDir: 'D:\\Mark Zuckenberg\\CanvasBot\\artifacts',
-      resumeConversationId: null,
-      fullPrompt: 'System prompt\n\n---\n\nHalo dunia',
-    });
-
-    expect(inv.args).not.toContain('-p');
-    expect(inv.args).not.toContain('--print');
-    expect(inv.args).not.toContain('--prompt');
-    expect(inv.args).toContain('--input-format=stream-json');
-    expect(inv.args).toContain('--output-format=stream-json');
-    expect(inv.args).toContain('--disable-slash-commands');
-    expect(inv.args).toContain('--model=gemini-4-hydrogen');
-    expect(inv.args).toContain('--effort=medium');
-    expect(inv.args).toContain('--mode=auto');
-    expect(inv.args).toContain('--add-dir=D:\\Mark Zuckenberg\\CanvasBot\\attachments');
-    expect(inv.args).toContain('--add-dir=D:\\Mark Zuckenberg\\CanvasBot\\artifacts');
-    expect(inv.args).not.toContain('--dangerously-skip-permissions');
-
-    const parsedStdin = JSON.parse(inv.stdinPayload.trim());
-    expect(parsedStdin).toEqual({
-      event: 'user',
-      message: { content: 'System prompt\n\n---\n\nHalo dunia' },
-    });
-  });
-
-  it('omits --effort for effort-suffixed and orchestrator models', () => {
-    const suffixed = buildAntigravityCliInvocation({
-      model: 'gemini-4-neon-high',
-      effort: 'low',
-      allowShell: true,
-      allowFullPermissions: false,
-      memoryOnly: false,
-      attachmentDir: '/tmp/att',
-      fullPrompt: 'hi',
-    });
-    expect(suffixed.args.some((a) => a.startsWith('--effort'))).toBe(false);
-
-    const claudeVariant = buildAntigravityCliInvocation({
-      model: 'claude-sonnet-5-5-medium',
-      effort: 'high',
-      allowShell: true,
-      allowFullPermissions: false,
-      memoryOnly: false,
-      attachmentDir: '/tmp/att',
-      fullPrompt: 'hi',
-    });
-    expect(claudeVariant.args.some((a) => a.startsWith('--effort'))).toBe(false);
-
-    const orchestrator = buildAntigravityCliInvocation({
-      model: 'gemini-pro-orchestrator',
-      effort: 'medium',
-      allowShell: true,
-      allowFullPermissions: false,
-      memoryOnly: false,
-      attachmentDir: '/tmp/att',
-      fullPrompt: 'hi',
-    });
-    expect(orchestrator.args.some((a) => a.startsWith('--effort'))).toBe(false);
-  });
-
-  it('configures memoryOnly, read-only shell, full permissions, and resume properly without --mode=plan', () => {
-    const mem = buildAntigravityCliInvocation({
-      model: 'gemini-4-hydrogen',
-      effort: 'low',
-      allowShell: false,
-      allowFullPermissions: false,
-      memoryOnly: true,
-      attachmentDir: '/tmp/att',
-      artifactDir: '/tmp/art',
-      resumeConversationId: 'conv-ignored',
-      fullPrompt: 'summarize',
-    });
-    expect(mem.args.some((a) => a === '--mode' || a.startsWith('--mode='))).toBe(false);
-    expect(mem.args.some((a) => a === '--add-dir' || a.startsWith('--add-dir='))).toBe(false);
-    expect(mem.args.some((a) => a === '--conversation' || a.startsWith('--conversation='))).toBe(false);
-    expect(mem.args).toContain('--settings={"toolPermission":"strict"}');
-
-    const noShell = buildAntigravityCliInvocation({
-      model: 'gemini-4-hydrogen',
-      effort: 'medium',
-      allowShell: false,
-      allowFullPermissions: false,
-      memoryOnly: false,
-      attachmentDir: '/tmp/att',
-      fullPrompt: 'chat',
-    });
-    expect(noShell.args).toContain('--mode=accept-edits');
-    expect(noShell.args).not.toContain('--mode=plan');
-    expect(noShell.args).toContain('--settings={"permissions":{"deny":["command(*)"]}}');
-
-    const fullPerm = buildAntigravityCliInvocation({
-      model: 'gemini-4-hydrogen',
-      effort: 'high',
-      allowShell: true,
-      allowFullPermissions: true,
-      memoryOnly: false,
-      attachmentDir: '/tmp/att',
-      resumeConversationId: 'conv-123',
-      fullPrompt: 'ship it',
-    });
-    expect(fullPerm.args).toContain('--mode=auto');
-    expect(fullPerm.args).toContain('--dangerously-skip-permissions');
-    expect(fullPerm.args).toContain('--conversation=conv-123');
-  });
-});
-
-describe('parseAntigravityStreamLine', () => {
-  it('parses init, step_update deltas, tool calls, usage, and ERROR results', () => {
-    const sessions: string[] = [];
-    const texts: string[] = [];
-    const tools: Array<{ name: string; input: unknown }> = [];
-    const usages: Array<[number, number]> = [];
-    const contexts: number[] = [];
-    const cb = {
-      onSession: (s: string) => sessions.push(s),
-      onText: (t: string) => texts.push(t),
-      onTool: (name: string, input: unknown) => tools.push({ name, input }),
-      onUsage: (i: number, o: number) => usages.push([i, o]),
-      onContextTokens: (t: number) => contexts.push(t),
-    };
-
-    let acc = '';
-    acc = parseAntigravityStreamLine(
-      JSON.stringify({ event: 'init', conversation_id: 'cid-1', init: { model: 'gemini-4-hydrogen' } }),
-      acc,
-      cb,
-    ).acc;
-    acc = parseAntigravityStreamLine(
-      JSON.stringify({
-        event: 'step_update',
-        step_update: {
-          conversation_id: 'cid-1',
-          step_type: 'tool',
-          state: 'DONE',
-          tool_name: 'run_command',
-          tool_info: { name: 'run_command', parameters: { CommandLine: 'npm test' } },
-        },
-      }),
-      acc,
-      cb,
-    ).acc;
-    acc = parseAntigravityStreamLine(
-      JSON.stringify({
-        event: 'step_update',
-        step_update: {
-          conversation_id: 'cid-1',
-          step_type: 'agent_response',
-          state: 'ACTIVE',
-          text_delta: 'Halo ',
-        },
-      }),
-      acc,
-      cb,
-    ).acc;
-    acc = parseAntigravityStreamLine(
-      JSON.stringify({
-        event: 'step_update',
-        step_update: {
-          conversation_id: 'cid-1',
-          step_type: 'agent_response',
-          state: 'DONE',
-          text_delta: 'dunia!',
-        },
-      }),
-      acc,
-      cb,
-    ).acc;
-    const res = parseAntigravityStreamLine(
-      JSON.stringify({
-        event: 'result',
-        result: {
-          conversation_id: 'cid-1',
-          status: 'SUCCESS',
-          response: 'Halo dunia!',
-          usage: { input_tokens: 100, output_tokens: 25, cache_read_tokens: 400 },
-        },
-      }),
-      acc,
-      cb,
-    );
-
-    expect(res.error).toBeUndefined();
-    expect(res.acc).toBe('Halo dunia!');
-    expect(texts).toEqual(['Halo ', 'dunia!']);
-    expect(sessions[0]).toBe('antigravity:cid-1');
-    expect(tools).toEqual([{ name: 'run_command', input: { CommandLine: 'npm test' } }]);
-    expect(usages).toEqual([[100, 25]]);
-    expect(contexts).toEqual([500]);
-
-    const errRes = parseAntigravityStreamLine(
-      JSON.stringify({
-        event: 'result',
-        result: { conversation_id: 'cid-1', status: 'ERROR', error: '429 rate limit exceeded' },
-      }),
-      '',
-      cb,
-    );
-    expect(errRes.error).toBe('429 rate limit exceeded');
-  });
-});
-
 describe('Windows .cmd shim unwrapping and quoting', () => {
   it('unwraps both Node JS and native .exe npm shims and safely quotes batch commands', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier shim test '));
@@ -371,127 +159,65 @@ describe('Windows .cmd shim unwrapping and quoting', () => {
 });
 
 describe('CliAgentRunner end-to-end provider invocations & error surfacing', () => {
-  it('runs Antigravity end-to-end, resumes sessions without duplicating system prompt, and discovers models', async () => {
-    const { dir, config, store, project, agent } = makeFixture();
-    const callsFile = path.join(dir, 'agy-calls.jsonl');
-
-    const { binPath } = createFakeCli(
-      dir,
-      'agy',
-      `
-      const fs = require('node:fs');
-      const args = process.argv.slice(2);
-      if (args[0] === 'models') {
-        console.log('Fetching available models...');
-        console.log('gemini-4-hydrogen\\tGemini 4 Hydrogen');
-        console.log('gemini-4-neon-high\\tGemini 4 Neon (High)');
-        process.exit(0);
-      }
-      let stdin = '';
-      process.stdin.on('data', (d) => (stdin += d.toString()));
-      process.stdin.on('end', () => {
-        fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ args, stdin }) + '\\n');
-        if (args.some((a) => a.includes('fail-rate-limit'))) {
-          console.log(JSON.stringify({ event: 'init', conversation_id: 'agy-err-1', init: {} }));
-          console.log(JSON.stringify({
-            event: 'result',
-            result: { conversation_id: 'agy-err-1', status: 'ERROR', error: '429 rate limit exceeded' },
-          }));
-          process.exit(1);
+  it('runs Antigravity through the Gemini API with an API key (no CLI) and surfaces API errors', async () => {
+    const { config, store, project, agent } = makeFixture();
+    const seen: Array<{ url: string; auth: string | undefined; body: { model?: string } | null }> = [];
+    const server = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const body = raw ? (JSON.parse(raw) as { model?: string }) : null;
+        seen.push({ url: req.url ?? '', auth: req.headers.authorization, body });
+        if (body?.model === 'fail-rate-limit') {
+          res.statusCode = 429;
+          res.end('rate limit exceeded');
+          return;
         }
-        console.log(JSON.stringify({ event: 'init', conversation_id: 'agy-sess-1', init: {} }));
-        console.log(JSON.stringify({
-          event: 'step_update',
-          step_update: { conversation_id: 'agy-sess-1', step_type: 'agent_response', state: 'DONE', text_delta: 'PONG' },
-        }));
-        console.log(JSON.stringify({
-          event: 'result',
-          result: {
-            conversation_id: 'agy-sess-1',
-            status: 'SUCCESS',
-            response: 'PONG',
-            usage: { input_tokens: 12, output_tokens: 4, cache_read_tokens: 8 },
-          },
-        }));
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'PO' } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'NG' } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 4 } })}\n\n`);
+        res.end('data: [DONE]\n\n');
       });
-      `,
-    );
-
-    store.updateSettings({
-      provider: 'antigravity',
-      model: 'gemini-4-hydrogen',
-      reasoningEffort: 'Medium',
-      cliPaths: { antigravity: binPath },
     });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    mockServers.push(server);
+    const geminiConfig = { ...config, geminiBaseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, geminiApiKey: null };
 
-    const catalog = await getModelCatalog('antigravity', config, store.getSettings(), true);
-    expect(catalog.source).toBe('live');
-    expect(catalog.models.some((m) => m.id === 'gemini-4-neon-high')).toBe(true);
-
-    const runner = new CliAgentRunner(store, config, () => () => {});
-    const sessions: string[] = [];
-    const streamed: string[] = [];
-    let usage: [number, number] | null = null;
-
-    const first = await runner.run(
-      {
-        agent: { ...agent, providerOverride: 'antigravity', modelOverride: 'gemini-4-hydrogen' },
-        project,
-        prompt: 'Reply PONG',
-        resumeSessionId: null,
-        signal: new AbortController().signal,
-      },
-      {
-        onText: (t) => streamed.push(t),
-        onTool() {},
-        onSession: (s) => sessions.push(s),
-        onUsage: (i, o) => {
-          usage = [i, o];
-        },
-      },
-    );
-
-    expect(first.finalText).toBe('PONG');
-    expect(streamed.join('')).toBe('PONG');
-    expect(sessions).toContain('antigravity:agy-sess-1');
-    expect(usage).toEqual([12, 4]);
-
-    await runner.run(
-      {
-        agent: { ...agent, providerOverride: 'antigravity', modelOverride: 'gemini-4-neon-high' },
-        project,
-        prompt: 'Follow up',
-        resumeSessionId: 'antigravity:agy-sess-1',
-        signal: new AbortController().signal,
-      },
-      { onText() {}, onTool() {}, onSession() {} },
-    );
-
-    await expect(
+    const runner = new CliAgentRunner(store, geminiConfig, () => () => {});
+    const run = (model: string) =>
       runner.run(
         {
-          agent: { ...agent, providerOverride: 'antigravity', modelOverride: 'fail-rate-limit' },
+          agent: { ...agent, providerOverride: 'antigravity', modelOverride: model },
           project,
-          prompt: 'Trigger error',
+          prompt: 'Reply PONG',
           resumeSessionId: null,
           signal: new AbortController().signal,
         },
-        { onText() {}, onTool() {}, onSession() {} },
-      ),
-    ).rejects.toThrow('429 rate limit exceeded');
+        {
+          onText() {},
+          onTool() {},
+          onSession() {},
+          onUsage: (i, o) => {
+            usage = [i, o];
+          },
+        },
+      );
+    let usage: [number, number] | null = null;
 
-    const recorded = fs
-      .readFileSync(callsFile, 'utf8')
-      .trim()
-      .split('\n')
-      .map((l) => JSON.parse(l) as { args: string[]; stdin: string });
-    expect(recorded[0]!.args).not.toContain('-p');
-    expect(recorded[0]!.args).toContain('--effort=medium');
-    expect(JSON.parse(recorded[0]!.stdin.trim()).message.content).toContain('Reply PONG');
+    // No key configured -> clear error, nothing sent.
+    await expect(run('gemini-2.5-flash')).rejects.toThrow(/API key not configured/);
+    expect(seen).toHaveLength(0);
 
-    expect(recorded[1]!.args).toContain('--conversation=agy-sess-1');
-    expect(recorded[1]!.args.some((a) => a.startsWith('--effort'))).toBe(false);
-    expect(JSON.parse(recorded[1]!.stdin.trim()).message.content).toBe('Follow up');
+    store.setProviderSecret('antigravity', 'AIza-test-key');
+    const first = await run('gemini-2.5-flash');
+    expect(first.finalText).toBe('PONG');
+    expect(usage).toEqual([12, 4]);
+    expect(seen[0]!.url).toBe('/chat/completions');
+    expect(seen[0]!.auth).toBe('Bearer AIza-test-key');
+    expect(seen[0]!.body?.model).toBe('gemini-2.5-flash');
+
+    await expect(run('fail-rate-limit')).rejects.toThrow('429');
   });
 
   it('surfaces structured JSON errors across claude, openai (codex), and opencode and avoids flag swallowing', async () => {

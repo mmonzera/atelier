@@ -13,6 +13,8 @@ export interface AppConfig {
   deepseekBaseUrl: string;
   openrouterApiKey: string | null;
   openrouterBaseUrl: string;
+  geminiApiKey: string | null;
+  geminiBaseUrl: string;
   claudeProjectsDir: string | null;
   codexSessionsDir: string | null;
   /** Claude Code's credentials file, used only to read official plan usage; null disables that. */
@@ -45,6 +47,7 @@ export function loadConfig(
     dbPath: string;
     deepseekBaseUrl: string;
     openrouterBaseUrl: string;
+    geminiBaseUrl: string;
     claudeProjectsDir: string | null;
     codexSessionsDir: string | null;
     claudeCredentialsPath: string | null;
@@ -70,6 +73,12 @@ export function loadConfig(
     overrides?.openrouterBaseUrl ??
     process.env.OPENROUTER_BASE_URL?.trim() ??
     'https://openrouter.ai/api/v1'
+  ).replace(/\/+$/, '');
+  const geminiApiKey = process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || null;
+  const geminiBaseUrl = (
+    overrides?.geminiBaseUrl ??
+    process.env.GEMINI_BASE_URL?.trim() ??
+    'https://generativelanguage.googleapis.com/v1beta/openai'
   ).replace(/\/+$/, '');
   const isVitest = Boolean(process.env.VITEST);
   const claudeProjectsDir =
@@ -105,6 +114,8 @@ export function loadConfig(
     deepseekBaseUrl,
     openrouterApiKey,
     openrouterBaseUrl,
+    geminiApiKey,
+    geminiBaseUrl,
     claudeProjectsDir,
     codexSessionsDir,
     claudeCredentialsPath,

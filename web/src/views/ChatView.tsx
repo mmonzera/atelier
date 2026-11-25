@@ -9,10 +9,12 @@ import {
   type BrowserScreenshotSummary,
   type BrowserSessionInfo,
   type BrowserTakeoverEvent,
+  type Channel,
   type Message,
   type ModelEntry,
   type ModelProvider,
   type Project,
+  type RoomSession,
   type Settings,
   type Task,
 } from '@atelier/contracts';
@@ -43,7 +45,9 @@ import {
   TaskStatusIcon,
   getColorVar,
 } from '../components/Atoms';
+import { AgentSessionBar } from '../components/AgentSessionBar';
 import { MessageAttachments, isAttachmentOnlyText } from '../components/AttachmentViews';
+import { ChatSearchBar, ChatSearchButton, useChatSearch } from '../components/ChatSearch';
 import { ParallelAgentsStrip, WorkPointsChecklist } from '../components/ChatWorkPanel';
 import { DesignOptionsCard, DesignPendingCard } from '../components/DesignOptionsCard';
 import { ProviderIcon } from '../components/ProviderIcon';
@@ -140,6 +144,9 @@ interface ChatViewProps {
   browserTakeovers?: Record<string, BrowserTakeoverEvent>;
   browserSessions?: BrowserSessionInfo[];
   onOpenBrowserTab?: () => void;
+  /** The agent's personal-chat (DM) channel and its sessions; enables the session switcher. */
+  channel?: Channel | null;
+  sessions?: RoomSession[];
 }
 
 function formatTime(iso: string): string {
@@ -171,6 +178,8 @@ export function ChatView({
   browserTakeovers = {},
   browserSessions = [],
   onOpenBrowserTab,
+  channel = null,
+  sessions = [],
 }: ChatViewProps) {
   const tr = useT();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -206,13 +215,20 @@ export function ChatView({
     return found ? found.label : modelId;
   };
 
+  // A personal chat with sessions shows only the active one.
+  const activeSessionId = !project && channel ? channel.currentSessionId : null;
   const threadMessages = useMemo(
     () =>
       messages.filter(
-        (m) => (m.projectId ?? null) === (project?.id ?? null) && m.agentId === agent.id,
+        (m) =>
+          (m.projectId ?? null) === (project?.id ?? null) &&
+          m.agentId === agent.id &&
+          (!activeSessionId || !m.sessionId || m.sessionId === activeSessionId),
       ),
-    [messages, project?.id, agent.id],
+    [messages, project?.id, agent.id, activeSessionId],
   );
+  const search = useChatSearch(threadMessages, scrollRef);
+  const showSessions = !project && Boolean(channel);
   const savedDesignPicks = useMemo(() => {
     const picks = new Map<string, string>();
     for (const message of threadMessages) {
@@ -299,6 +315,38 @@ export function ChatView({
         display: 'flex',
       }}
     >
+      <div
+        style={{
+          position: 'absolute',
+          top: 4,
+          left: 30,
+          right: 6,
+          zIndex: 5,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          pointerEvents: 'none',
+        }}
+      >
+        <div style={{ pointerEvents: 'auto', minWidth: 0 }}>
+          {showSessions && channel && (
+            <AgentSessionBar channel={channel} sessions={sessions} busy={agent.status === 'working'} />
+          )}
+        </div>
+        <div
+          style={{
+            pointerEvents: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            ...(search.open ? { flex: 1, maxWidth: 340 } : {}),
+          }}
+        >
+          {search.open ? <ChatSearchBar search={search} /> : <ChatSearchButton search={search} />}
+        </div>
+      </div>
+
       {threadMessages.length > 0 && (
         <div
           aria-label={tr('Conversation scrubber')}
@@ -348,7 +396,7 @@ export function ChatView({
           maxWidth: 650,
           margin: '0 auto',
           overflowY: 'auto',
-          padding: '16px 6px 40px',
+          padding: '46px 6px 40px',
           // fade the text itself at both edges (no overlay, so no visible seam)
           WebkitMaskImage:
             'linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 44px), transparent 100%)',
@@ -466,6 +514,7 @@ export function ChatView({
               return (
                 <div
                   key={msg.id}
+                  data-msg-id={msg.id}
                   ref={(el) => {
                     messageRefs.current[msg.id] = el;
                   }}
@@ -526,6 +575,7 @@ export function ChatView({
               return (
                 <div
                   key={msg.id}
+                  data-msg-id={msg.id}
                   ref={(el) => {
                     messageRefs.current[msg.id] = el;
                   }}
@@ -610,6 +660,7 @@ export function ChatView({
               return (
                 <div
                   key={msg.id}
+                  data-msg-id={msg.id}
                   ref={(el) => {
                     messageRefs.current[msg.id] = el;
                   }}
@@ -714,6 +765,7 @@ export function ChatView({
             return (
               <div
                 key={msg.id}
+                data-msg-id={msg.id}
                 ref={(el) => {
                   messageRefs.current[msg.id] = el;
                 }}

@@ -846,16 +846,51 @@ export function createHttpRouter(deps: {
     const parsed = z
       .object({
         carryover: z.enum(['summary', 'clean']).optional().default('summary'),
+        name: z.string().trim().max(80).optional(),
       })
       .safeParse(body ?? {});
     if (!parsed.success) {
       return c.json(apiError('invalid_session_input', 'Invalid session options.'), 400);
+    }
+    const dm = store.channels.getChannel(channelId);
+    if (dm?.kind === 'dm' && dm.agentId) {
+      const res = runtime.startNewDmSession(dm.agentId, parsed.data.name);
+      if (res === 'busy') {
+        return c.json(apiError('agent_busy', 'Wait for the agent to finish before starting a new session.'), 409);
+      }
+      if (!res) return c.json(apiError('channel_not_found', `Channel ${channelId} not found.`), 404);
+      return c.json(res, 201);
     }
     const res = runtime.startNewRoomSession(channelId, parsed.data.carryover);
     if (!res) {
       return c.json(apiError('channel_not_found', `Room channel ${channelId} not found.`), 404);
     }
     return c.json(res, 201);
+  });
+
+  api.patch('/channels/:id/sessions/:sessionId', async (c) => {
+    const channel = store.channels.getChannel(c.req.param('id'));
+    const session = store.channels.getRoomSession(c.req.param('sessionId'));
+    if (!channel || !session || session.channelId !== channel.id) {
+      return c.json(apiError('session_not_found', 'Session not found.'), 404);
+    }
+    const body = await c.req.json().catch(() => null);
+    const parsed = z.object({ name: z.string().trim().max(80) }).safeParse(body);
+    if (!parsed.success) return c.json(apiError('invalid_session_input', 'A session name is required.'), 400);
+    return c.json({ session: store.channels.renameSession(session.id, parsed.data.name) });
+  });
+
+  api.post('/channels/:id/sessions/:sessionId/activate', (c) => {
+    const channel = store.channels.getChannel(c.req.param('id'));
+    if (!channel || channel.kind !== 'dm' || !channel.agentId) {
+      return c.json(apiError('channel_not_found', 'Personal chat not found.'), 404);
+    }
+    const res = runtime.activateDmSession(channel.agentId, c.req.param('sessionId'));
+    if (res === 'busy') {
+      return c.json(apiError('agent_busy', 'Wait for the agent to finish before switching sessions.'), 409);
+    }
+    if (!res) return c.json(apiError('session_not_found', 'Session not found.'), 404);
+    return c.json(res);
   });
 
   api.post('/channels/:id/forward', async (c) => {
@@ -1565,7 +1600,7 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
     if (!parsed.success) {
       return c.json(apiError('invalid_provider', 'Unsupported provider.'), 400);
     }
-    if (parsed.data !== 'deepseek' && parsed.data !== 'openrouter') {
+    if (parsed.data !== 'deepseek' && parsed.data !== 'openrouter' && parsed.data !== 'antigravity') {
       return c.json(apiError('unsupported_api_key', 'This provider uses CLI/OAuth login.'), 400);
     }
     const body = await c.req.json().catch(() => null);

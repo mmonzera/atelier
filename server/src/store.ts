@@ -1818,7 +1818,18 @@ export class AtelierStore {
       .filter((m) => m.author === 'agent' && !m.streaming);
   }
 
+  /**
+   * Messages of an agent's conversation. For a personal chat (projectId null) that has sessions,
+   * only the active session is returned, so context, compaction and retries never mix sessions.
+   */
   public listAgentMessages(agentId: string, projectId?: string | null): Message[] {
+    const all = this.listAllAgentMessages(agentId, projectId);
+    if (projectId !== null) return all;
+    const sessionId = this.channels.getDmByAgent(agentId)?.currentSessionId;
+    return sessionId ? all.filter((m) => !m.sessionId || m.sessionId === sessionId) : all;
+  }
+
+  private listAllAgentMessages(agentId: string, projectId?: string | null): Message[] {
     const mentionNeedle = `%"${agentId}"%`;
     const rows = projectId === undefined
       ? this.db.sqlite
@@ -1874,7 +1885,9 @@ export class AtelierStore {
       } else if (input.agentId) {
         const agt = this.getAgent(input.agentId);
         if (agt) {
-          channelId = this.channels.ensureDm(agt.id, agt.name).id;
+          const dm = this.channels.ensureDm(agt.id, agt.name);
+          channelId = dm.id;
+          if (sessionId === undefined) sessionId = dm.currentSessionId;
         }
       }
     } else if (sessionId === undefined) {

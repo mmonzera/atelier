@@ -447,6 +447,53 @@ export class AgentRuntime {
     return { session: res.session, channel: res.channel };
   }
 
+  /** Drops the agent's provider session, compaction and token state for its personal-chat scope. */
+  private resetDirectScope(agentId: string): void {
+    const agent = this.store.getAgent(agentId);
+    if (!agent) return;
+    const without = <T>(map: Record<string, T> | undefined): Record<string, T> => {
+      const { direct: _dropped, ...rest } = map ?? {};
+      return rest;
+    };
+    this.store.updateAgent(agentId, {
+      sessions: without(agent.sessions),
+      sessionCanon: without(agent.sessionCanon),
+      sessionMemorySent: without(agent.sessionMemorySent),
+      contextCompactions: without(agent.contextCompactions),
+      scopeTokens: without(agent.scopeTokens),
+    });
+  }
+
+  /** Starts a named, clean session in an agent's personal chat. Null when busy-guarded or unknown. */
+  public startNewDmSession(
+    agentId: string,
+    name?: string | null,
+  ): { session: RoomSession; channel: Channel } | 'busy' | null {
+    const agent = this.store.getAgent(agentId);
+    if (!agent) return null;
+    if (agent.status === 'working') return 'busy';
+    const dm = this.store.channels.ensureDm(agent.id, agent.name);
+    const res = this.store.channels.startNewDmSession(dm.id, { name });
+    if (res) this.resetDirectScope(agentId);
+    return res;
+  }
+
+  /** Reopens an earlier session of an agent's personal chat. */
+  public activateDmSession(
+    agentId: string,
+    sessionId: string,
+  ): { channel: Channel } | 'busy' | null {
+    const agent = this.store.getAgent(agentId);
+    if (!agent) return null;
+    if (agent.status === 'working') return 'busy';
+    const dm = this.store.channels.getDmByAgent(agentId);
+    if (!dm) return null;
+    const channel = this.store.channels.activateDmSession(dm.id, sessionId);
+    if (!channel) return null;
+    this.resetDirectScope(agentId);
+    return { channel };
+  }
+
   public dispatchTask(taskId: string): { task: Task; agent: Agent } {
     const task = this.store.getTask(taskId);
     if (!task) {

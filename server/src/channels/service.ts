@@ -215,66 +215,140 @@ export class ChannelService {
     return updated;
   }
 
-  public listRoomSessions(channelId?: string): RoomSession[] {
-    const rows = channelId
-      ? (this.sqlite
-          .prepare(
-            `SELECT id, channel_id, seq, started_at, started_by, carryover_summary FROM room_sessions WHERE channel_id = ? ORDER BY seq ASC`,
-          )
-          .all(channelId) as Array<{
-          id: string;
-          channel_id: string;
-          seq: number;
-          started_at: string;
-          started_by: 'user' | 'system';
-          carryover_summary: string | null;
-        }>)
-      : (this.sqlite
-          .prepare(
-            `SELECT id, channel_id, seq, started_at, started_by, carryover_summary FROM room_sessions ORDER BY started_at ASC, seq ASC`,
-          )
-          .all() as Array<{
-          id: string;
-          channel_id: string;
-          seq: number;
-          started_at: string;
-          started_by: 'user' | 'system';
-          carryover_summary: string | null;
-        }>);
-    return rows.map((r) => ({
+  private static readonly SESSION_COLUMNS =
+    'id, channel_id, seq, started_at, started_by, carryover_summary, name';
+
+  private static toSession(r: {
+    id: string;
+    channel_id: string;
+    seq: number;
+    started_at: string;
+    started_by: 'user' | 'system';
+    carryover_summary: string | null;
+    name?: string | null;
+  }): RoomSession {
+    return {
       id: r.id,
       channelId: r.channel_id,
       seq: r.seq,
       startedAt: r.started_at,
       startedBy: r.started_by,
       carryoverSummary: r.carryover_summary,
-    }));
+      ...(r.name ? { name: r.name } : {}),
+    };
+  }
+
+  public listRoomSessions(channelId?: string): RoomSession[] {
+    const cols = ChannelService.SESSION_COLUMNS;
+    const rows = (
+      channelId
+        ? this.sqlite
+            .prepare(`SELECT ${cols} FROM room_sessions WHERE channel_id = ? ORDER BY seq ASC`)
+            .all(channelId)
+        : this.sqlite
+            .prepare(`SELECT ${cols} FROM room_sessions ORDER BY started_at ASC, seq ASC`)
+            .all()
+    ) as Array<Parameters<typeof ChannelService.toSession>[0]>;
+    return rows.map((r) => ChannelService.toSession(r));
   }
 
   public getRoomSession(sessionId: string): RoomSession | null {
     const row = this.sqlite
-      .prepare(
-        `SELECT id, channel_id, seq, started_at, started_by, carryover_summary FROM room_sessions WHERE id = ?`,
-      )
-      .get(sessionId) as
-      | {
-          id: string;
-          channel_id: string;
-          seq: number;
-          started_at: string;
-          started_by: 'user' | 'system';
-          carryover_summary: string | null;
-        }
-      | undefined;
-    if (!row) return null;
-    return {
-      id: row.id,
-      channelId: row.channel_id,
-      seq: row.seq,
-      startedAt: row.started_at,
-      startedBy: row.started_by,
-      carryoverSummary: row.carryover_summary,
+      .prepare(`SELECT ${ChannelService.SESSION_COLUMNS} FROM room_sessions WHERE id = ?`)
+      .get(sessionId) as Parameters<typeof ChannelService.toSession>[0] | undefined;
+    return row ? ChannelService.toSession(row) : null;
+  }
+
+  /** Renames a session (personal agent chats). An empty name clears it. */
+  public renameSession(sessionId: string, name: string | null): RoomSession | null {
+    const existing = this.getRoomSession(sessionId);
+    if (!existing) return null;
+    const clean = name?.trim().slice(0, 80) || null;
+    this.sqlite.prepare(`UPDATE room_sessions SET name = ? WHERE id = ?`).run(clean, sessionId);
+    const { name: _old, ...rest } = existing;
+    const updated: RoomSession = { ...rest, ...(clean ? { name: clean } : {}) };
+    this.broadcast([{ type: 'room-session-upserted', payload: updated }]);
+    return updated;
+  }
+
+  /**
+   * Points a personal agent chat (DM) at one of its sessions. Messages created from now on
+   * belong to it; other sessions stay stored and can be reopened.
+   */
+  public activateDmSession(channelId: string, sessionId: string): Channel | null {
+    const channel = this.getChannel(channelId);
+    const session = this.getRoomSession(sessionId);
+    if (!channel || channel.kind !== 'dm' || !session || session.channelId !== channelId) return null;
+    if (channel.currentSessionId === sessionId) return channel;
+    return this.updateChannel(channelId, { currentSessionId: sessionId, compaction: null });
+  }
+
+  /**
+   * A DM that predates sessions has no session rows and its messages carry no session id.
+   * Adopts that history as session 1 so a second session has something to sit beside.
+   */
+  private ensureDmFirstSession(channel: Channel): RoomSession {
+    const existing = this.listRoomSessions(channel.id);
+    if (existing.length > 0) return existing[0]!;
+    const first: RoomSession = {
+      id: newId('ses'),
+      channelId: channel.id,
+      seq: 1,
+      startedAt: channel.createdAt,
+      startedBy: 'system',
+      carryoverSummary: null,
     };
+    this.sqlite
+      .prepare(
+        `INSERT INTO room_sessions (id, channel_id, seq, started_at, started_by, carryover_summary, name) VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
+      )
+      .run(first.id, first.channelId, first.seq, first.startedAt, first.startedBy);
+    this.sqlite
+      .prepare(
+        `UPDATE messages SET session_id = ?, data = json_set(data, '$.sessionId', ?)
+         WHERE (channel_id = ? OR (channel_id IS NULL AND project_id IS NULL AND agent_id = ?)) AND session_id IS NULL`,
+      )
+      .run(first.id, first.id, channel.id, channel.agentId);
+    this.broadcast([{ type: 'room-session-upserted', payload: first }]);
+    return first;
+  }
+
+  /** Starts a named, clean session in a personal agent chat (DM). */
+  public startNewDmSession(
+    channelId: string,
+    opts: { name?: string | null },
+  ): { session: RoomSession; channel: Channel } | null {
+    const channel = this.getChannel(channelId);
+    if (!channel || channel.kind !== 'dm') return null;
+
+    this.sqlite.exec('BEGIN IMMEDIATE');
+    let session: RoomSession;
+    try {
+      const first = this.ensureDmFirstSession(channel);
+      const sessions = this.listRoomSessions(channelId);
+      const name = opts.name?.trim().slice(0, 80) || null;
+      session = {
+        id: newId('ses'),
+        channelId,
+        seq: (sessions.at(-1)?.seq ?? first.seq) + 1,
+        startedAt: nowIso(),
+        startedBy: 'user',
+        carryoverSummary: null,
+        ...(name ? { name } : {}),
+      };
+      this.sqlite
+        .prepare(
+          `INSERT INTO room_sessions (id, channel_id, seq, started_at, started_by, carryover_summary, name) VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+        )
+        .run(session.id, channelId, session.seq, session.startedAt, session.startedBy, name);
+      this.sqlite.exec('COMMIT');
+    } catch (err) {
+      this.sqlite.exec('ROLLBACK');
+      throw err;
+    }
+    this.broadcast([{ type: 'room-session-upserted', payload: session }]);
+    const updated = this.updateChannel(channelId, { currentSessionId: session.id, compaction: null });
+    return { session, channel: updated ?? channel };
   }
 
   public updateSessionCarryover(sessionId: string, carryoverSummary: string | null): RoomSession | null {

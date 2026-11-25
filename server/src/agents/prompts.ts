@@ -245,7 +245,6 @@ export function buildAgentSystemPrompt(
         '',
         'Remote Browser Tools (enabled):',
         '- Always use Atelier’s `browser_*` tools (from `atelier-browser` MCP or function tools) for web browsing. Do NOT use external/built-in browser plugins such as `cua_repl`.',
-        '- If native MCP/function tools are not exposed in your CLI runtime (e.g. Antigravity CLI), call browser tools via `<atelier-action>{"tool":"browser_open","url":"https://..."}</atelier-action>` (supports `browser_list_logins`, `browser_login`, `browser_open`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_select`, `browser_press`, `browser_scroll`, `browser_wait`, `browser_back`, `browser_screenshot`, `browser_request_takeover`, `browser_close`).',
         '- Use `browser_login` to sign in with saved credentials. NEVER ask the user to send passwords in chat.',
         '- Always call `browser_snapshot` before clicking or typing, and use the returned `ref` (e.g. `e12`).',
         '- If you encounter a CAPTCHA, 2FA, or unusual verification screen, call `browser_request_takeover` immediately; never try to bypass bot detection.',

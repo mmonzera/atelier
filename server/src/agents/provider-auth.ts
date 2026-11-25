@@ -20,7 +20,7 @@ interface ActiveLoginState {
 const PROVIDER_LABELS: Record<RealProvider, string> = {
   claude: 'Claude (Anthropic)',
   openai: 'ChatGPT (Codex)',
-  antigravity: 'Antigravity (Google)',
+  antigravity: 'Antigravity (Gemini API)',
   deepseek: 'DeepSeek (API)',
   opencode: 'OpenCode CLI',
   openrouter: 'OpenRouter (API)',
@@ -68,6 +68,9 @@ export class ProviderAuthManager {
     if (provider === 'deepseek') {
       return this.checkDeepSeekStatus(store);
     }
+    if (provider === 'antigravity') {
+      return this.checkAntigravityStatus(store);
+    }
     if (provider === 'openrouter') {
       return this.checkOpenRouterStatus(store);
     }
@@ -82,10 +85,7 @@ export class ProviderAuthManager {
     if (provider === 'openai') {
       return this.checkOpenAiStatus(cliPath, activeLogin);
     }
-    if (provider === 'opencode') {
-      return this.checkOpenCodeStatus(cliPath, activeLogin);
-    }
-    return this.checkAntigravityStatus(cliPath, activeLogin);
+    return this.checkOpenCodeStatus(cliPath, activeLogin);
   }
 
   public async getStatuses(
@@ -226,43 +226,26 @@ export class ProviderAuthManager {
     };
   }
 
-  private async checkAntigravityStatus(
-    cliPath: string | null,
-    activeLogin?: ActiveLoginState,
-  ): Promise<ProviderAuthStatus> {
-    const settingsPath = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'settings.json');
-    const hasCliSettings = fs.existsSync(settingsPath);
-    if (!cliPath) {
-      return {
-        provider: 'antigravity',
-        label: PROVIDER_LABELS.antigravity,
-        cliInstalled: false,
-        cliPath: null,
-        authenticated: false,
-        accountLabel: null,
-        loginInProgress: Boolean(activeLogin),
-        authUrl: activeLogin?.authUrl ?? null,
-        message: 'Antigravity CLI (`agy`) not found on PATH. Install `agy` or set custom CLI path.',
-      };
-    }
-
-    const verRes = await execCliCapture(cliPath, ['--version'], 3500);
-    const versionLabel = verRes.stdout.trim().split(/\r?\n/)[0] || 'agy CLI';
+  private checkAntigravityStatus(store?: AtelierStore): ProviderAuthStatus {
+    const savedKey = store?.getProviderSecret('antigravity')?.trim() || null;
+    const envKey = process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || null;
+    const effective = savedKey || envKey;
 
     return {
       provider: 'antigravity',
       label: PROVIDER_LABELS.antigravity,
+      authMode: 'api_key',
       cliInstalled: true,
-      cliPath,
-      authenticated: hasCliSettings,
-      accountLabel: hasCliSettings ? `Google OAuth (${versionLabel})` : null,
-      loginInProgress: Boolean(activeLogin),
-      authUrl: activeLogin?.authUrl ?? null,
-      message: hasCliSettings
-        ? `Ready (${versionLabel})`
-        : activeLogin
-          ? 'Finish Google OAuth login in the opened Antigravity prompt.'
-          : 'CLI found. Click Sign in to authenticate with Google OAuth.',
+      cliPath: null,
+      authenticated: Boolean(effective),
+      accountLabel: savedKey ? maskApiKey(savedKey) : envKey ? 'GEMINI_API_KEY' : null,
+      loginInProgress: false,
+      authUrl: null,
+      message: savedKey
+        ? `API key saved locally (${maskApiKey(savedKey)}).`
+        : envKey
+          ? 'Authenticated via GEMINI_API_KEY.'
+          : 'Not configured. Click API key to enter your Gemini API key (from Google AI Studio).',
     };
   }
 
@@ -406,7 +389,7 @@ export class ProviderAuthManager {
     settings: Settings,
     store?: AtelierStore,
   ): Promise<ProviderAuthStatus> {
-    if (provider === 'deepseek' || provider === 'openrouter') {
+    if (provider === 'deepseek' || provider === 'openrouter' || provider === 'antigravity') {
       return this.getStatus(provider, settings, store);
     }
 
@@ -431,13 +414,13 @@ export class ProviderAuthManager {
             : [];
 
     const child =
-      (provider === 'antigravity' || provider === 'opencode') && process.platform === 'win32'
+      provider === 'opencode' && process.platform === 'win32'
         ? spawnCli(
             'cmd.exe',
             [
               '/c',
               'start',
-              provider === 'opencode' ? 'OpenCode Login' : 'Antigravity Google Login',
+              'OpenCode Login',
               cliPath,
               ...args,
             ],
@@ -487,7 +470,7 @@ export class ProviderAuthManager {
     settings: Settings,
     store?: AtelierStore,
   ): Promise<ProviderAuthStatus> {
-    if (provider === 'deepseek' || provider === 'openrouter') {
+    if (provider === 'deepseek' || provider === 'openrouter' || provider === 'antigravity') {
       store?.setProviderSecret(provider, null);
       return this.getStatus(provider, settings, store);
     }

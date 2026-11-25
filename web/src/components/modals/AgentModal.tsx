@@ -864,25 +864,6 @@ export function AgentModal({
               <Switch checked={browserEnabled} onChange={setBrowserEnabled} label={tr('Allow browser access')} />
             </div>
 
-            {browserEnabled && (providerOverride || settings.provider) === 'antigravity' && (
-              <div
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'rgba(244, 188, 46, 0.08)',
-                  border: '1px solid rgba(244, 188, 46, 0.25)',
-                  fontSize: 11.5,
-                  color: 'var(--agent-amber)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                <AlertTriangle size={14} style={{ flexShrink: 0 }} />
-                <span>{tr('Browser is not available for Antigravity CLI yet. Switch to Claude, Codex, OpenCode, DeepSeek, or OpenRouter.')}</span>
-              </div>
-            )}
-
             {browserEnabled && (
               <>
                 <div>

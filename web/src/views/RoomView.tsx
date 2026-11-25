@@ -40,6 +40,7 @@ import { api } from '../api';
 import { MemoryChip } from '../components/MemoryChip';
 import { FormattedText, getColorVar } from '../components/Atoms';
 import { MessageAttachments, isAttachmentOnlyText } from '../components/AttachmentViews';
+import { ChatSearchBar, ChatSearchButton, useChatSearch } from '../components/ChatSearch';
 import { WorkPointsChecklist } from '../components/ChatWorkPanel';
 import { DesignOptionsCard, DesignPendingCard } from '../components/DesignOptionsCard';
 import { ProviderIcon } from '../components/ProviderIcon';
@@ -269,6 +270,14 @@ export function RoomView({
     }
     return picks;
   }, [roomMessages]);
+
+  const search = useChatSearch(filteredMessages, scrollRef);
+  // Older history is paged in; pull it all in while searching so hits are not missed.
+  useEffect(() => {
+    if (search.open && search.query.trim() && hasMoreOlder && !loadingOlder) void loadOlder();
+    // loadOlder is recreated every render; the state it reads is what drives this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.open, search.query, hasMoreOlder, loadingOlder, oldestRowid]);
 
   const lastMsg = filteredMessages[filteredMessages.length - 1];
   useEffect(() => {
@@ -579,6 +588,7 @@ export function RoomView({
           >
             {tr('Task events')}
           </button>
+          {!search.open && <ChatSearchButton search={search} />}
         </div>
 
         {(activeTurnAgent || (queue?.queued.length ?? 0) > 0) && (
@@ -698,6 +708,15 @@ export function RoomView({
         )}
       </div>
 
+      {search.open && (
+        <div style={{ padding: '0 22px 8px' }}>
+          <ChatSearchBar
+            search={search}
+            hint={hasMoreOlder || loadingOlder ? tr('Loading earlier messages…') : undefined}
+          />
+        </div>
+      )}
+
       <div
         ref={scrollRef}
         className="chat-scroll-hide"
@@ -783,6 +802,7 @@ export function RoomView({
                 return (
                   <div
                     key={msg.id}
+                    data-msg-id={msg.id}
                     className="msg-enter"
                     style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, margin: '6px 0' }}
                   >
@@ -834,7 +854,7 @@ export function RoomView({
               if (msg.metadata?.compacted) {
                 const open = Boolean(expandedWorkIds[msg.id]);
                 return (
-                  <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                  <div key={msg.id} data-msg-id={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
                     <button
                       type="button"
                       onClick={() => toggleWork(msg.id)}
@@ -876,6 +896,7 @@ export function RoomView({
               return (
                 <div
                   key={msg.id}
+                  data-msg-id={msg.id}
                   className="msg-enter"
                   style={{
                     display: 'flex',
@@ -955,6 +976,7 @@ export function RoomView({
               return (
                 <div
                   key={msg.id}
+                  data-msg-id={msg.id}
                   style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'flex-end' }}
                 >
                   <button
@@ -1055,6 +1077,7 @@ export function RoomView({
             return (
               <div
                 key={msg.id}
+                data-msg-id={msg.id}
                 style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, paddingLeft: 2 }}>
