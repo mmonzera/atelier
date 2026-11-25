@@ -959,25 +959,23 @@ export function ChatView({
         maxWidth: 710,
         margin: '0 auto',
         display: 'flex',
+        flexDirection: 'column',
       }}
     >
+      {/* Toolbar is its own row (not floating) so chat text never scrolls underneath it. */}
       <div
         style={{
-          position: 'absolute',
-          top: 4,
-          left: 30,
-          right: 6,
+          flexShrink: 0,
+          position: 'relative',
           zIndex: 5,
+          padding: '4px 6px 2px 30px',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
           gap: 8,
-          pointerEvents: 'none',
         }}
       >
         <div
           style={{
-            pointerEvents: 'auto',
             minWidth: 0,
             flex: 1,
             display: 'flex',
@@ -999,6 +997,7 @@ export function ChatView({
         </div>
       </div>
 
+      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
       {threadMessages.length > 0 && (
         <div
           aria-label={tr('Conversation scrubber')}
@@ -1048,7 +1047,7 @@ export function ChatView({
           maxWidth: 650,
           margin: '0 auto',
           overflowY: 'auto',
-          padding: '46px 6px 40px',
+          padding: '10px 6px 40px',
           // fade the text itself at both edges (no overlay, so no visible seam)
           WebkitMaskImage:
             'linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 44px), transparent 100%)',
@@ -1573,6 +1572,7 @@ export function ChatView({
             </div>
           )
         )}
+      </div>
       </div>
 
       {enlargedShot && (
