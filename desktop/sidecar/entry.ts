@@ -44,6 +44,9 @@ const handle = await startAtelierServer({
     capture: audioCapture,
     notify: (title, body) => emit('ATELIER_NOTIFY', { title, body }),
   },
+  updateOptions: {
+    onAction: (action) => emit('ATELIER_UPDATE', { action }),
+  },
 });
 handle.backup.startScheduler();
 
@@ -120,6 +123,7 @@ rl.on('line', (line) => {
   const { command, payload } = parsed;
   if (command === 'lock') handle.vault.lockNow();
   else if (command === 'shutdown') void shutdown();
+  else if (command === 'update-status') handle.appUpdate.applyShellStatus(payload);
   else if (audioCapture.handleLine(command, payload)) return;
   else if (command === 'meeting-app') {
     const state = payload.state === 'ended' ? 'ended' : 'started';

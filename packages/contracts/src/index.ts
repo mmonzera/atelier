@@ -1586,6 +1586,20 @@ export interface WorkspaceState {
   browserSessions?: BrowserSessionInfo[];
   browserApprovals?: BrowserApprovalRequest[];
   activeMeeting?: MeetingStatusEvent | null;
+  appUpdate?: AppUpdateStatus;
+}
+
+export type AppUpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'up_to_date' | 'error';
+
+export interface AppUpdateStatus {
+  supported: boolean;
+  currentVersion: string;
+  state: AppUpdateState;
+  availableVersion: string | null;
+  notes: string | null;
+  progressPercent: number | null;
+  error: string | null;
+  checkedAt: string | null;
 }
 
 // Command Input DTOs
@@ -1745,7 +1759,8 @@ export type ServerEvent =
   | { type: 'meeting-app'; payload: MeetingAppEvent }
   | { type: 'meeting-level'; payload: MeetingLevelEvent }
   | { type: 'meeting-meter'; payload: MeetingMeterEvent }
-  | { type: 'meeting-removed'; payload: { id: string } };
+  | { type: 'meeting-removed'; payload: { id: string } }
+  | { type: 'app-update'; payload: AppUpdateStatus };
 
 export interface OnboardingStatus {
   hostname: string;

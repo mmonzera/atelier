@@ -19,6 +19,7 @@ import { discoverLocalCodexModels } from './agents/cli-runners.js';
 import { getModelCatalog } from './agents/model-catalog.js';
 import { ProviderAuthManager } from './agents/provider-auth.js';
 import type { AgentRuntime } from './agents/runtime.js';
+import { AppUpdateBridge } from './app-update.js';
 import { buildUsageDashboard } from './agents/usage.js';
 import { type AppConfig, isAllowedHost, isAllowedOrigin } from './config.js';
 import { cloneRepo, getGhStatus, linkLocalRepo, listRepos } from './github.js';
@@ -85,8 +86,16 @@ export function createHttpRouter(deps: {
   sttRoutes?: Hono;
   /** Meeting transcription routes, mounted behind the origin check and lock gate. */
   meetingRoutes?: Hono;
+  /** Desktop updater bridge (available when hosted inside the Tauri shell). */
+  appUpdate?: AppUpdateBridge;
 }): Hono {
   const { store, runtime, config } = deps;
+  const appUpdate =
+    deps.appUpdate ??
+    new AppUpdateBridge({
+      supported: false,
+      currentVersion: process.env.ATELIER_APP_VERSION || '0.1.0',
+    });
   const authManager = deps.authManager ?? new ProviderAuthManager();
   const api = new Hono();
 
@@ -1845,6 +1854,10 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
       },
     });
   });
+
+  api.get('/app-update', (c) => c.json({ update: appUpdate.getStatus() }));
+  api.post('/app-update/check', (c) => c.json({ update: appUpdate.requestCheck() }));
+  api.post('/app-update/install', (c) => c.json({ update: appUpdate.requestInstall() }));
 
   return api;
 }

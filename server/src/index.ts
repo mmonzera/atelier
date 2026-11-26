@@ -9,6 +9,7 @@ import { ProviderAuthManager } from './agents/provider-auth.js';
 import { AgentRuntime } from './agents/runtime.js';
 import type { AgentRunner } from './agents/runner.js';
 import type { EnqueueTaskFn } from './agents/studio-tools.js';
+import { AppUpdateBridge } from './app-update.js';
 import { EventBus } from './bus.js';
 import { CredentialStore } from './browser/credentials.js';
 import { BrowserManager } from './browser/manager.js';
@@ -44,6 +45,7 @@ export interface AtelierServerHandle {
   sttInstaller: SttInstaller;
   sttProvider: LocalWhisperProvider;
   meetingService: MeetingService;
+  appUpdate: AppUpdateBridge;
   server: Server;
   port: number;
   close: () => Promise<void>;
@@ -78,6 +80,10 @@ export async function startAtelierServer(opts?: {
   meetingOptions?: {
     capture?: MeetingAudioCapture;
     notify?: (title: string, body: string) => void;
+  };
+  /** Desktop shell hook for triggering native in-app update checks and installs. */
+  updateOptions?: {
+    onAction?: (action: 'check' | 'install') => void;
   };
 }): Promise<AtelierServerHandle> {
   const config = loadConfig(opts?.configOverrides);
@@ -145,6 +151,13 @@ export async function startAtelierServer(opts?: {
       }),
   });
 
+  const appUpdate = new AppUpdateBridge({
+    supported: Boolean(process.env.ATELIER_EMBEDDED),
+    currentVersion: process.env.ATELIER_APP_VERSION || '0.1.0',
+    onRequestAction: opts?.updateOptions?.onAction,
+    onBroadcast: (payload) => bus.broadcast({ type: 'app-update', payload }),
+  });
+
   store.setSnapshotAugmenter((base) => {
     const roomQueues: Record<string, ReturnType<typeof runtime.getRoomQueueSnapshot>> = {};
     for (const ch of base.channels ?? []) {
@@ -158,6 +171,7 @@ export async function startAtelierServer(opts?: {
       browserSessions: browserManager.listSessions(),
       browserApprovals: browserManager.listApprovals(),
       activeMeeting: meetingService.getActiveMeetingStatus(),
+      appUpdate: appUpdate.getStatus(),
     };
   });
 
@@ -197,6 +211,7 @@ export async function startAtelierServer(opts?: {
       browserRoutes: createBrowserRoutes({ browserManager, credentials }),
       sttRoutes: createSttRoutes({ installer: sttInstaller, provider: sttProvider, store }),
       meetingRoutes: createMeetingRoutes({ meetingService }),
+      appUpdate,
     }),
   );
   app.route('/mcp/browser', createBrowserMcpRouter({ browserManager, config }));
@@ -270,6 +285,7 @@ export async function startAtelierServer(opts?: {
     sttInstaller,
     sttProvider,
     meetingService,
+    appUpdate,
     server,
     port: actualPort,
     close: async () => {

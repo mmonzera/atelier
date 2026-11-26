@@ -292,6 +292,20 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                     let on = v["enabled"].as_bool().unwrap_or(false);
                     handle.state::<Sidecar>().detect.store(on, Ordering::SeqCst);
                 }
+            } else if let Some(rest) = line.strip_prefix("ATELIER_UPDATE ") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                    match v["action"].as_str() {
+                        Some("check") => {
+                            let h = handle.clone();
+                            tauri::async_runtime::spawn(check_update(h, false));
+                        }
+                        Some("install") => {
+                            let h = handle.clone();
+                            tauri::async_runtime::spawn(check_update(h, true));
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         // No server to send chunks to any more: stop recording (written files are adopted on restart).
@@ -349,35 +363,124 @@ fn quit(app: &AppHandle) {
     });
 }
 
+fn send_update_status(app: &AppHandle, payload: serde_json::Value) {
+    app.state::<Sidecar>().send(&format!("update-status {payload}"));
+}
+
 async fn check_update(app: AppHandle, install: bool) {
     let updater = match app.updater() {
         Ok(u) => u,
-        Err(_) => return,
+        Err(e) => {
+            send_update_status(&app, json!({ "state": "error", "error": e.to_string() }));
+            return;
+        }
     };
+    if !install {
+        send_update_status(&app, json!({ "state": "checking", "error": serde_json::Value::Null }));
+    }
     match updater.check().await {
         Ok(Some(update)) => {
+            let version = update.version.clone();
+            let notes = update.body.clone();
             if install {
-                notify(&app, "Mengunduh update Atelier", &format!("Versi {}…", update.version), false);
-                app.state::<Sidecar>().send("shutdown");
-                // On Windows the installer takes over and restarts the app.
-                if update.download_and_install(|_, _| {}, || {}).await.is_err() {
-                    notify(&app, "Update gagal", "Coba lagi dari menu tray.", false);
+                send_update_status(
+                    &app,
+                    json!({
+                        "state": "downloading",
+                        "availableVersion": version,
+                        "notes": notes,
+                        "progressPercent": 0,
+                        "error": serde_json::Value::Null
+                    }),
+                );
+                notify(&app, "Mengunduh update Atelier", &format!("Versi {}…", version), false);
+                let app_prog = app.clone();
+                let ver_prog = version.clone();
+                let app_done = app.clone();
+                let mut downloaded: u64 = 0;
+                let mut last_pct: i64 = -1;
+                // On Windows the NSIS passive installer takes over and restarts the app after finish.
+                let res = update
+                    .download_and_install(
+                        move |chunk_length, content_length| {
+                            downloaded = downloaded.saturating_add(chunk_length as u64);
+                            if let Some(total) = content_length {
+                                if total > 0 {
+                                    let pct = ((downloaded.saturating_mul(100)) / total).min(100) as i64;
+                                    if pct >= last_pct + 5 || pct == 100 {
+                                        last_pct = pct;
+                                        send_update_status(
+                                            &app_prog,
+                                            json!({
+                                                "state": "downloading",
+                                                "availableVersion": ver_prog,
+                                                "progressPercent": pct
+                                            }),
+                                        );
+                                    }
+                                }
+                            }
+                        },
+                        move || {
+                            app_done.state::<Sidecar>().send("shutdown");
+                        },
+                    )
+                    .await;
+                if let Err(e) = res {
+                    send_update_status(
+                        &app,
+                        json!({
+                            "state": "error",
+                            "availableVersion": version,
+                            "progressPercent": serde_json::Value::Null,
+                            "error": e.to_string()
+                        }),
+                    );
+                    notify(&app, "Update gagal", "Coba lagi dari aplikasi atau menu tray.", false);
                 }
             } else {
+                send_update_status(
+                    &app,
+                    json!({
+                        "state": "available",
+                        "availableVersion": version,
+                        "notes": notes,
+                        "progressPercent": serde_json::Value::Null,
+                        "error": serde_json::Value::Null
+                    }),
+                );
                 notify(
                     &app,
                     "Update Atelier tersedia",
-                    &format!("Versi {} siap. Klik kanan ikon tray → Periksa update.", update.version),
+                    &format!("Versi {} siap. Klik Update di dalam Atelier atau tray.", version),
                     false,
                 );
             }
         }
         Ok(None) => {
+            send_update_status(
+                &app,
+                json!({
+                    "state": "up_to_date",
+                    "availableVersion": serde_json::Value::Null,
+                    "notes": serde_json::Value::Null,
+                    "progressPercent": serde_json::Value::Null,
+                    "error": serde_json::Value::Null
+                }),
+            );
             if install {
                 notify(&app, "Atelier sudah terbaru", "Tidak ada update.", false);
             }
         }
-        Err(_) => {
+        Err(e) => {
+            send_update_status(
+                &app,
+                json!({
+                    "state": "error",
+                    "progressPercent": serde_json::Value::Null,
+                    "error": e.to_string()
+                }),
+            );
             if install {
                 notify(&app, "Cek update gagal", "Periksa koneksi internet.", false);
             }
@@ -488,11 +591,17 @@ fn main() {
                 });
             }
 
-            // Look for an update shortly after start (never installs without the user asking).
+            // Look for updates shortly after start and every 30 minutes while running (never installs without user click).
             let h = handle.clone();
             tauri::async_runtime::spawn(async move {
-                tokio_sleep(30).await;
-                check_update(h, false).await;
+                tokio_sleep(15).await;
+                loop {
+                    if h.state::<Sidecar>().quitting.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    check_update(h.clone(), false).await;
+                    tokio_sleep(1800).await;
+                }
             });
             Ok(())
         })

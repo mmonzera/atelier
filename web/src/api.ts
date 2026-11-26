@@ -1,4 +1,5 @@
 import type {
+  AppUpdateStatus,
   AudioDevicesInfo,
   ModelProvider as MeetingNotesProvider,
   Agent,
@@ -600,6 +601,18 @@ export const api = {
 
   dismissOnboarding: () =>
     request<{ ok: boolean }>('/api/onboarding/dismiss', {
+      method: 'POST',
+    }),
+
+  getAppUpdate: () => request<{ update: AppUpdateStatus }>('/api/app-update'),
+
+  checkAppUpdate: () =>
+    request<{ update: AppUpdateStatus }>('/api/app-update/check', {
+      method: 'POST',
+    }),
+
+  installAppUpdate: () =>
+    request<{ update: AppUpdateStatus }>('/api/app-update/install', {
       method: 'POST',
     }),
 };

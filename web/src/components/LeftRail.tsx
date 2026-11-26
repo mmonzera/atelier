@@ -25,6 +25,8 @@ interface LeftRailProps {
   meetingsActive: boolean;
   /** A meeting is being recorded right now (shows a red dot on the icon). */
   recording: boolean;
+  /** Desktop app update is available or downloading. */
+  updateAvailable?: boolean;
 }
 
 export function LeftRail({
@@ -45,6 +47,7 @@ export function LeftRail({
   onOpenMeetings,
   meetingsActive,
   recording,
+  updateAvailable = false,
 }: LeftRailProps) {
   const t = useT();
   const visibleProjects = projects.filter((p) => !p.archived);
@@ -360,9 +363,10 @@ export function LeftRail({
         <button
           type="button"
           onClick={onOpenSettings}
-          title={t('Settings & Integrations')}
+          title={updateAvailable ? t('Settings & Integrations · Update available') : t('Settings & Integrations')}
           className="transition-atelier"
           style={{
+            position: 'relative',
             width: 32,
             height: 32,
             borderRadius: 'var(--radius-sm)',
@@ -382,6 +386,21 @@ export function LeftRail({
           }}
         >
           <SettingsIcon size={18} strokeWidth={1.5} />
+          {updateAvailable && (
+            <span
+              aria-hidden
+              style={{
+                position: 'absolute',
+                top: 5,
+                right: 5,
+                width: 7,
+                height: 7,
+                borderRadius: '9999px',
+                background: 'var(--agent-green)',
+                boxShadow: '0 0 0 2px var(--surface-1)',
+              }}
+            />
+          )}
         </button>
       </div>
 

@@ -3,6 +3,7 @@ import {
   BUILT_IN_MODELS,
   DEFAULT_AUTO_COMPACT_SETTINGS,
   DEFAULT_MEMORY_SETTINGS,
+  type AppUpdateStatus,
   type FallbackMode,
   type ModelEntry,
   type ModelRef,
@@ -47,6 +48,7 @@ export function SettingsView({
   activeProject,
   discoveredModels = [],
   sttDownload = null,
+  appUpdate = null,
   initialTab = 'general',
   onOpenMcp,
   onClose,
@@ -55,6 +57,7 @@ export function SettingsView({
   activeProject: Project | null;
   discoveredModels?: ModelEntry[];
   sttDownload?: SttDownloadProgressEvent | null;
+  appUpdate?: AppUpdateStatus | null;
   initialTab?: SettingsTab;
   onOpenMcp: () => void;
   onClose: () => void;
@@ -282,6 +285,75 @@ export function SettingsView({
           <ModelsProvidersPanel settings={settings} discoveredModels={discoveredModels} />
         ) : (
           <>
+            {appUpdate && (
+              <div
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--surface-2)',
+                  border:
+                    appUpdate.state === 'available' || appUpdate.state === 'downloading'
+                      ? '1px solid var(--agent-green)'
+                      : '1px solid var(--border-subtle)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)' }}>
+                    Atelier Desktop <span className="mono-num">v{appUpdate.currentVersion}</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                    {!appUpdate.supported
+                      ? t('Desktop auto-updater is active in the installed Windows app.')
+                      : appUpdate.state === 'available'
+                        ? t('Update v{version} ready to install.', { version: appUpdate.availableVersion ?? '' })
+                        : appUpdate.state === 'downloading'
+                          ? t('Downloading update… {pct}%', { pct: appUpdate.progressPercent ?? 0 })
+                          : appUpdate.state === 'checking'
+                            ? t('Checking for updates…')
+                            : appUpdate.state === 'up_to_date'
+                              ? t('You are on the latest version.')
+                              : appUpdate.state === 'error'
+                                ? appUpdate.error || t('Update check failed.')
+                                : t('Automatic updates via GitHub Releases.')}
+                  </div>
+                </div>
+                {appUpdate.supported && (
+                  <button
+                    type="button"
+                    disabled={appUpdate.state === 'checking' || appUpdate.state === 'downloading'}
+                    onClick={() => {
+                      if (appUpdate.state === 'available') {
+                        void api.installAppUpdate();
+                      } else {
+                        void api.checkAppUpdate();
+                      }
+                    }}
+                    style={{
+                      ...(appUpdate.state === 'available' ? primaryBtnStyle : secondaryBtnStyle),
+                      height: 30,
+                      padding: '0 12px',
+                      fontSize: 12,
+                      flexShrink: 0,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    <RefreshCw size={13} strokeWidth={1.5} />
+                    {appUpdate.state === 'available'
+                      ? t('Update to v{version}', { version: appUpdate.availableVersion ?? '' })
+                      : appUpdate.state === 'downloading'
+                        ? `${appUpdate.progressPercent ?? 0}%`
+                        : t('Check for updates')}
+                  </button>
+                )}
+              </div>
+            )}
+
             <div
               style={{
                 padding: 12,

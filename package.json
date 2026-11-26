@@ -22,7 +22,9 @@
     "memory:report": "npm.cmd --workspace @atelier/server run memory:report --",
     "migrate:group-chat": "npx tsx server/src/channels/migrate-cli.ts",
     "desktop": "npm.cmd run build && npm.cmd --workspace @atelier/desktop run dev",
-    "desktop:build": "npm.cmd run build && npm.cmd --workspace @atelier/desktop run build"
+    "desktop:build": "npm.cmd run build && npm.cmd --workspace @atelier/desktop run build",
+    "release": "node scripts/release.mjs",
+    "release:local": "node scripts/release.mjs --local"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",

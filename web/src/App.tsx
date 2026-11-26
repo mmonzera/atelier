@@ -10,7 +10,7 @@ import type {
   TaskStatus,
   WorkspaceTab,
 } from '@atelier/contracts';
-import { Plus, Sparkles } from 'lucide-react';
+import { Download, Plus, Sparkles, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import { FloatingComposer } from './components/FloatingComposer';
@@ -102,7 +102,9 @@ export function App() {
     dismissMeetingApp,
     meetingReady,
     dismissMeetingReady,
+    appUpdate,
   } = useWorkspace();
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
 
   // the saved interface language (when one was chosen) follows the user across devices
   useEffect(() => {
@@ -552,6 +554,7 @@ export function App() {
         onOpenMeetings={() => openMeetings(null)}
         meetingsActive={meetingsPage !== null}
         recording={activeMeeting?.meeting.status === 'recording'}
+        updateAvailable={appUpdate?.state === 'available' || appUpdate?.state === 'downloading'}
       />
 
       <main
@@ -565,6 +568,77 @@ export function App() {
           zIndex: 10,
         }}
       >
+        {appUpdate &&
+          appUpdate.supported &&
+          (appUpdate.state === 'available' || appUpdate.state === 'downloading') &&
+          appUpdate.availableVersion !== dismissedUpdateVersion && (
+            <div
+              style={{
+                alignSelf: 'center',
+                width: '100%',
+                maxWidth: 650,
+                marginBottom: 8,
+                padding: '8px 12px',
+                borderRadius: 'var(--radius-lg)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--agent-green)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                fontSize: 12.5,
+              }}
+            >
+              <span style={{ color: 'var(--text-primary)', minWidth: 0 }}>
+                {appUpdate.state === 'downloading'
+                  ? `Mengunduh update Atelier v${appUpdate.availableVersion ?? ''}… ${appUpdate.progressPercent ?? 0}%`
+                  : `Update Atelier v${appUpdate.availableVersion ?? ''} tersedia (terpasang v${appUpdate.currentVersion}).`}
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  disabled={appUpdate.state === 'downloading'}
+                  onClick={() => void api.installAppUpdate()}
+                  style={{
+                    height: 28,
+                    padding: '0 11px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--action-primary)',
+                    color: 'var(--action-primary-fg)',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    opacity: appUpdate.state === 'downloading' ? 0.7 : 1,
+                  }}
+                >
+                  <Download size={13} strokeWidth={1.75} />
+                  {appUpdate.state === 'downloading'
+                    ? `${appUpdate.progressPercent ?? 0}%`
+                    : 'Klik untuk Update'}
+                </button>
+                {appUpdate.state === 'available' && appUpdate.availableVersion && (
+                  <button
+                    type="button"
+                    aria-label="Dismiss update banner"
+                    onClick={() => setDismissedUpdateVersion(appUpdate.availableVersion)}
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: 'var(--radius-sm)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--text-tertiary)',
+                    }}
+                  >
+                    <X size={14} strokeWidth={1.5} />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         {/* Solid band behind the chat column, fading out sideways, so background cables never run
             behind message text. Sits at z-index -1 inside <main>'s own stacking context. */}
         {!dimmedBackground && !showOnboarding && (
@@ -1215,6 +1289,7 @@ export function App() {
           activeProject={activeProject}
           discoveredModels={discoveredModels}
           sttDownload={sttDownload}
+          appUpdate={appUpdate}
           initialTab={modal.initialTab ?? 'general'}
           onOpenMcp={openPlugins}
           onClose={() => setModal(null)}

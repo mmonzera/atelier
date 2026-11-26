@@ -1,4 +1,5 @@
 import type {
+  AppUpdateStatus,
   BrowserApprovalRequest,
   BrowserFrameEvent,
   BrowserSessionInfo,
@@ -32,6 +33,7 @@ export function useWorkspace() {
   const [meetingApp, setMeetingApp] = useState<MeetingAppEvent | null>(null);
   /** A meeting whose notes were just written (shown once as "notes ready"). */
   const [meetingReady, setMeetingReady] = useState<MeetingSession | null>(null);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null);
   // Stable identities: the cards use them in effects (auto-dismiss timers).
   const dismissMeetingApp = useCallback(() => setMeetingApp(null), []);
   const dismissMeetingReady = useCallback(() => setMeetingReady(null), []);
@@ -49,6 +51,7 @@ export function useWorkspace() {
       browserSessions?: BrowserSessionInfo[];
       browserApprovals?: BrowserApprovalRequest[];
       activeMeeting?: MeetingStatusEvent | null;
+      appUpdate?: AppUpdateStatus;
     }) => {
       if (Array.isArray(snapshot.browserSessions)) {
         setBrowserSessions(snapshot.browserSessions.filter((s) => s.status !== 'closed'));
@@ -58,6 +61,9 @@ export function useWorkspace() {
       }
       lastActive = snapshot.activeMeeting ?? null;
       setActiveMeeting(lastActive);
+      if (snapshot.appUpdate) {
+        setAppUpdate(snapshot.appUpdate);
+      }
     };
 
     const syncSnapshot = () => {
@@ -205,6 +211,10 @@ export function useWorkspace() {
             });
             return;
           }
+          if (parsed.type === 'app-update') {
+            setAppUpdate(parsed.payload);
+            return;
+          }
 
           dispatch(parsed);
           if (parsed.type === 'snapshot') {
@@ -281,5 +291,6 @@ export function useWorkspace() {
     dismissMeetingApp,
     meetingReady,
     dismissMeetingReady,
+    appUpdate,
   };
 }
