@@ -54,6 +54,11 @@ import { renderCanon, SELECTIVE_MEMORY_PROMPT } from './prompts.js';
 import { selectMemory, type SelectResult } from '../memory/selector.js';
 import { memoryOwners } from '../memory/owners.js';
 
+const MAX_RESUMED_PROVIDER_CONTEXT_TOKENS =
+  Number(process.env.ATELIER_MAX_SESSION_TOKENS) > 0
+    ? Number(process.env.ATELIER_MAX_SESSION_TOKENS)
+    : 45_000;
+
 export class AgentRuntime {
   private readonly draining = new Set<string>();
   private readonly activeAborts = new Map<string, AbortController>();
@@ -1148,6 +1153,9 @@ export class AgentRuntime {
     const effectiveModel = item.modelOverride?.model || agent.modelOverride || settings.model;
     const switchingProvider =
       Boolean(item.modelOverride) && item.modelOverride!.provider !== primaryProvider;
+    const priorProviderTokens = agent.scopeTokens?.[scopeKey] ?? 0;
+    const sessionBloated =
+      preTrigger === 'provider_limit' || priorProviderTokens > MAX_RESUMED_PROVIDER_CONTEXT_TOKENS;
     const roomDeltaStale =
       isRoom && channel
         ? new RoomContextBuilder(this.store.channels).isDeltaStale({
@@ -1158,7 +1166,7 @@ export class AgentRuntime {
             tailTokens: settings.autoCompact.tailTokens,
           })
         : false;
-    const initialResumeId = switchingProvider || roomDeltaStale
+    const initialResumeId = switchingProvider || roomDeltaStale || sessionBloated
       ? null
       : (agent.sessions?.[scopeKey] ??
         (project &&
@@ -1429,13 +1437,20 @@ export class AgentRuntime {
       });
 
       const latestAgent = this.store.getAgent(agent.id) ?? agent;
+      const shouldRotateNextTurn = providerContextTokens > MAX_RESUMED_PROVIDER_CONTEXT_TOKENS;
       const nextSessions = { ...(latestAgent.sessions ?? {}) };
-      if (sessionId && !switchingProvider) {
+      if (shouldRotateNextTurn) {
+        delete nextSessions[scopeKey];
+        if (isRoom && projectId) delete nextSessions[projectId];
+      } else if (sessionId && !switchingProvider) {
         nextSessions[scopeKey] = sessionId;
         if (isRoom && projectId) nextSessions[projectId] = sessionId;
       }
       const sessionCanon = { ...(latestAgent.sessionCanon ?? {}) };
-      if (sessionId && !switchingProvider) {
+      if (shouldRotateNextTurn) {
+        delete sessionCanon[scopeKey];
+        if (isRoom && projectId) delete sessionCanon[projectId];
+      } else if (sessionId && !switchingProvider) {
         sessionCanon[scopeKey] = { sessionId, version: canonVersion };
         if (isRoom && projectId) sessionCanon[projectId] = { sessionId, version: canonVersion };
       }
@@ -1474,7 +1489,9 @@ export class AgentRuntime {
       this.store.updateAgent(agent.id, {
         status: 'idle',
         currentTask: null,
-        sessionId: (!switchingProvider ? sessionId : null) ?? latestAgent.sessionId,
+        sessionId: shouldRotateNextTurn
+          ? (latestAgent.sessionId === sessionId ? null : latestAgent.sessionId)
+          : ((!switchingProvider ? sessionId : null) ?? latestAgent.sessionId),
         sessions: nextSessions,
         sessionCanon,
         ...(memorySelection ? { sessionMemorySent } : {}),

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import {
   AGENT_AVATAR_SHAPES,
   AGENT_COLORS,
@@ -15,10 +16,17 @@ import {
   executeBrowserTool,
 } from '../browser/tools.js';
 import type { BrowserManager } from '../browser/manager.js';
+import type { AppConfig } from '../config.js';
 import { runBrowserQa } from '../qa/browser-qa.js';
 import { type AtelierStore, newId } from '../store.js';
 import { CANON_KEY, CanonInputFields, CanonInputSchema } from '../memory-files.js';
 import { memoryOwners } from '../memory/owners.js';
+import {
+  generateImageWithProvider,
+  optimizeSvgContent,
+  resolveInsideWorkspace,
+  writeWorkspaceFile,
+} from './visual-tools.js';
 
 const CanonKeySchema = z.object({ key: z.string().regex(CANON_KEY) });
 const SearchHistorySchema = z.object({
@@ -136,6 +144,21 @@ export const CreateAgentToolSchema = z.object({
   modelOverride: z.string().nullable().optional(),
 });
 
+export const OptimizeSvgToolSchema = z.object({
+  svg: z.string().min(1).optional(),
+  inputPath: z.string().trim().min(1).optional(),
+  outputPath: z.string().trim().min(1).optional(),
+  label: z.string().trim().min(1).max(120).optional(),
+});
+
+export const GenerateImageToolSchema = z.object({
+  prompt: z.string().trim().min(1).max(2000),
+  outputPath: z.string().trim().min(1).optional(),
+  aspectRatio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4']).optional(),
+  model: z.string().trim().min(1).max(120).optional(),
+  label: z.string().trim().min(1).max(120).optional(),
+});
+
 export interface StudioTools {
   memoryAction(name: MemoryAction, input: unknown): unknown;
   project_info(): {
@@ -149,6 +172,32 @@ export interface StudioTools {
   update_task(input: z.infer<typeof UpdateTaskToolSchema>): { task: Task };
   message_agent(input: z.infer<typeof MessageAgentToolSchema>): { queued: boolean; targetAgentId: string | null };
   run_browser_qa(input: z.infer<typeof RunBrowserQaToolSchema>): { queued: boolean; url: string };
+  optimize_svg(input: z.infer<typeof OptimizeSvgToolSchema>): {
+    ok: boolean;
+    artifactId?: string;
+    path?: string;
+    workspacePath?: string;
+    originalBytes?: number;
+    optimizedBytes?: number;
+    viewBox?: string | null;
+    warnings?: string[];
+    error?: string;
+  };
+  generate_image(
+    input: z.infer<typeof GenerateImageToolSchema>,
+    signal?: AbortSignal,
+  ): Promise<{
+    ok: boolean;
+    artifactId?: string;
+    path?: string;
+    workspacePath?: string;
+    mime?: string;
+    sizeBytes?: number;
+    providerUsed?: string;
+    modelUsed?: string;
+    reason?: string;
+    hint?: string;
+  }>;
 }
 
 export function createStudioTools(deps: {
@@ -157,13 +206,15 @@ export function createStudioTools(deps: {
   actingAgentId: string;
   enqueue: EnqueueTaskFn;
   dataDir?: string;
+  cwd?: string;
+  config?: AppConfig;
   trust?: 'user' | 'teammate';
   channelId?: string | null;
   rootMessageId?: string | null;
   hop?: number;
   postRoomTeammateMessage?: (target: Agent, message: string) => { queued: boolean; targetAgentId: string | null };
 }): StudioTools {
-  const { store, projectId, actingAgentId, enqueue, dataDir = './data', trust = 'user' } = deps;
+  const { store, projectId, actingAgentId, enqueue, dataDir = './data', cwd, config, trust = 'user' } = deps;
 
   const readMessage = (id: string) => {
     const message = store.getMessage(id);
@@ -616,6 +667,133 @@ export function createStudioTools(deps: {
 
       return { queued: true, url: targetUrl };
     },
+
+    optimize_svg(rawInput) {
+      const input = OptimizeSvgToolSchema.parse(rawInput);
+      try {
+        let rawSvg = input.svg ?? '';
+        let resolvedInputPath: string | undefined;
+        if (!rawSvg.trim() && input.inputPath) {
+          if (!cwd) {
+            return { ok: false, error: 'Workspace path is unavailable for reading inputPath.' };
+          }
+          resolvedInputPath = resolveInsideWorkspace(cwd, input.inputPath);
+          rawSvg = fs.readFileSync(resolvedInputPath, 'utf8');
+        }
+        if (!rawSvg.trim()) {
+          return { ok: false, error: 'Provide either inline `svg` markup or `inputPath`.' };
+        }
+
+        const opt = optimizeSvgContent(rawSvg);
+        let workspacePath: string | undefined;
+        if (input.outputPath) {
+          if (!cwd) {
+            return { ok: false, error: 'Workspace path is unavailable for writing outputPath.' };
+          }
+          workspacePath = writeWorkspaceFile(cwd, input.outputPath, opt.svg);
+        }
+
+        const label =
+          input.label ||
+          (input.outputPath ? input.outputPath.split(/[\\/]/).pop() : undefined) ||
+          (input.inputPath ? input.inputPath.split(/[\\/]/).pop() : undefined) ||
+          'optimized.svg';
+        const artifact = store.createArtifact(
+          {
+            projectId,
+            kind: 'svg',
+            label,
+            mime: 'image/svg+xml',
+          },
+          Buffer.from(opt.svg, 'utf8'),
+        );
+        const materializedPath = store.materializeArtifact(artifact);
+        store.addActivity({
+          projectId,
+          agentId: actingAgentId,
+          kind: 'tool',
+          label: `Optimized SVG (${opt.originalBytes} -> ${opt.optimizedBytes} B)`,
+          detail: workspacePath ?? materializedPath,
+        });
+
+        return {
+          ok: true,
+          artifactId: artifact.id,
+          path: materializedPath,
+          ...(workspacePath ? { workspacePath } : {}),
+          originalBytes: opt.originalBytes,
+          optimizedBytes: opt.optimizedBytes,
+          viewBox: opt.viewBox,
+          warnings: opt.warnings,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+
+    async generate_image(rawInput, signal) {
+      const input = GenerateImageToolSchema.parse(rawInput);
+      const result = await generateImageWithProvider({
+        prompt: input.prompt,
+        aspectRatio: input.aspectRatio,
+        model: input.model,
+        store,
+        config,
+        signal,
+      });
+      if (!result.ok) {
+        return result;
+      }
+
+      let workspacePath: string | undefined;
+      if (input.outputPath) {
+        if (!cwd) {
+          return {
+            ok: false,
+            reason: 'missing_workspace',
+            hint: 'Workspace directory is unavailable for writing outputPath.',
+          };
+        }
+        workspacePath = writeWorkspaceFile(cwd, input.outputPath, result.bytes);
+      }
+
+      const ext = result.mime.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png';
+      const label =
+        input.label ||
+        (input.outputPath ? input.outputPath.split(/[\\/]/).pop() : undefined) ||
+        `generated.${ext}`;
+      const artifact = store.createArtifact(
+        {
+          projectId,
+          kind: 'image',
+          label,
+          mime: result.mime,
+        },
+        result.bytes,
+      );
+      const materializedPath = store.materializeArtifact(artifact);
+      store.addActivity({
+        projectId,
+        agentId: actingAgentId,
+        kind: 'tool',
+        label: `Generated image via ${result.providerUsed}`,
+        detail: `${result.modelUsed} -> ${workspacePath ?? materializedPath}`,
+      });
+
+      return {
+        ok: true,
+        artifactId: artifact.id,
+        path: materializedPath,
+        ...(workspacePath ? { workspacePath } : {}),
+        mime: result.mime,
+        sizeBytes: result.bytes.length,
+        providerUsed: result.providerUsed,
+        modelUsed: result.modelUsed,
+      };
+    },
   };
 }
 
@@ -699,6 +877,18 @@ export async function createAtelierSdkMcpServer(
           'Run a real Chromium/Edge browser E2E QA check against a local preview URL and attach console, network, and screenshot reports.',
           RunBrowserQaToolSchema.shape,
           async (args) => wrapResult(tools.run_browser_qa(RunBrowserQaToolSchema.parse(args))),
+        ),
+        sdk.tool(
+          'optimize_svg',
+          'Validate and minify SVG markup in-process, returning byte savings, viewBox, and saved artifact path (replaces npx svgo).',
+          OptimizeSvgToolSchema.shape,
+          async (args) => wrapResult(tools.optimize_svg(OptimizeSvgToolSchema.parse(args))),
+        ),
+        sdk.tool(
+          'generate_image',
+          'Generate a raster image natively using configured OpenRouter/OpenAI credentials and save it as an Atelier artifact.',
+          GenerateImageToolSchema.shape,
+          async (args) => wrapResult(await tools.generate_image(GenerateImageToolSchema.parse(args))),
         ),
         ...(extraBrowser
           ? BROWSER_TOOL_DEFS.map((def) =>

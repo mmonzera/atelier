@@ -2,9 +2,11 @@ import type { TurnCallbacks } from './runner.js';
 import {
   CreateAgentToolSchema,
   CreateTaskToolSchema,
+  GenerateImageToolSchema,
   MEMORY_ACTIONS,
   type MemoryAction,
   MessageAgentToolSchema,
+  OptimizeSvgToolSchema,
   RunBrowserQaToolSchema,
   type StudioTools,
   UpdateTaskToolSchema,
@@ -44,6 +46,16 @@ export function applyAtelierActions(
           if (isRecall) recall.push({ tool: toolName, result });
           cb.onTool(`atelier.${toolName}`, { key: obj.key, id: obj.id });
           actionsExecuted += 1;
+        } else if (toolName === 'optimize_svg') {
+          const parsed = OptimizeSvgToolSchema.parse(obj);
+          const result = tools.optimize_svg(parsed);
+          if (recall.length < maxRecall) recall.push({ tool: 'optimize_svg', result });
+          cb.onTool('atelier.optimize_svg', {
+            inputPath: parsed.inputPath,
+            outputPath: parsed.outputPath,
+            ok: result.ok,
+          });
+          actionsExecuted += 1;
         } else if (toolName === 'create_agent') {
           const parsed = CreateAgentToolSchema.parse(obj);
           const { agent } = tools.create_agent(parsed);
@@ -79,4 +91,54 @@ export function applyAtelierActions(
     .trim();
 
   return { cleanText, actionsExecuted, recall };
+}
+
+/**
+ * Executes async visual `<atelier-action>` tags (currently `generate_image`), stripping them
+ * from text and returning results so the harness can continue the turn with the generated file path.
+ */
+export async function applyVisualAtelierActions(
+  rawText: string,
+  tools: StudioTools,
+  cb: Pick<TurnCallbacks, 'onTool'>,
+  signal?: AbortSignal,
+): Promise<{ cleanText: string; results: Array<{ tool: string; result: unknown }> }> {
+  const matches: Array<{ full: string; args: Record<string, unknown> }> = [];
+  rawText.replace(ACTION_TAG_RE, (full, jsonPayload: string) => {
+    try {
+      const obj = JSON.parse(jsonPayload) as Record<string, unknown>;
+      if (obj.tool === 'generate_image') {
+        matches.push({ full, args: obj });
+      }
+    } catch {
+      // ignore malformed block
+    }
+    return full;
+  });
+
+  if (matches.length === 0) {
+    return { cleanText: rawText, results: [] };
+  }
+
+  let cleanText = rawText;
+  const results: Array<{ tool: string; result: unknown }> = [];
+  for (const m of matches.slice(0, 3)) {
+    cleanText = cleanText.replace(m.full, '');
+    try {
+      const parsed = GenerateImageToolSchema.parse(m.args);
+      const res = await tools.generate_image(parsed, signal);
+      cb.onTool('atelier.generate_image', {
+        prompt: parsed.prompt.slice(0, 80),
+        ok: res.ok,
+        artifactId: res.artifactId,
+      });
+      results.push({ tool: 'generate_image', result: res });
+    } catch (err) {
+      results.push({
+        tool: 'generate_image',
+        result: { ok: false, error: err instanceof Error ? err.message : String(err) },
+      });
+    }
+  }
+  return { cleanText: cleanText.replace(/\n{3,}/g, '\n\n').trim(), results };
 }

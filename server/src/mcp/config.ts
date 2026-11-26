@@ -125,8 +125,10 @@ export function buildOpenCodeMcpConfig(
   servers: McpServerConfig[],
   majorVersion = 2,
   platform: NodeJS.Platform = process.platform,
+  opts?: { disabledGlobalNames?: Iterable<string>; allowShell?: boolean },
 ): Record<string, unknown> {
   const entries: Record<string, Record<string, unknown>> = {};
+  const activeNames = new Set(servers.map((s) => s.name));
   for (const s of servers) {
     if (s.transport === 'stdio') {
       const spec = toLaunchSpec(s, platform);
@@ -145,9 +147,37 @@ export function buildOpenCodeMcpConfig(
       };
     }
   }
-  return majorVersion >= 2
-    ? { $schema: 'https://opencode.ai/config.json', mcp: { servers: entries } }
-    : { $schema: 'https://opencode.ai/config.json', mcp: entries };
+  for (const rawName of opts?.disabledGlobalNames ?? []) {
+    const globalName = rawName.trim();
+    if (!globalName || activeNames.has(globalName)) continue;
+    entries[globalName] =
+      majorVersion >= 2
+        ? { type: 'local', command: ['echo'], disabled: true }
+        : { type: 'local', command: ['echo'], enabled: false };
+  }
+
+  const out: Record<string, unknown> = { $schema: 'https://opencode.ai/config.json' };
+  const hasEntries = Object.keys(entries).length > 0;
+
+  if (majorVersion >= 2) {
+    if (hasEntries) out.mcp = { servers: entries };
+    const policies: Array<{ action: string; resource: string; effect: 'deny' }> = [];
+    if (servers.length === 0) {
+      policies.push({ action: 'mcp.use', resource: '*', effect: 'deny' });
+    }
+    if (opts?.allowShell === false) {
+      policies.push({ action: 'tool.use', resource: 'bash', effect: 'deny' });
+    }
+    if (policies.length > 0) {
+      out.policies = policies;
+    }
+  } else {
+    if (hasEntries) out.mcp = entries;
+    if (opts?.allowShell === false) {
+      out.permission = { bash: 'deny' };
+    }
+  }
+  return out;
 }
 
 export function writeOpenCodeConfigFile(

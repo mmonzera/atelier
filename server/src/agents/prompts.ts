@@ -55,6 +55,23 @@ const ATELIER_HARNESS_PROTOCOL = [
   '  <atelier-action>{"tool":"message_agent","targetAgentId":"agt_...","message":"..."}</atelier-action>',
   '- Run automated real-browser E2E QA on the project Preview URL (headless by default; captures console errors, HTTP 4xx/5xx, and screenshots):',
   '  <atelier-action>{"tool":"run_browser_qa","url":"http://127.0.0.1:3000","watchLive":false,"steps":[{"action":"click","selector":"#submit"},{"action":"assertText","selector":"#status","value":"Saved"}]}</atelier-action>',
+  '- Validate & minify an SVG cleanly in-process (NEVER run `npx svgo` or Python SVG scripts):',
+  '  <atelier-action>{"tool":"optimize_svg","inputPath":"logo.svg","outputPath":"logo.min.svg","label":"Primary logo"}</atelier-action>',
+  '- Generate a raster image natively when configured:',
+  '  <atelier-action>{"tool":"generate_image","prompt":"...","aspectRatio":"1:1","outputPath":"assets/hero.png"}</atelier-action>',
+].join('\n');
+
+const EXECUTION_EFFICIENCY_GUIDE = [
+  '',
+  'Execution Speed & Token-Economy Rules (CRITICAL):',
+  '- Every tool step re-sends the full prompt and prior outputs. Call tools ONLY when strictly required and batch independent reads/writes.',
+  '- Complexity tool budgets: 0-2 tool calls for Q&A, specs, or draft `<atelier-design>` options; <=6 calls to finalize 1 picked asset; single-pass write + 1 verification check for page slicing.',
+  '- Fast-Draft-First Visual Exploration (Logos, Icons, Illustrations, UI Directions):',
+  '  * Stage 1 (Concept Exploration): Emit 2-4 distinct options DIRECTLY inside ONE `<atelier-design>` block (`kind="svg"` or `kind="html"`) and wait for the user pick. Atelier already renders live previews in chat.',
+  '  * NEVER write Python/Node generator scripts, launch headless Chrome/Playwright screenshots of drafts, read PNG renders back into context, write `review.md` rubrics, or run `npx svgo` during concept exploration.',
+  '  * Stage 2 (Post-Pick Finalization): Only AFTER the user picks 1 option, write requested files and validate/optimize with `optimize_svg`.',
+  '- Fast Single-Pass Page Slicing: When asked to slice or build a page/component (unless options were asked), inspect target files in 1 batch and write clean production code directly in a single pass. Skip duplicate `<atelier-design>` mockups and screenshot loops unless `run_browser_qa` is explicitly requested.',
+  '- Native Raster Images: Use `generate_image` instead of coding Python/Canvas scripts to fake photos or illustrations.',
 ].join('\n');
 
 /** Pengganti blok Canon di system prompt pada mode selective memory. Teksnya konstan agar prefix cache tetap stabil. */
@@ -282,6 +299,7 @@ export function buildAgentSystemPrompt(
   const parts = [
     // Static (global)
     ATELIER_HARNESS_PROTOCOL,
+    EXECUTION_EFFICIENCY_GUIDE,
     DESIGN_OPTIONS_GUIDE,
     ...(/chief of staff/i.test(agent.role) ? [buildChiefOfStaffCatalog(allConfiguredMcp)] : []),
     // Static (per agent / project)

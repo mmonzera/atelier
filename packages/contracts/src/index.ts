@@ -475,7 +475,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     avatarShape: 'cloud',
     allowShell: false,
     systemInstructions:
-      'Focus on user experience, component hierarchy, layout clarity, copy, and concrete specs ready for builders to implement.',
+      'Focus on user experience, component hierarchy, layout clarity, copy, and concrete specs ready for builders to implement. Present visual directions directly via <atelier-design> options in 0-2 tool calls without shell/screenshot loops.',
     defaultSkillIds: ['skill_ui_design'],
   },
   {
@@ -486,7 +486,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     avatarShape: 'squircle',
     allowShell: true,
     systemInstructions:
-      'Implement tasks cleanly in the linked repository, run tests and typechecks, start local preview servers if needed, and report deliverables clearly.',
+      'Implement tasks cleanly in the linked repository in a single direct pass, run tests and typechecks once, start local preview servers if needed, and report deliverables clearly.',
     defaultSkillIds: ['skill_clean_arch', 'skill_tdd_delivery'],
   },
   {

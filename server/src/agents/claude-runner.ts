@@ -151,6 +151,8 @@ export class ClaudeAgentRunner implements AgentRunner {
       actingAgentId: turn.agent.id,
       enqueue: this.getEnqueue(),
       dataDir: this.config.dataDir,
+      cwd,
+      config: this.config,
       trust: turn.trust,
       channelId: turn.channelId,
       rootMessageId: turn.rootMessageId,
