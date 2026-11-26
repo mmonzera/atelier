@@ -2,6 +2,7 @@ import { BUILT_IN_MODELS, type ModelCatalog, type ModelEntry, type RealProvider,
 import type { AppConfig } from '../config.js';
 import { discoverLocalCodexModels } from './cli-runners.js';
 import { cleanAntigravityEnv, execCliCapture, getOpenCodeCliCapabilities, resolveCliBinary } from './cli-spawn.js';
+import { syncLegacyOpenCodeGoKey } from './provider-auth.js';
 
 const CACHE_MS = 10 * 60 * 1000;
 const cache = new Map<string, { at: number; value: ModelCatalog }>();
@@ -277,6 +278,7 @@ async function fetchOpenCode(settings: Settings): Promise<{ models: ModelEntry[]
   const bin = await resolveCliBinary('opencode', settings.cliPaths?.opencode);
   if (!bin) throw new Error('OpenCode CLI not found. Install it or set its path in Accounts.');
 
+  syncLegacyOpenCodeGoKey();
   const { standaloneArgs } = await getOpenCodeCliCapabilities(bin);
   const [res, custom] = await Promise.all([
     execCliCapture(bin, [...standaloneArgs, 'models'], 20_000),
@@ -292,7 +294,9 @@ async function fetchOpenCode(settings: Settings): Promise<{ models: ModelEntry[]
     if (id.includes('/') && MODEL_ID_RE.test(id)) {
       const label = id.startsWith('opencode-go/')
         ? `OpenCode Go · ${id.slice('opencode-go/'.length)}`
-        : id;
+        : id.startsWith('opencode/')
+          ? `OpenCode · ${id.slice('opencode/'.length)}`
+          : id;
       byId.set(id, { id, label, provider: 'opencode' });
     }
   }
@@ -412,4 +416,17 @@ export async function getModelCatalog(
     cache.set(provider, { at: Date.now(), value });
   }
   return value;
+}
+
+/**
+ * Discovers live OpenCode models (`opencode-go/*`, custom providers, etc.) using the 10-minute
+ * catalog cache so fresh laptops populate chat model pickers automatically.
+ */
+export async function discoverOpenCodeLiveModels(
+  config: AppConfig,
+  settings: Settings,
+): Promise<ModelEntry[]> {
+  const catalog = await getModelCatalog('opencode', config, settings).catch(() => null);
+  if (!catalog || catalog.source !== 'live') return [];
+  return catalog.models;
 }

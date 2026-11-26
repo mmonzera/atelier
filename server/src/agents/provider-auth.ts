@@ -101,6 +101,47 @@ const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
 
 const OPENCODE_EMPTY_AUTH_RE = /no\s+(?:credentials|providers|auth|authenticated\s+integrations|integrations)|0\s+credentials/i;
 
+function getOpenCodeAuthPaths(): string[] {
+  const home = os.homedir();
+  const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+  const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+  return [
+    path.join(home, '.local', 'share', 'opencode', 'auth.json'),
+    path.join(appData, 'opencode', 'auth.json'),
+    path.join(localAppData, 'opencode', 'auth.json'),
+  ];
+}
+
+/**
+ * In OpenCode v1, `opencode` and `opencode-go` are stored as separate keys in `auth.json`.
+ * Mirrors the API key between both entries whenever one exists without the other.
+ */
+export function syncLegacyOpenCodeGoKey(paths: string[] = getOpenCodeAuthPaths()): void {
+  for (const file of paths) {
+    if (!fs.existsSync(file)) continue;
+    try {
+      const raw = fs.readFileSync(file, 'utf8');
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      const oc = parsed.opencode as { type?: unknown; key?: unknown } | undefined;
+      const go = parsed['opencode-go'] as { type?: unknown; key?: unknown } | undefined;
+      let changed = false;
+      if (oc && typeof oc.key === 'string' && oc.key.trim() && !go) {
+        parsed['opencode-go'] = { type: 'api', key: oc.key.trim() };
+        changed = true;
+      } else if (go && typeof go.key === 'string' && go.key.trim() && !oc) {
+        parsed.opencode = { type: 'api', key: go.key.trim() };
+        changed = true;
+      }
+      if (changed) {
+        fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+      }
+    } catch {
+      // ignore malformed auth.json
+    }
+  }
+}
+
 /** Extracts connected integration names from `opencode auth list` output. */
 export function parseOpenCodeAuthList(stdout: string): string[] {
   const clean = stdout.replace(ANSI_ESCAPE_RE, '');
@@ -453,15 +494,8 @@ export class ProviderAuthManager {
   }
 
   private hasOpenCodeAuthFile(): boolean {
-    const home = os.homedir();
-    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
-    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
-    const candidates = [
-      path.join(home, '.local', 'share', 'opencode', 'auth.json'),
-      path.join(appData, 'opencode', 'auth.json'),
-      path.join(localAppData, 'opencode', 'auth.json'),
-    ];
-    for (const file of candidates) {
+    syncLegacyOpenCodeGoKey();
+    for (const file of getOpenCodeAuthPaths()) {
       if (!fs.existsSync(file)) continue;
       try {
         const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
@@ -473,6 +507,98 @@ export class ProviderAuthManager {
       }
     }
     return false;
+  }
+
+  /**
+   * Saves an OpenCode / OpenCode Go API key directly into OpenCode CLI (v2 `auth import` and v1 `auth.json`)
+   * so OpenCode Go models become immediately available without manual terminal setup.
+   */
+  public async saveOpenCodeApiKey(
+    apiKey: string,
+    settings: Settings,
+    store?: AtelierStore,
+    opts?: { legacyAuthPath?: string },
+  ): Promise<ProviderAuthStatus> {
+    const cleanKey = apiKey.trim();
+    if (!cleanKey) {
+      throw new Error('OpenCode API key is required.');
+    }
+    const cliPath = await resolveCliBinary('opencode', settings.cliPaths?.opencode);
+    if (!cliPath) {
+      throw new Error('OpenCode CLI is not installed yet. Click Install CLI first.');
+    }
+
+    const { major, standaloneArgs } = await getOpenCodeCliCapabilities(cliPath);
+    if (major >= 2) {
+      let existingCredId = `cred_atelier_${Date.now().toString(36)}`;
+      try {
+        const exported = await execCliCapture(cliPath, [...standaloneArgs, 'auth', 'export'], 5000);
+        if (exported.exitCode === 0 && exported.stdout.trim()) {
+          const arr = JSON.parse(exported.stdout.replace(/^\uFEFF/, '').trim());
+          if (Array.isArray(arr)) {
+            const match = arr.find(
+              (item) =>
+                item &&
+                typeof item === 'object' &&
+                String((item as Record<string, unknown>).integrationID ?? '').toLowerCase() === 'opencode',
+            ) as Record<string, unknown> | undefined;
+            if (match && typeof match.id === 'string' && match.id.trim()) {
+              existingCredId = match.id.trim();
+            }
+          }
+        }
+      } catch {
+        // ignore auth export failure; fall back to fresh cred id
+      }
+
+      const tmpFile = path.join(os.tmpdir(), `atelier-oc-auth-${Date.now()}.json`);
+      const payload = [
+        {
+          id: existingCredId,
+          integrationID: 'opencode',
+          active: true,
+          value: { type: 'key', key: cleanKey },
+        },
+      ];
+      fs.writeFileSync(tmpFile, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 });
+      try {
+        const imported = await execCliCapture(cliPath, [...standaloneArgs, 'auth', 'import', tmpFile], 8000);
+        if (imported.exitCode !== 0) {
+          const msg = `${imported.stderr}\n${imported.stdout}`.trim();
+          throw new Error(msg || `opencode auth import failed (exit ${imported.exitCode})`);
+        }
+      } finally {
+        fs.rmSync(tmpFile, { force: true });
+      }
+    }
+
+    // Also populate v1 auth.json for OpenCode v1 compatibility
+    const v1AuthPath = opts?.legacyAuthPath ?? getOpenCodeAuthPaths()[0]!;
+    try {
+      fs.mkdirSync(path.dirname(v1AuthPath), { recursive: true });
+      let existing: Record<string, unknown> = {};
+      if (fs.existsSync(v1AuthPath)) {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(v1AuthPath, 'utf8'));
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            existing = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // overwrite malformed file
+        }
+      }
+      existing.opencode = { type: 'api', key: cleanKey };
+      existing['opencode-go'] = { type: 'api', key: cleanKey };
+      fs.writeFileSync(v1AuthPath, `${JSON.stringify(existing, null, 2)}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+    } catch {
+      // ignore if v2 auth import already succeeded
+    }
+
+    invalidateModelCatalog('opencode');
+    return this.getStatus('opencode', settings, store);
   }
 
   private async checkOpenCodeStatus(
@@ -656,6 +782,7 @@ export class ProviderAuthManager {
       if (this.activeLogins.get(provider) === state) {
         this.activeLogins.delete(provider);
       }
+      invalidateModelCatalog(provider);
     });
 
     // Wait briefly so stdout URL has a chance to arrive
@@ -747,6 +874,7 @@ export class ProviderAuthManager {
       } else if (provider === 'openai') {
         await execCliCapture(cliPath, ['logout'], 4000);
       }
+      invalidateModelCatalog(provider);
     }
 
     return this.getStatus(provider, settings, store);

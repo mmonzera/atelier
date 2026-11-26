@@ -1288,6 +1288,7 @@ export function App() {
           settings={state.settings}
           activeProject={activeProject}
           discoveredModels={discoveredModels}
+          onDiscoveredModelsChange={setDiscoveredModels}
           sttDownload={sttDownload}
           appUpdate={appUpdate}
           initialTab={modal.initialTab ?? 'general'}

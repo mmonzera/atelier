@@ -66,9 +66,11 @@ const PROVIDER_ORDER: RealProvider[] = [
 export function ModelsProvidersPanel({
   settings,
   discoveredModels = [],
+  onDiscoveredModelsChange,
 }: {
   settings: Settings;
   discoveredModels?: ModelEntry[];
+  onDiscoveredModelsChange?: (models: ModelEntry[]) => void;
 }) {
   const t = useT();
   const [tab, setTab] = useState<ModalTab>('accounts');
@@ -100,13 +102,14 @@ export function ModelsProvidersPanel({
       setProviders(res.providers);
       if (res.discoveredModels) {
         setLocalDiscovered(res.discoveredModels);
+        onDiscoveredModelsChange?.(res.discoveredModels);
       }
     } catch {
       // ignore transient errors
     } finally {
       setLoadingAuth(false);
     }
-  }, []);
+  }, [onDiscoveredModelsChange]);
 
   useEffect(() => {
     void loadStatuses();
@@ -243,6 +246,9 @@ export function ModelsProvidersPanel({
       setApiKeyDrafts((prev) => ({ ...prev, [provider]: '' }));
       setExpandedApiKey((prev) => ({ ...prev, [provider]: false }));
       toast.success(t('{v0} API key saved', { v0: PROVIDER_SHORT[provider] }));
+      if (provider === 'opencode') {
+        await loadStatuses();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('Failed to save API key'));
     } finally {
@@ -618,6 +624,36 @@ export function ModelsProvidersPanel({
                               <Terminal size={13} strokeWidth={1.5} />
                             </button>
 
+                            {p.provider === 'opencode' && p.cliInstalled && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedApiKey((prev) => ({
+                                    ...prev,
+                                    [p.provider]: !prev[p.provider],
+                                  }))
+                                }
+                                title={t('Enter OpenCode / OpenCode Go API key')}
+                                className="transition-atelier"
+                                style={{
+                                  height: 30,
+                                  padding: '0 10px',
+                                  borderRadius: 'var(--radius-full)',
+                                  background: keyOpen ? 'var(--surface-3)' : 'var(--surface-1)',
+                                  border: `1px solid ${keyOpen ? 'var(--border-default)' : 'var(--border-subtle)'}`,
+                                  color: keyOpen ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                  fontSize: 12,
+                                  fontWeight: 500,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                }}
+                              >
+                                <Key size={12} strokeWidth={1.5} />
+                                {t('API key')}
+                              </button>
+                            )}
+
                             {p.authenticated ? (
                               <>
                                 {p.provider === 'opencode' && (
@@ -747,7 +783,7 @@ export function ModelsProvidersPanel({
                       </a>
                     )}
 
-                    {p.authMode === 'api_key' && keyOpen && (
+                    {(p.authMode === 'api_key' || p.provider === 'opencode') && keyOpen && (
                       <div
                         style={{
                           display: 'flex',
@@ -765,7 +801,11 @@ export function ModelsProvidersPanel({
                               [p.provider]: e.target.value,
                             }))
                           }
-                          placeholder={t('Paste sk-… API key (stored server-side)')}
+                          placeholder={
+                            p.provider === 'opencode'
+                              ? t('Paste OpenCode / OpenCode Go API key')
+                              : t('Paste sk-… API key (stored server-side)')
+                          }
                           className="mono-num"
                           style={{ ...inputStyle, padding: '6px 10px', fontSize: 12 }}
                         />

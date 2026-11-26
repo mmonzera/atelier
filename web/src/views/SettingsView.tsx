@@ -47,6 +47,7 @@ export function SettingsView({
   settings,
   activeProject,
   discoveredModels = [],
+  onDiscoveredModelsChange,
   sttDownload = null,
   appUpdate = null,
   initialTab = 'general',
@@ -56,6 +57,7 @@ export function SettingsView({
   settings: Settings;
   activeProject: Project | null;
   discoveredModels?: ModelEntry[];
+  onDiscoveredModelsChange?: (models: ModelEntry[]) => void;
   sttDownload?: SttDownloadProgressEvent | null;
   appUpdate?: AppUpdateStatus | null;
   initialTab?: SettingsTab;
@@ -282,7 +284,11 @@ export function SettingsView({
         ) : activeTab === 'meeting' ? (
           <MeetingSettingsPanel settings={settings} sttDownload={sttDownload} />
         ) : activeTab === 'providers' ? (
-          <ModelsProvidersPanel settings={settings} discoveredModels={discoveredModels} />
+          <ModelsProvidersPanel
+            settings={settings}
+            discoveredModels={discoveredModels}
+            onDiscoveredModelsChange={onDiscoveredModelsChange}
+          />
         ) : (
           <>
             {appUpdate && (

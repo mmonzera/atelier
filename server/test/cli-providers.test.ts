@@ -23,8 +23,13 @@ import {
   extractOpenCodeDisabledProviders,
   formatOpenCodeModelLabel,
   getModelCatalog,
+  discoverOpenCodeLiveModels,
 } from '../src/agents/model-catalog.js';
-import { ProviderAuthManager, parseOpenCodeAuthList } from '../src/agents/provider-auth.js';
+import {
+  ProviderAuthManager,
+  parseOpenCodeAuthList,
+  syncLegacyOpenCodeGoKey,
+} from '../src/agents/provider-auth.js';
 import { AgentRuntime } from '../src/agents/runtime.js';
 import { loadConfig } from '../src/config.js';
 import { AtelierDb } from '../src/db.js';
@@ -721,5 +726,78 @@ describe('OpenCode custom provider discovery and auth parsing', () => {
     } finally {
       await runtime.shutdown();
     }
+  });
+
+  it('auto-discovers opencode-go models, imports OpenCode API keys via v2 CLI, and mirrors legacy auth.json', async () => {
+    const { dir, config, store } = makeFixture();
+    const authJson = path.join(dir, 'legacy-auth.json');
+    fs.writeFileSync(authJson, JSON.stringify({ opencode: { type: 'api', key: 'oc-legacy-key' } }), 'utf8');
+    syncLegacyOpenCodeGoKey([authJson]);
+    const synced = JSON.parse(fs.readFileSync(authJson, 'utf8')) as Record<string, { type: string; key: string }>;
+    expect(synced['opencode-go']).toEqual({ type: 'api', key: 'oc-legacy-key' });
+
+    const importedDump = path.join(dir, 'imported-auth.json');
+    const { binPath } = createFakeCli(
+      dir,
+      'opencode',
+      `
+      const fs = require('node:fs');
+      const args = process.argv.slice(2).filter((a) => a !== '--standalone');
+      if (args[0] === '--version') {
+        console.log('2.4.2');
+        process.exit(0);
+      }
+      if (args[0] === 'auth' && args[1] === 'export') {
+        console.log('[]');
+        process.exit(0);
+      }
+      if (args[0] === 'auth' && args[1] === 'import' && args[2]) {
+        fs.copyFileSync(args[2], ${JSON.stringify(importedDump)});
+        process.exit(0);
+      }
+      if (args[0] === 'auth' && args[1] === 'list') {
+        if (fs.existsSync(${JSON.stringify(importedDump)})) {
+          console.log('OpenCode  OpenCode  stored');
+        }
+        process.exit(0);
+      }
+      if (args[0] === 'models') {
+        console.log('opencode/big-pickle');
+        console.log('opencode-go/grok-4.7');
+        console.log('opencode-go/glm-5.3-flash');
+        process.exit(0);
+      }
+      if (args[0] === 'debug' && args[1] === 'config') {
+        console.log('[]');
+        process.exit(0);
+      }
+      `,
+    );
+
+    store.updateSettings({ cliPaths: { opencode: binPath } });
+    const v1AuthDump = path.join(dir, 'v1-auth.json');
+    const authManager = new ProviderAuthManager();
+    const status = await authManager.saveOpenCodeApiKey('oc-go-secret-key', store.getSettings(), store, {
+      legacyAuthPath: v1AuthDump,
+    });
+    expect(status.cliInstalled).toBe(true);
+    expect(status.authenticated).toBe(true);
+    expect(JSON.parse(fs.readFileSync(v1AuthDump, 'utf8'))).toMatchObject({
+      opencode: { type: 'api', key: 'oc-go-secret-key' },
+      'opencode-go': { type: 'api', key: 'oc-go-secret-key' },
+    });
+    const savedPayload = JSON.parse(fs.readFileSync(importedDump, 'utf8')) as Array<{
+      integrationID: string;
+      value: { type: string; key: string };
+    }>;
+    expect(savedPayload[0]?.integrationID).toBe('opencode');
+    expect(savedPayload[0]?.value).toEqual({ type: 'key', key: 'oc-go-secret-key' });
+
+    const discovered = await discoverOpenCodeLiveModels(config, store.getSettings());
+    const grok = discovered.find((m) => m.id === 'opencode-go/grok-4.7');
+    const glm = discovered.find((m) => m.id === 'opencode-go/glm-5.3-flash');
+    expect(grok?.label).toBe('OpenCode Go · grok-4.7');
+    expect(glm?.label).toBe('OpenCode Go · glm-5.3-flash');
+    authManager.shutdown();
   });
 });

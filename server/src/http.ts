@@ -17,7 +17,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { CliInstallError, CliInstaller } from './agents/cli-installer.js';
 import { discoverLocalCodexModels } from './agents/cli-runners.js';
-import { getModelCatalog } from './agents/model-catalog.js';
+import { discoverOpenCodeLiveModels, getModelCatalog } from './agents/model-catalog.js';
 import { ProviderAuthManager } from './agents/provider-auth.js';
 import type { AgentRuntime } from './agents/runtime.js';
 import { AppUpdateBridge } from './app-update.js';
@@ -1578,10 +1578,15 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
 
   // Multi-provider OAuth login, API keys & CLI status
   api.get('/providers/status', async (c) => {
+    const settings = store.getSettings();
     const [rawProviders, codexModels] = await Promise.all([
-      authManager.getStatuses(store.getSettings(), store),
+      authManager.getStatuses(settings, store),
       Promise.resolve(discoverLocalCodexModels()),
     ]);
+    const openCodeStatus = rawProviders.find((p) => p.provider === 'opencode');
+    const openCodeModels = openCodeStatus?.cliInstalled
+      ? await discoverOpenCodeLiveModels(config, settings).catch(() => [])
+      : [];
     const providers = rawProviders.map((p) => {
       const active = cliInstaller.getActiveInstall(p.provider);
       return active
@@ -1590,7 +1595,11 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
     });
     return c.json({
       providers,
-      discoveredModels: [...codexModels, ...authManager.getDiscoveredAntigravityModels()],
+      discoveredModels: [
+        ...codexModels,
+        ...authManager.getDiscoveredAntigravityModels(),
+        ...openCodeModels,
+      ],
     });
   });
 
@@ -1646,13 +1655,28 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
     if (!parsed.success) {
       return c.json(apiError('invalid_provider', 'Unsupported provider.'), 400);
     }
-    if (parsed.data !== 'deepseek' && parsed.data !== 'openrouter') {
+    if (parsed.data !== 'deepseek' && parsed.data !== 'openrouter' && parsed.data !== 'opencode') {
       return c.json(apiError('unsupported_api_key', 'This provider uses CLI/OAuth login.'), 400);
     }
     const body = await c.req.json().catch(() => null);
     const keyParsed = z.object({ apiKey: z.string().trim().min(1).max(400) }).safeParse(body);
     if (!keyParsed.success) {
       return c.json(apiError('invalid_api_key', 'A valid API key is required.'), 400);
+    }
+    if (parsed.data === 'opencode') {
+      try {
+        const status = await authManager.saveOpenCodeApiKey(
+          keyParsed.data.apiKey,
+          store.getSettings(),
+          store,
+        );
+        return c.json({ status });
+      } catch (err) {
+        return c.json(
+          apiError('opencode_auth_failed', err instanceof Error ? err.message : 'Failed to save OpenCode API key.'),
+          400,
+        );
+      }
     }
     store.setProviderSecret(parsed.data, keyParsed.data.apiKey);
     const status = await authManager.getStatus(parsed.data, store.getSettings(), store);

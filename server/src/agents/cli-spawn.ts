@@ -27,14 +27,30 @@ function getCandidatePaths(provider: RealProvider): string[] {
           path.join(appData, 'npm', 'codex.exe'),
           path.join(home, '.local', 'bin', 'codex.exe'),
           path.join(appData, 'npm', 'codex.cmd'),
+          'C:\\Program Files\\nodejs\\codex.cmd',
+          path.join(home, '.bun', 'bin', 'codex.exe'),
+          path.join(localAppData, 'pnpm', 'codex.cmd'),
         ];
       case 'opencode':
         return [
           path.join(appData, 'Atelier', 'data', 'cli', 'opencode', 'package', 'bin', 'opencode.exe'),
           path.join(home, '.opencode', 'bin', 'opencode.exe'),
           path.join(localAppData, 'opencode', 'opencode.exe'),
+          path.join(localAppData, 'Programs', 'opencode', 'opencode.exe'),
           path.join(appData, 'npm', 'opencode.cmd'),
           path.join(appData, 'npm', 'opencode.exe'),
+          path.join(appData, 'npm', 'opencode2.cmd'),
+          path.join(appData, 'npm', 'opencode2.exe'),
+          'C:\\Program Files\\nodejs\\opencode.cmd',
+          'C:\\Program Files\\nodejs\\opencode.exe',
+          path.join(home, '.bun', 'bin', 'opencode.exe'),
+          path.join(home, '.bun', 'bin', 'opencode.cmd'),
+          path.join(localAppData, 'pnpm', 'opencode.cmd'),
+          path.join(localAppData, 'pnpm', 'opencode.exe'),
+          path.join(localAppData, 'Microsoft', 'WinGet', 'Links', 'opencode.exe'),
+          path.join(localAppData, 'Volta', 'bin', 'opencode.exe'),
+          path.join(localAppData, 'Volta', 'bin', 'opencode.cmd'),
+          'C:\\ProgramData\\chocolatey\\bin\\opencode.exe',
           path.join(home, '.local', 'bin', 'opencode.exe'),
           path.join(home, 'scoop', 'shims', 'opencode.exe'),
         ];
@@ -120,7 +136,9 @@ export async function resolveCliBinary(
     openai: process.platform === 'win32' ? ['codex.exe', 'codex.cmd', 'codex'] : ['codex'],
     antigravity: process.platform === 'win32' ? ['agy.exe', 'agy.cmd', 'agy'] : ['agy'],
     opencode:
-      process.platform === 'win32' ? ['opencode.exe', 'opencode.cmd', 'opencode'] : ['opencode'],
+      process.platform === 'win32'
+        ? ['opencode.exe', 'opencode.cmd', 'opencode', 'opencode2.exe', 'opencode2.cmd']
+        : ['opencode', 'opencode2'],
     deepseek: [],
     openrouter: [],
   };
