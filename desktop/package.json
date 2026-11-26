@@ -1,6 +1,6 @@
 {
   "name": "@atelier/desktop",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Atelier Windows desktop shell (Tauri + Node sidecar)",
   "type": "module",
