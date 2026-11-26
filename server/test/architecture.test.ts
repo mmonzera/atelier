@@ -556,8 +556,7 @@ describe('HTTP + WebSocket integration (end-to-end custom agents, skills & Linea
       expect(putData.settings.provider).toBe('openai');
       expect(putData.settings.model).toBe('gpt-5');
       expect(putData.settings.customModels[0].id).toBe('gpt-5-custom');
-      // Antigravity is API-key only now; a CLI path for it is dropped.
-      expect(putData.settings.cliPaths.antigravity).toBeUndefined();
+      expect(putData.settings.cliPaths.antigravity).toBe('C:\\custom\\agy.cmd');
       expect(putData.settings.cliPaths.opencode).toBe('C:\\custom\\opencode.exe');
 
       // Chief of Staff onboarding creates CoS agent with greeting and completes onboarding

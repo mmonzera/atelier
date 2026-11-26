@@ -668,3 +668,14 @@ button:disabled {
   background: rgba(255, 255, 255, 0.09) !important;
   color: var(--text-primary) !important;
 }
+
+.composer-form {
+  transition:
+    border-color 160ms var(--ease-atelier),
+    box-shadow 160ms var(--ease-atelier),
+    border-radius 160ms var(--ease-atelier);
+}
+.composer-form:focus-within {
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  box-shadow: 0 8px 28px -12px rgba(0, 0, 0, 0.65);
+}

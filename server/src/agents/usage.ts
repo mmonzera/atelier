@@ -132,7 +132,7 @@ function getPricingRate(provider: ModelProvider, model: string): PricingRate {
       }
       return { inputPerMillion: 2.5, outputPerMillion: 10 };
     case 'antigravity':
-      if (m.includes('flash')) {
+      if (m.includes('hydrogen') || m.includes('flash')) {
         return { inputPerMillion: 0.15, outputPerMillion: 0.6 };
       }
       return { inputPerMillion: 1.25, outputPerMillion: 5 };

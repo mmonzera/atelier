@@ -31,7 +31,7 @@ import {
   Square,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { shownModels } from '../state/models';
 import { api } from '../api';
 import { useMcpOAuth } from '../state/useMcpOAuth';
@@ -240,12 +240,38 @@ export function FloatingComposer({
   const [providerTab, setProviderTab] = useState<string>(agent?.providerOverride ?? settings.provider);
   const plusRef = useRef<HTMLDivElement | null>(null);
   const effortRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pending, setPending] = useState<PendingUpload[]>([]);
   const [dragging, setDragging] = useState(false);
   const [pickedSkills, setPickedSkills] = useState<AgentSkill[]>([]);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [wrapped, setWrapped] = useState(false);
+
+  const hasNewline = draftText.includes('\n');
+  const isExpanded = hasNewline || wrapped || pending.length > 0;
+
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    if (!draftText) {
+      if (wrapped) setWrapped(false);
+      el.style.height = '22px';
+      el.style.overflowY = 'hidden';
+      return;
+    }
+    el.style.height = '0px';
+    const sh = el.scrollHeight;
+    if (!wrapped && sh > 30) {
+      setWrapped(true);
+    } else if (wrapped && !draftText.includes('\n') && draftText.length < 50 && sh <= 30) {
+      setWrapped(false);
+    }
+    const maxH = 260;
+    const nextH = isExpanded ? Math.min(maxH, Math.max(44, sh)) : 22;
+    el.style.height = `${nextH}px`;
+    el.style.overflowY = sh > maxH ? 'auto' : 'hidden';
+  }, [draftText, isExpanded, wrapped]);
 
   // Skills picked for one agent must not leak into a message to another.
   useEffect(() => setPickedSkills([]), [agent?.id]);
@@ -558,7 +584,6 @@ export function FloatingComposer({
         void addFiles(Array.from(e.dataTransfer.files));
       }}
     >
-      <PendingAttachments items={pending} onRemove={removePending} />
       {pickedSkills.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 6px 6px' }}>
           {pickedSkills.map((skill) => (
@@ -702,15 +727,23 @@ export function FloatingComposer({
       )}
       <form
         onSubmit={handleSubmit}
+        className="composer-form"
         style={{
-          height: 52,
-          borderRadius: 'var(--radius-full)',
+          minHeight: 52,
+          borderRadius: isExpanded ? 22 : 26,
           background: 'var(--surface-1)',
           border: dragging ? '1px dashed var(--text-secondary)' : '1px solid var(--border-subtle)',
-          padding: '4px 4px 4px 12px',
-          display: 'flex',
+          padding: isExpanded ? '10px 8px 8px 12px' : '4px 4px 4px 12px',
+          display: 'grid',
+          gridTemplateColumns: isExpanded ? 'auto minmax(0, 1fr)' : 'auto auto minmax(0, 1fr) auto',
+          gridTemplateAreas: isExpanded
+            ? pending.length > 0
+              ? '"attachments attachments" "input input" "plus actions"'
+              : '"input input" "plus actions"'
+            : '"plus sep input actions"',
           alignItems: 'center',
-          gap: 10,
+          columnGap: isExpanded ? 0 : 10,
+          rowGap: isExpanded ? 6 : 0,
           position: 'relative',
         }}
       >
@@ -721,7 +754,7 @@ export function FloatingComposer({
             className="popover-shadow"
             style={{
               position: 'absolute',
-              bottom: 58,
+              bottom: 'calc(100% + 8px)',
               left: 0,
               right: 0,
               maxHeight: 260,
@@ -794,7 +827,7 @@ export function FloatingComposer({
             className="popover-shadow"
             style={{
               position: 'absolute',
-              bottom: 58,
+              bottom: 'calc(100% + 8px)',
               left: 0,
               right: 0,
               maxHeight: 280,
@@ -989,7 +1022,13 @@ export function FloatingComposer({
           </div>
         )}
 
-        <div ref={plusRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        {pending.length > 0 && (
+          <div style={{ gridArea: 'attachments', minWidth: 0 }}>
+            <PendingAttachments items={pending} onRemove={removePending} inline />
+          </div>
+        )}
+
+        <div ref={plusRef} style={{ gridArea: 'plus', position: 'relative', display: 'flex', alignItems: 'center' }}>
           <button
             type="button"
             disabled={!agent && !project}
@@ -1139,18 +1178,21 @@ export function FloatingComposer({
           )}
         </div>
 
-        <div
-          style={{
-            width: 1,
-            height: 18,
-            background: 'var(--border-subtle)',
-            flexShrink: 0,
-          }}
-        />
+        {!isExpanded && (
+          <div
+            style={{
+              gridArea: 'sep',
+              width: 1,
+              height: 18,
+              background: 'var(--border-subtle)',
+              flexShrink: 0,
+            }}
+          />
+        )}
 
-        <input
+        <textarea
           ref={inputRef}
-          type="text"
+          rows={1}
           value={draftText}
           disabled={!agent}
           onChange={(e) => {
@@ -1176,23 +1218,30 @@ export function FloatingComposer({
               }
               return;
             }
-            if (!slashOpen) return;
-            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-              if (slashOptions.length === 0) return;
+            if (slashOpen) {
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                if (slashOptions.length === 0) return;
+                e.preventDefault();
+                const step = e.key === 'ArrowDown' ? 1 : -1;
+                setSlashIndex((activeSlashIndex + step + slashOptions.length) % slashOptions.length);
+              } else if ((e.key === 'Enter' || e.key === 'Tab') && slashOptions.length > 0) {
+                e.preventDefault();
+                pickSkill(slashOptions[activeSlashIndex]!);
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                onChangeDraft('');
+              }
+              return;
+            }
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              const step = e.key === 'ArrowDown' ? 1 : -1;
-              setSlashIndex((activeSlashIndex + step + slashOptions.length) % slashOptions.length);
-            } else if ((e.key === 'Enter' || e.key === 'Tab') && slashOptions.length > 0) {
-              e.preventDefault();
-              pickSkill(slashOptions[activeSlashIndex]!);
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              onChangeDraft('');
+              if (canSubmit) void handleSubmit();
             }
           }}
           onPaste={(e) => {
             const files = Array.from(e.clipboardData?.files ?? []);
-            if (files.length > 0) {
+            const text = e.clipboardData?.getData('text/plain') ?? '';
+            if (files.length > 0 && !text.trim()) {
               e.preventDefault();
               void addFiles(files);
             }
@@ -1212,94 +1261,111 @@ export function FloatingComposer({
               : t('Create or select an agent to start...')
           }
           style={{
-            flex: 1,
+            gridArea: 'input',
+            width: '100%',
             minWidth: 0,
+            resize: 'none',
             background: 'transparent',
             border: 'none',
             outline: 'none',
-            fontSize: 13.5,
-            lineHeight: '20px',
+            boxShadow: 'none',
+            padding: isExpanded ? '2px 4px 4px 2px' : 0,
+            fontSize: 14,
+            lineHeight: '22px',
             color: 'var(--text-primary)',
+            height: 22,
+            maxHeight: 260,
+            overflowY: 'hidden',
           }}
         />
 
-        {agent && agent.queueLength > 0 && (
-          <span
-            className="mono-num"
-            style={{
-              fontSize: 11,
-              color: 'var(--agent-amber)',
-              padding: '2px 7px',
-              borderRadius: 'var(--radius-full)',
-              background: 'var(--surface-2)',
-              border: '1px solid var(--border-subtle)',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {agent.queueLength}{t('queued')}
-          </span>
-        )}
-
-        <button
-          type="button"
-          onClick={() => inputRef.current?.focus()}
-          title={t('Focus input')}
+        <div
           style={{
-            width: 28,
-            height: 28,
-            borderRadius: 'var(--radius-full)',
+            gridArea: 'actions',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--text-secondary)',
-            flexShrink: 0,
+            justifyContent: 'flex-end',
+            gap: 6,
           }}
         >
-          <Mic size={16} strokeWidth={1.5} />
-        </button>
+          {agent && agent.queueLength > 0 && (
+            <span
+              className="mono-num"
+              style={{
+                fontSize: 11,
+                color: 'var(--agent-amber)',
+                padding: '2px 7px',
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border-subtle)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {agent.queueLength}{t('queued')}
+            </span>
+          )}
 
-        {isWorking && !draftText.trim() ? (
           <button
             type="button"
-            onClick={() => void onStop()}
-            title={t('Stop active agent')}
-            className="transition-atelier"
+            onClick={() => inputRef.current?.focus()}
+            title={t('Focus input')}
             style={{
-              width: 44,
-              height: 44,
+              width: 28,
+              height: 28,
               borderRadius: 'var(--radius-full)',
-              background: 'var(--action-primary)',
-              color: 'var(--action-primary-fg)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              color: 'var(--text-secondary)',
               flexShrink: 0,
             }}
           >
-            <Square size={14} strokeWidth={1.5} fill="var(--action-primary-fg)" />
+            <Mic size={16} strokeWidth={1.5} />
           </button>
-        ) : (
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            title={isWorking ? t('Queue message (FIFO)') : t('Send message')}
-            className="transition-atelier"
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 'var(--radius-full)',
-              background: canSubmit ? 'var(--action-primary)' : 'var(--surface-3)',
-              color: canSubmit ? 'var(--action-primary-fg)' : 'var(--text-muted)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              cursor: canSubmit ? 'pointer' : 'default',
-            }}
-          >
-            <ArrowUp size={17} strokeWidth={1.75} />
-          </button>
-        )}
+
+          {isWorking && !draftText.trim() ? (
+            <button
+              type="button"
+              onClick={() => void onStop()}
+              title={t('Stop active agent')}
+              className="transition-atelier"
+              style={{
+                width: isExpanded ? 40 : 42,
+                height: isExpanded ? 40 : 42,
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--action-primary)',
+                color: 'var(--action-primary-fg)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <Square size={14} strokeWidth={1.5} fill="var(--action-primary-fg)" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              title={isWorking ? t('Queue message (FIFO)') : t('Send message')}
+              className="transition-atelier"
+              style={{
+                width: isExpanded ? 40 : 42,
+                height: isExpanded ? 40 : 42,
+                borderRadius: 'var(--radius-full)',
+                background: canSubmit ? 'var(--action-primary)' : 'var(--surface-3)',
+                color: canSubmit ? 'var(--action-primary-fg)' : 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                cursor: canSubmit ? 'pointer' : 'default',
+              }}
+            >
+              <ArrowUp size={17} strokeWidth={1.75} />
+            </button>
+          )}
+        </div>
       </form>
 
       <div

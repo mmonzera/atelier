@@ -273,7 +273,12 @@ export class AtelierStore {
         raw.providerOverride === 'openrouter'
           ? raw.providerOverride
           : null,
-      modelOverride: typeof raw.modelOverride === 'string' ? raw.modelOverride : null,
+      modelOverride:
+        typeof raw.modelOverride === 'string'
+          ? raw.providerOverride === 'antigravity'
+            ? this.migrateLegacyModel('antigravity', raw.modelOverride)
+            : raw.modelOverride
+          : null,
       fallbackChain: Array.isArray(raw.fallbackChain) ? (raw.fallbackChain as ModelRef[]) : [],
       pendingFallback:
         raw.pendingFallback && typeof raw.pendingFallback === 'object'
@@ -431,18 +436,36 @@ export class AtelierStore {
   }
 
   private migrateLegacyModel(provider: Settings['provider'], model?: string): string {
-    const legacyToModern: Record<string, string> = {
-      'claude-sonnet-4-20250514': 'sonnet',
-      'claude-sonnet-4-6': 'sonnet',
-      'claude-opus-4-6': 'opus',
-      'gpt-5.3-codex': 'gpt-6.2-astra',
-      'gpt-5.2': 'gpt-6.2-sol',
-      o3: 'gpt-6.1-terra',
-    };
-    if (model && legacyToModern[model]) return legacyToModern[model];
+    if (provider === 'claude') {
+      const claudeLegacy: Record<string, string> = {
+        'claude-sonnet-4-20250514': 'sonnet',
+        'claude-sonnet-4-6': 'sonnet',
+        'claude-opus-4-6': 'opus',
+      };
+      if (model && claudeLegacy[model]) return claudeLegacy[model];
+    } else if (provider === 'openai') {
+      const openAiLegacy: Record<string, string> = {
+        'gpt-5.3-codex': 'gpt-6.2-astra',
+        'gpt-5.2': 'gpt-6.2-sol',
+        o3: 'gpt-6.1-terra',
+      };
+      if (model && openAiLegacy[model]) return openAiLegacy[model];
+    } else if (provider === 'antigravity') {
+      const agyLegacy: Record<string, string> = {
+        'gemini-3.5-flash': 'gemini-3.8-flash-high',
+        'gemini-3.5-flash-lite': 'gemini-3.8-flash-low',
+        'gemini-2.5-flash': 'gemini-3.8-flash-high',
+        'gemini-2.5-pro': 'gemini-4-neon-high',
+        'gemini-4-neon': 'gemini-4-neon-high',
+        'gemini-4-carbon': 'gemini-4-carbon-medium',
+        'gemini-4-hydrogen': 'gemini-4-hydrogen-high',
+        'gemini-4-argon': 'gemini-4-argon-medium',
+      };
+      if (model && agyLegacy[model]) return agyLegacy[model];
+    }
     if (model) return model;
     if (provider === 'openai') return 'gpt-6.2-astra';
-    if (provider === 'antigravity') return 'gemini-3.5-flash';
+    if (provider === 'antigravity') return 'gemini-3.8-flash-high';
     if (provider === 'deepseek') return 'deepseek-chat';
     if (provider === 'opencode') return 'opencode/big-pickle';
     if (provider === 'openrouter') return 'openrouter/auto';
@@ -599,8 +622,7 @@ export class AtelierStore {
       customModels: parsed.customModels ?? [],
       visibleModels: this.normalizeVisibleModels(parsed.visibleModels),
       language: parsed.language === 'en' || parsed.language === 'id' ? parsed.language : undefined,
-      // Antigravity runs on the Gemini API key only; drop any old agy CLI path.
-      cliPaths: (({ antigravity: _agy, ...rest }) => rest)(parsed.cliPaths ?? {}),
+      cliPaths: parsed.cliPaths ?? {},
       mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [],
       onboardingCompleted:
         typeof parsed.onboardingCompleted === 'boolean' ? parsed.onboardingCompleted : false,
@@ -641,7 +663,15 @@ export class AtelierStore {
     const out: NonNullable<Settings['visibleModels']> = {};
     for (const p of providers) {
       const list = (raw as Record<string, unknown>)[p];
-      if (Array.isArray(list)) out[p] = [...new Set(list.map(String))];
+      if (Array.isArray(list)) {
+        out[p] = [
+          ...new Set(
+            list.map((id) =>
+              p === 'antigravity' ? this.migrateLegacyModel('antigravity', String(id)) : String(id),
+            ),
+          ),
+        ];
+      }
     }
     return out;
   }

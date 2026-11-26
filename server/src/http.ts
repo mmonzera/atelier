@@ -1165,6 +1165,7 @@ export function createHttpRouter(deps: {
           .object({
             claude: z.string().optional(),
             openai: z.string().optional(),
+            antigravity: z.string().optional(),
             opencode: z.string().optional(),
           })
           .optional(),
@@ -1559,11 +1560,14 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
 
   // Multi-provider OAuth login, API keys & CLI status
   api.get('/providers/status', async (c) => {
-    const [providers, discoveredModels] = await Promise.all([
+    const [providers, codexModels] = await Promise.all([
       authManager.getStatuses(store.getSettings(), store),
       Promise.resolve(discoverLocalCodexModels()),
     ]);
-    return c.json({ providers, discoveredModels });
+    return c.json({
+      providers,
+      discoveredModels: [...codexModels, ...authManager.getDiscoveredAntigravityModels()],
+    });
   });
 
   // Every model a provider offers (live where the provider has a list), for the model picker settings
@@ -1573,7 +1577,7 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
       return c.json(apiError('invalid_provider', 'Unsupported provider.'), 400);
     }
     const refresh = c.req.query('refresh') === '1';
-    return c.json(await getModelCatalog(parsed.data, config, store.getSettings(), refresh, store.getProviderSecret('antigravity') || config.geminiApiKey || undefined));
+    return c.json(await getModelCatalog(parsed.data, config, store.getSettings(), refresh));
   });
 
   api.post('/providers/:provider/login', async (c) => {
@@ -1599,7 +1603,7 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
     if (!parsed.success) {
       return c.json(apiError('invalid_provider', 'Unsupported provider.'), 400);
     }
-    if (parsed.data !== 'deepseek' && parsed.data !== 'openrouter' && parsed.data !== 'antigravity') {
+    if (parsed.data !== 'deepseek' && parsed.data !== 'openrouter') {
       return c.json(apiError('unsupported_api_key', 'This provider uses CLI/OAuth login.'), 400);
     }
     const body = await c.req.json().catch(() => null);

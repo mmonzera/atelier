@@ -36,6 +36,14 @@ function getCandidatePaths(provider: RealProvider): string[] {
           path.join(home, 'scoop', 'shims', 'opencode.exe'),
         ];
       case 'antigravity':
+        return [
+          path.join(localAppData, 'agy', 'bin', 'agy.exe'),
+          path.join(localAppData, 'Programs', 'antigravity', 'bin', 'agy.exe'),
+          path.join(home, '.local', 'bin', 'agy.exe'),
+          path.join(localAppData, 'agy', 'bin', 'agy.cmd'),
+          path.join(appData, 'npm', 'agy.cmd'),
+          path.join(localAppData, 'Programs', 'antigravity', 'bin', 'agy.cmd'),
+        ];
       case 'deepseek':
       case 'openrouter':
         return [];
@@ -45,7 +53,7 @@ function getCandidatePaths(provider: RealProvider): string[] {
   const binNames: Record<RealProvider, string[]> = {
     claude: ['claude'],
     openai: ['codex'],
-    antigravity: [],
+    antigravity: ['agy'],
     opencode: ['opencode'],
     deepseek: [],
     openrouter: [],
@@ -87,7 +95,7 @@ export async function resolveCliBinary(
   provider: RealProvider,
   customPath?: string,
 ): Promise<string | null> {
-  if (provider === 'antigravity' || provider === 'deepseek' || provider === 'openrouter') {
+  if (provider === 'deepseek' || provider === 'openrouter') {
     return null;
   }
   if (customPath && customPath.trim()) {
@@ -107,7 +115,7 @@ export async function resolveCliBinary(
   const pathNames: Record<RealProvider, string[]> = {
     claude: process.platform === 'win32' ? ['claude.exe', 'claude.cmd', 'claude'] : ['claude'],
     openai: process.platform === 'win32' ? ['codex.exe', 'codex.cmd', 'codex'] : ['codex'],
-    antigravity: [],
+    antigravity: process.platform === 'win32' ? ['agy.exe', 'agy.cmd', 'agy'] : ['agy'],
     opencode:
       process.platform === 'win32' ? ['opencode.exe', 'opencode.cmd', 'opencode'] : ['opencode'],
     deepseek: [],
@@ -183,6 +191,34 @@ export function buildWindowsCmdCommand(binPath: string, args: string[]): string 
   return `"${inner}"`;
 }
 
+/** Returns a clean environment for `agy` CLI so it uses OAuth keyring rather than Gemini API keys. */
+export function cleanAntigravityEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
+  };
+  delete env.GEMINI_API_KEY;
+  delete env.GOOGLE_API_KEY;
+  return env;
+}
+
+/** Terminates a spawned process and its child tree cleanly on Windows and Unix. */
+export function killProcessTree(child: ChildProcess): void {
+  if (!child.pid) return;
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+  } else {
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // ignore already-exited process
+    }
+  }
+}
+
 export function spawnCli(
   binPath: string,
   args: string[],
@@ -220,17 +256,7 @@ export function spawnCli(
         });
 
   if (opts.signal) {
-    const killTree = () => {
-      if (!child.pid) return;
-      if (process.platform === 'win32') {
-        spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-          stdio: 'ignore',
-          windowsHide: true,
-        });
-      } else {
-        child.kill('SIGTERM');
-      }
-    };
+    const killTree = () => killProcessTree(child);
     if (opts.signal.aborted) {
       killTree();
     } else {
@@ -246,12 +272,14 @@ export async function execCliCapture(
   binPath: string,
   args: string[],
   timeoutMs = 4000,
+  env?: NodeJS.ProcessEnv,
 ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     const child = spawnCli(binPath, args, {
+      env,
       stdin: 'ignore',
       signal: controller.signal,
     });

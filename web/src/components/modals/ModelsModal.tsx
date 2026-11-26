@@ -46,7 +46,7 @@ const PROVIDER_SHORT: Record<RealProvider, string> = {
 const MODEL_PLACEHOLDER: Record<RealProvider, { id: string; label: string }> = {
   claude: { id: 'e.g. sonnet', label: 'e.g. Claude Sonnet 5.5' },
   openai: { id: 'e.g. gpt-6.2-astra', label: 'e.g. GPT-6.2 Astra' },
-  antigravity: { id: 'e.g. gemini-3.5-flash', label: 'e.g. Gemini 3.5 Flash' },
+  antigravity: { id: 'e.g. gemini-3.8-flash-high', label: 'e.g. Gemini 3.8 Flash (High)' },
   deepseek: { id: 'e.g. deepseek-reasoner', label: 'e.g. DeepSeek R1' },
   opencode: { id: 'e.g. opencode/big-pickle', label: 'e.g. OpenCode Big Pickle' },
   openrouter: { id: 'e.g. anthropic/claude-sonnet-4.5', label: 'e.g. OpenRouter · Claude Sonnet' },
@@ -166,6 +166,9 @@ export function ModelsProvidersPanel({
     try {
       const res = await api.logoutProvider(provider);
       setProviders((prev) => prev.map((p) => (p.provider === provider ? res.status : p)));
+      if (!res.status.authenticated && !res.status.loginInProgress) {
+        toast.info(t('Signed out of {v0}', { v0: PROVIDER_SHORT[provider] }));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('Failed to sign out'));
     } finally {
@@ -593,7 +596,7 @@ export function ModelsProvidersPanel({
                                 )}
                                 <button
                                   type="button"
-                                  disabled={isBusy}
+                                  disabled={isBusy || p.loginInProgress}
                                   onClick={() => void handleLogout(p.provider)}
                                   className="transition-atelier"
                                   style={{
@@ -607,9 +610,11 @@ export function ModelsProvidersPanel({
                                     display: 'inline-flex',
                                     alignItems: 'center',
                                     gap: 5,
+                                    opacity: isBusy || p.loginInProgress ? 0.65 : 1,
                                   }}
                                 >
-                                  <LogOut size={12} strokeWidth={1.5} />{t('Sign out')}
+                                  <LogOut size={12} strokeWidth={1.5} />
+                                  {p.loginInProgress ? t('Signing out…') : t('Sign out')}
                                 </button>
                               </>
                             ) : (

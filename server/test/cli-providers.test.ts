@@ -7,6 +7,9 @@ import type { Agent, Project } from '@atelier/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CliAgentRunner,
+  buildAntigravityCliInvocation,
+  normalizeAntigravityModel,
+  parseAntigravityStreamLine,
 } from '../src/agents/cli-runners.js';
 import {
   buildWindowsCmdCommand,
@@ -21,7 +24,7 @@ import {
   formatOpenCodeModelLabel,
   getModelCatalog,
 } from '../src/agents/model-catalog.js';
-import { parseOpenCodeAuthList } from '../src/agents/provider-auth.js';
+import { ProviderAuthManager, parseOpenCodeAuthList } from '../src/agents/provider-auth.js';
 import { AgentRuntime } from '../src/agents/runtime.js';
 import { loadConfig } from '../src/config.js';
 import { AtelierDb } from '../src/db.js';
@@ -158,96 +161,241 @@ describe('Windows .cmd shim unwrapping and quoting', () => {
   });
 });
 
-describe('CliAgentRunner end-to-end provider invocations & error surfacing', () => {
-  it('runs Antigravity through the Gemini API with an API key (no CLI) and surfaces API errors', async () => {
-    const { config, store, project, agent } = makeFixture();
-    const seen: Array<{ url: string; auth: string | undefined; body: { model?: string } | null }> = [];
-    const server = http.createServer((req, res) => {
-      let raw = '';
-      req.on('data', (c) => (raw += c));
-      req.on('end', () => {
-        if (req.url?.startsWith('/models')) {
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify({
-              models: [
-                { name: 'models/gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', supportedGenerationMethods: ['generateContent'] },
-                { name: 'models/gemini-fail-rate-limit', displayName: 'x', supportedGenerationMethods: ['generateContent'] },
-              ],
-            }),
-          );
-          return;
-        }
-        const body = raw ? (JSON.parse(raw) as { model?: string }) : null;
-        seen.push({ url: req.url ?? '', auth: req.headers.authorization, body });
-        if (body?.model === 'gemini-fail-rate-limit') {
-          res.statusCode = 429;
-          res.end('rate limit exceeded');
-          return;
-        }
-        if (body?.model === 'gemini-2.5-flash' && failAll) {
-          res.statusCode = 400;
-          res.end('bad request');
-          return;
-        }
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'PO' } }] })}\n\n`);
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'NG' } }] })}\n\n`);
-        res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 4 } })}\n\n`);
-        res.end('data: [DONE]\n\n');
-      });
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    mockServers.push(server);
-    const geminiConfig = { ...config, geminiBaseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, geminiApiKey: null };
+describe('buildAntigravityCliInvocation & normalizeAntigravityModel', () => {
+  it('never emits -p, forces modelProvider="" in settings, and maps legacy ids', () => {
+    expect(normalizeAntigravityModel('gemini-3.5-flash', 'high')).toBe('gemini-3.8-flash-high');
+    expect(normalizeAntigravityModel('gemini-3.5-flash-lite', 'high')).toBe('gemini-3.8-flash-low');
+    expect(normalizeAntigravityModel('gemini-4-hydrogen', 'medium')).toBe('gemini-4-hydrogen-medium');
+    expect(normalizeAntigravityModel('gemini-4-neon-high', 'low')).toBe('gemini-4-neon-high');
 
-    const runner = new CliAgentRunner(store, geminiConfig, () => () => {});
-    const run = (model: string) =>
+    const inv = buildAntigravityCliInvocation({
+      model: 'gemini-3.5-flash',
+      effort: 'high',
+      allowShell: true,
+      allowFullPermissions: false,
+      memoryOnly: false,
+      attachmentDir: 'D:\\Mark Zuckenberg\\CanvasBot\\attachments',
+      artifactDir: 'D:\\Mark Zuckenberg\\CanvasBot\\artifacts',
+      resumeConversationId: null,
+      fullPrompt: 'System prompt\n\n---\n\nHalo dunia',
+    });
+
+    expect(inv.args).not.toContain('-p');
+    expect(inv.args).not.toContain('--print');
+    expect(inv.args).not.toContain('--prompt');
+    expect(inv.args).toContain('--input-format=stream-json');
+    expect(inv.args).toContain('--output-format=stream-json');
+    expect(inv.args).toContain('--disable-slash-commands');
+    expect(inv.args).toContain('--model=gemini-3.8-flash-high');
+    expect(inv.args.some((a) => a.startsWith('--effort='))).toBe(false);
+    expect(inv.args).toContain('--mode=auto');
+    expect(inv.args).toContain('--settings={"modelProvider":""}');
+    expect(inv.args).toContain('--add-dir=D:\\Mark Zuckenberg\\CanvasBot\\attachments');
+    expect(inv.args).toContain('--add-dir=D:\\Mark Zuckenberg\\CanvasBot\\artifacts');
+    expect(inv.args).not.toContain('--dangerously-skip-permissions');
+
+    const parsedStdin = JSON.parse(inv.stdinPayload.trim());
+    expect(parsedStdin).toEqual({
+      event: 'user',
+      message: { content: 'System prompt\n\n---\n\nHalo dunia' },
+    });
+  });
+
+  it('parses Antigravity stream-json lines for text, tools, session, usage, and errors', () => {
+    const events: string[] = [];
+    let session = '';
+    let usage: [number, number] | null = null;
+    const cb = {
+      onText: (t: string) => events.push(`text:${t}`),
+      onTool: (n: string) => events.push(`tool:${n}`),
+      onSession: (s: string) => {
+        session = s;
+      },
+      onUsage: (i: number, o: number) => {
+        usage = [i, o];
+      },
+    };
+
+    let acc = '';
+    acc = parseAntigravityStreamLine(
+      JSON.stringify({
+        event: 'step_update',
+        step_update: { conversation_id: 'c-1', step_type: 'agent_response', text_delta: 'Hel' },
+      }),
+      acc,
+      cb,
+    ).acc;
+    acc = parseAntigravityStreamLine(
+      JSON.stringify({
+        event: 'step_update',
+        step_update: { step_type: 'tool', state: 'DONE', tool_name: 'run_command', tool_info: { parameters: {} } },
+      }),
+      acc,
+      cb,
+    ).acc;
+    const final = parseAntigravityStreamLine(
+      JSON.stringify({
+        event: 'result',
+        result: { status: 'SUCCESS', conversation_id: 'c-1', usage: { input_tokens: 10, output_tokens: 5 } },
+      }),
+      acc,
+      cb,
+    );
+    expect(final.error).toBeUndefined();
+    expect(final.acc).toBe('Hel');
+    expect(session).toBe('antigravity:c-1');
+    expect(usage).toEqual([10, 5]);
+    expect(events).toEqual(['text:Hel', 'tool:run_command']);
+
+    const errRes = parseAntigravityStreamLine(
+      JSON.stringify({ event: 'result', result: { status: 'ERROR', error: 'not logged in' } }),
+      '',
+      cb,
+    );
+    expect(errRes.error).toBe('not logged in');
+  });
+});
+
+describe('CliAgentRunner end-to-end provider invocations & error surfacing', () => {
+  it('runs Antigravity via agy CLI (stream-json, resume, and auth errors) and manages CLI login/logout', async () => {
+    const { dir, config, store, project, agent } = makeFixture();
+    const stateFile = path.join(dir, 'agy-auth-state.json');
+    const argLog = path.join(dir, 'agy-args.jsonl');
+    fs.writeFileSync(stateFile, JSON.stringify({ loggedIn: true }), 'utf8');
+
+    const fakeAgy = createFakeCli(
+      dir,
+      'agy',
+      `
+      const fs = require('node:fs');
+      const args = process.argv.slice(2);
+      const stateFile = ${JSON.stringify(stateFile)};
+      const readState = () => JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      const writeState = (s) => fs.writeFileSync(stateFile, JSON.stringify(s), 'utf8');
+
+      if (args[0] === '--version') {
+        console.log('1.5.16');
+        process.exit(0);
+      }
+      if (args[0] === 'models') {
+        if (!readState().loggedIn) {
+          console.error('Error: not logged in');
+          process.exit(1);
+        }
+        console.log('Fetching available models...');
+        console.log('gemini-4-neon-high\\tGemini 4 Neon (High)');
+        console.log('gemini-3.8-flash-high\\tGemini 3.8 Flash (High)');
+        process.exit(0);
+      }
+      if (args.includes('--prompt-interactive=/logout')) {
+        fs.appendFileSync(${JSON.stringify(argLog)}, JSON.stringify({ mode: 'logout', args }) + '\\n');
+        writeState({ loggedIn: false });
+        process.exit(0);
+      }
+      if (!args.includes('--input-format=stream-json')) {
+        fs.appendFileSync(${JSON.stringify(argLog)}, JSON.stringify({ mode: 'login', args }) + '\\n');
+        writeState({ loggedIn: true });
+        process.exit(0);
+      }
+
+      fs.appendFileSync(${JSON.stringify(argLog)}, JSON.stringify({ mode: 'run', args }) + '\\n');
+      process.stdin.resume();
+      process.stdin.on('end', () => {
+        if (args.includes('--model=fail-auth')) {
+          console.log(JSON.stringify({ event: 'result', result: { status: 'ERROR', error: 'not logged in' } }));
+          process.exit(1);
+        }
+        console.log(JSON.stringify({ event: 'step_update', step_update: { conversation_id: 'agy-conv-1', step_type: 'agent_response', text_delta: 'OK-AGY' } }));
+        console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', conversation_id: 'agy-conv-1', usage: { input_tokens: 12, output_tokens: 4 } } }));
+      });
+      `,
+    );
+
+    store.updateSettings({ cliPaths: { antigravity: fakeAgy.binPath } });
+
+    const authManager = new ProviderAuthManager();
+    const initialStatus = await authManager.getStatus('antigravity', store.getSettings(), store);
+    expect(initialStatus.authMode).toBe('cli');
+    expect(initialStatus.cliInstalled).toBe(true);
+    expect(initialStatus.authenticated).toBe(true);
+    expect(initialStatus.accountLabel).toContain('agy 1.5.16');
+    expect(authManager.getDiscoveredAntigravityModels().map((m) => m.id)).toEqual([
+      'gemini-4-neon-high',
+      'gemini-3.8-flash-high',
+    ]);
+
+    const catalog = await getModelCatalog('antigravity', config, store.getSettings(), true);
+    expect(catalog.source).toBe('live');
+    expect(catalog.models.some((m) => m.id === 'gemini-4-neon-high')).toBe(true);
+
+    const runner = new CliAgentRunner(store, config, () => () => {});
+    let sessionSeen = '';
+    let usage: [number, number] | null = null;
+    const first = await runner.run(
+      {
+        agent: { ...agent, providerOverride: 'antigravity', modelOverride: 'gemini-3.8-flash-high' },
+        project,
+        prompt: 'Reply OK',
+        resumeSessionId: null,
+        signal: new AbortController().signal,
+      },
+      {
+        onText() {},
+        onTool() {},
+        onSession(s) {
+          sessionSeen = s;
+        },
+        onUsage: (i, o) => {
+          usage = [i, o];
+        },
+      },
+    );
+    expect(first.finalText).toBe('OK-AGY');
+    expect(sessionSeen).toBe('antigravity:agy-conv-1');
+    expect(usage).toEqual([12, 4]);
+
+    await runner.run(
+      {
+        agent: { ...agent, providerOverride: 'antigravity', modelOverride: 'gemini-3.8-flash-high' },
+        project,
+        prompt: 'Follow-up',
+        resumeSessionId: 'antigravity:agy-conv-1',
+        signal: new AbortController().signal,
+      },
+      { onText() {}, onTool() {}, onSession() {} },
+    );
+
+    await expect(
       runner.run(
         {
-          agent: { ...agent, providerOverride: 'antigravity', modelOverride: model },
+          agent: { ...agent, providerOverride: 'antigravity', modelOverride: 'fail-auth' },
           project,
-          prompt: 'Reply PONG',
+          prompt: 'Fail',
           resumeSessionId: null,
           signal: new AbortController().signal,
         },
-        {
-          onText() {},
-          onTool() {},
-          onSession() {},
-          onUsage: (i, o) => {
-            usage = [i, o];
-          },
-        },
-      );
-    let usage: [number, number] | null = null;
-    let failAll = false;
+        { onText() {}, onTool() {}, onSession() {} },
+      ),
+    ).rejects.toThrow(/Sign in on Antigravity/);
 
-    // No key configured -> clear error, nothing sent.
-    await expect(run('gemini-2.5-flash')).rejects.toThrow(/API key not configured/);
-    expect(seen).toHaveLength(0);
+    const loggedOut = await authManager.logout('antigravity', store.getSettings(), store);
+    expect(loggedOut.authenticated).toBe(false);
+    expect(loggedOut.loginInProgress).toBe(false);
+    expect(loggedOut.accountLabel).toBeNull();
 
-    store.setProviderSecret('antigravity', 'AIza-test-key');
-    const first = await run('gemini-2.5-flash');
-    expect(first.finalText).toBe('PONG');
-    expect(usage).toEqual([12, 4]);
-    expect(seen[0]!.url).toBe('/chat/completions');
-    expect(seen[0]!.auth).toBe('Bearer AIza-test-key');
-    expect(seen[0]!.body?.model).toBe('gemini-2.5-flash');
+    const loggedIn = await authManager.startLogin('antigravity', store.getSettings(), store);
+    expect(loggedIn.authenticated).toBe(true);
+    expect(loggedIn.loginInProgress).toBe(false);
 
-    // Old UI id with an effort suffix maps to the real model.
-    seen.length = 0;
-    expect((await run('gemini-2.5-flash-high')).finalText).toBe('PONG');
-    expect(seen[0]!.body?.model).toBe('gemini-2.5-flash');
-
-    // A model without quota (429) falls through to one the key can use.
-    seen.length = 0;
-    expect((await run('gemini-fail-rate-limit')).finalText).toBe('PONG');
-    expect(seen.map((s) => s.body?.model)).toEqual(['gemini-fail-rate-limit', 'gemini-2.5-flash']);
-
-    // Errors that are not about the model (e.g. 400) still surface.
-    failAll = true;
-    await expect(run('gemini-2.5-flash')).rejects.toThrow('400');
+    const runs = fs
+      .readFileSync(argLog, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { mode: string; args: string[] });
+    expect(runs.some((r) => r.mode === 'run' && r.args.includes('--conversation=agy-conv-1'))).toBe(true);
+    expect(runs.some((r) => r.mode === 'logout' && r.args.includes('--prompt-interactive=/logout'))).toBe(true);
+    expect(runs.some((r) => r.mode === 'login')).toBe(true);
+    authManager.shutdown();
   });
 
   it('surfaces structured JSON errors across claude, openai (codex), and opencode and avoids flag swallowing', async () => {
@@ -544,7 +692,7 @@ describe('OpenCode custom provider discovery and auth parsing', () => {
     try {
       store.updateAgentConfig(agent.id, {
         providerOverride: 'antigravity',
-        modelOverride: 'gemini-2.5-flash',
+        modelOverride: 'gemini-4-hydrogen-high',
       });
       runtime.enqueue({ agentId: agent.id, projectId: project.id, kind: 'user', prompt: 'turn 1' });
       await new Promise((r) => setTimeout(r, 80));
@@ -567,7 +715,7 @@ describe('OpenCode custom provider discovery and auth parsing', () => {
         .filter((m) => m.author === 'agent');
       expect(replies).toHaveLength(2);
       expect(replies[0]!.metadata?.provider).toBe('antigravity');
-      expect(replies[0]!.metadata?.model).toBe('gemini-2.5-flash');
+      expect(replies[0]!.metadata?.model).toBe('gemini-4-hydrogen-high');
       expect(replies[1]!.metadata?.provider).toBe('claude');
       expect(replies[1]!.metadata?.model).toBe('sonnet');
     } finally {

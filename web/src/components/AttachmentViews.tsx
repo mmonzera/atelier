@@ -143,18 +143,34 @@ export interface PendingUpload {
   error?: string;
 }
 
-/** Chips shown above the composer while files are being attached. */
+/** Chips shown above (or inside) the composer while files are being attached. */
 export function PendingAttachments({
   items,
   onRemove,
+  inline = false,
 }: {
   items: PendingUpload[];
   onRemove: (key: string) => void;
+  inline?: boolean;
 }) {
   const t = useT();
   if (items.length === 0) return null;
+  const thumbSize = inline ? 48 : 44;
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '0 6px 8px' }}>
+    <div
+      style={
+        inline
+          ? {
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 8,
+              padding: '4px 2px 10px',
+              borderBottom: '1px solid var(--border-subtle)',
+              marginBottom: 4,
+            }
+          : { display: 'flex', flexWrap: 'wrap', gap: 8, padding: '0 6px 8px' }
+      }
+    >
       {items.map((it) => (
         <div key={it.key} style={{ position: 'relative' }}>
         <div
@@ -163,18 +179,18 @@ export function PendingAttachments({
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            height: 44,
+            height: thumbSize,
             maxWidth: 220,
             padding: it.previewUrl ? 0 : '0 12px 0 10px',
-            borderRadius: 12,
+            borderRadius: inline ? 10 : 12,
             overflow: 'hidden',
-            background: 'var(--surface-1)',
+            background: inline ? 'var(--surface-2)' : 'var(--surface-1)',
             border: `1px solid ${it.status === 'error' ? 'var(--agent-red)' : 'var(--border-default)'}`,
             opacity: it.status === 'uploading' ? 0.6 : 1,
           }}
         >
           {it.previewUrl ? (
-            <img src={it.previewUrl} alt={it.name} style={{ height: 44, width: 44, objectFit: 'cover', display: 'block' }} />
+            <img src={it.previewUrl} alt={it.name} style={{ height: thumbSize, width: thumbSize, objectFit: 'cover', display: 'block' }} />
           ) : (
             <>
               <Paperclip size={14} strokeWidth={1.5} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />

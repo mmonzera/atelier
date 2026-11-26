@@ -1,11 +1,30 @@
 import { BUILT_IN_MODELS, type ModelCatalog, type ModelEntry, type RealProvider, type Settings } from '@atelier/contracts';
 import type { AppConfig } from '../config.js';
 import { discoverLocalCodexModels } from './cli-runners.js';
-import { fetchGeminiModels } from './gemini-models.js';
-import { execCliCapture, getOpenCodeCliCapabilities, resolveCliBinary } from './cli-spawn.js';
+import { cleanAntigravityEnv, execCliCapture, getOpenCodeCliCapabilities, resolveCliBinary } from './cli-spawn.js';
 
 const CACHE_MS = 10 * 60 * 1000;
 const cache = new Map<string, { at: number; value: ModelCatalog }>();
+
+export function invalidateModelCatalog(provider?: RealProvider): void {
+  if (provider) cache.delete(provider);
+  else cache.clear();
+}
+
+export function parseAntigravityModelsOutput(stdout: string): ModelEntry[] {
+  const out: ModelEntry[] = [];
+  for (const raw of stdout.split(/\r?\n/)) {
+    const line = raw.trim();
+    const match = /^(\S+)(?:\t+|\s{2,})(.+)$/.exec(line);
+    if (!match) continue;
+    const id = match[1]!.trim();
+    const label = match[2]!.trim();
+    if (MODEL_ID_RE.test(id)) {
+      out.push({ id, label: label || id, provider: 'antigravity' });
+    }
+  }
+  return out;
+}
 
 /** The `claude` CLI has no command that lists models, so these are the ids it is known to accept. */
 const CLAUDE_KNOWN: Array<[string, string]> = [
@@ -306,11 +325,20 @@ async function fetchOpenCode(settings: Settings): Promise<{ models: ModelEntry[]
   return { models, ...(note ? { note } : {}) };
 }
 
+async function fetchAntigravity(settings: Settings): Promise<ModelEntry[]> {
+  const bin = await resolveCliBinary('antigravity', settings.cliPaths?.antigravity);
+  if (!bin) return [];
+  const res = await execCliCapture(bin, ['models'], 10_000, cleanAntigravityEnv());
+  if (res.exitCode !== 0 && !res.stdout.trim()) {
+    throw new Error(res.stderr.trim().split('\n').pop() || 'agy models failed');
+  }
+  return parseAntigravityModelsOutput(res.stdout);
+}
+
 async function load(
   provider: RealProvider,
   config: AppConfig,
   settings: Settings,
-  geminiKey?: string,
 ): Promise<ModelCatalog> {
   try {
     switch (provider) {
@@ -329,6 +357,14 @@ async function load(
           ...(note ? { note } : {}),
         };
       }
+      case 'antigravity': {
+        const detected = await fetchAntigravity(settings);
+        return {
+          provider,
+          models: mergeCatalog(provider, detected),
+          source: detected.length > 0 ? 'live' : 'builtin',
+        };
+      }
       case 'openai': {
         const detected = discoverLocalCodexModels();
         return {
@@ -337,11 +373,6 @@ async function load(
           source: detected.length > 0 ? 'live' : 'builtin',
           note: detected.length > 0 ? 'Read from your Codex CLI.' : undefined,
         };
-      }
-      case 'antigravity': {
-        if (!geminiKey) return { provider, models: builtIn(provider), source: 'builtin' };
-        const live = await fetchGeminiModels(config.geminiBaseUrl, geminiKey);
-        return { provider, models: live.length ? live : builtIn(provider), source: live.length ? 'live' : 'builtin' };
       }
       case 'claude':
         return {
@@ -372,14 +403,12 @@ export async function getModelCatalog(
   config: AppConfig,
   settings: Settings,
   refresh = false,
-  geminiKey?: string,
 ): Promise<ModelCatalog> {
   const hit = cache.get(provider);
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value;
-  const value = await load(provider, config, settings, geminiKey);
+  const value = await load(provider, config, settings);
   // a failed live lookup is not worth remembering
-  // antigravity keeps its own list cache and hides models that just failed, so don't freeze it here
-  if (provider !== 'antigravity' && !value.note?.startsWith('Could not')) {
+  if (!value.note?.startsWith('Could not')) {
     cache.set(provider, { at: Date.now(), value });
   }
   return value;

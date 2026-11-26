@@ -1,15 +1,20 @@
-import type { ChildProcess } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ProviderAuthStatus, RealProvider, Settings } from '@atelier/contracts';
+import type { ModelEntry, ProviderAuthStatus, RealProvider, Settings } from '@atelier/contracts';
 import type { AtelierStore } from '../store.js';
 import {
+  buildWindowsCmdCommand,
+  cleanAntigravityEnv,
   execCliCapture,
   getOpenCodeCliCapabilities,
+  killProcessTree,
   resolveCliBinary,
   spawnCli,
+  unwrapWindowsCmdShim,
 } from './cli-spawn.js';
+import { invalidateModelCatalog, parseAntigravityModelsOutput } from './model-catalog.js';
 
 interface ActiveLoginState {
   child: ChildProcess;
@@ -17,14 +22,80 @@ interface ActiveLoginState {
   startedAt: number;
 }
 
+interface ActiveLogoutState {
+  child: ChildProcess;
+  startedAt: number;
+}
+
+interface AntigravityProbe {
+  authenticated: boolean;
+  models: ModelEntry[];
+  versionLabel: string;
+}
+
 const PROVIDER_LABELS: Record<RealProvider, string> = {
   claude: 'Claude (Anthropic)',
   openai: 'ChatGPT (Codex)',
-  antigravity: 'Antigravity (Gemini API)',
+  antigravity: 'Antigravity (Google)',
   deepseek: 'DeepSeek (API)',
   opencode: 'OpenCode CLI',
   openrouter: 'OpenRouter (API)',
 };
+
+const AGY_PROBE_CACHE_MS = 20_000;
+const AGY_UNAUTH_RE = /not\s+logged\s+in|unauthenticated|unauthorized|invalid_grant|please\s+sign\s+in|secret\s+keyring\s+is\s+locked/i;
+
+function ensureAgyOAuthSettingsFile(): string {
+  const filePath = path.join(os.tmpdir(), 'atelier-agy-oauth.json');
+  fs.writeFileSync(filePath, '{"modelProvider":""}\n', 'utf8');
+  return filePath;
+}
+
+function spawnInteractiveCliWindow(
+  title: string,
+  cliPath: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): ChildProcess {
+  let child: ChildProcess;
+  if (process.platform === 'win32' && !process.env.VITEST) {
+    const isWindowsBatch = /\.(cmd|bat)$/i.test(cliPath);
+    const unwrapped = isWindowsBatch ? unwrapWindowsCmdShim(cliPath) : null;
+    const targetCmd = unwrapped ? unwrapped.command : cliPath;
+    const targetArgs = unwrapped ? [...unwrapped.prefixArgs, ...args] : args;
+    child = spawn(
+      'cmd.exe',
+      ['/d', '/s', '/c', buildWindowsCmdCommand('start', [title, '/wait', targetCmd, ...targetArgs])],
+      {
+        env: env ?? process.env,
+        stdio: 'ignore',
+        windowsHide: false,
+        windowsVerbatimArguments: true,
+      },
+    );
+  } else if (process.platform === 'darwin' && !process.env.VITEST) {
+    const cmdLine = [cliPath, ...args]
+      .map((a) => `'${a.replace(/'/g, `'\\''`)}'`)
+      .join(' ');
+    child = spawn(
+      'osascript',
+      [
+        '-e',
+        `tell application "Terminal" to do script ${JSON.stringify(cmdLine)}`,
+        '-e',
+        'tell application "Terminal" to activate',
+      ],
+      {
+        env: env ?? process.env,
+        stdio: 'ignore',
+      },
+    );
+  } else {
+    child = spawnCli(cliPath, args, { env, stdin: 'ignore' });
+  }
+  child.on('error', () => {});
+  return child;
+}
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
 
@@ -59,6 +130,18 @@ function maskApiKey(key: string): string {
 
 export class ProviderAuthManager {
   private readonly activeLogins = new Map<RealProvider, ActiveLoginState>();
+  private readonly activeLogouts = new Map<RealProvider, ActiveLogoutState>();
+  private readonly agyProbeCache = new Map<string, { at: number } & AntigravityProbe>();
+  private readonly agyVersionCache = new Map<string, string>();
+  private latestAntigravityModels: ModelEntry[] = [];
+
+  public getDiscoveredAntigravityModels(): ModelEntry[] {
+    return this.latestAntigravityModels;
+  }
+
+  public invalidateAntigravityCache(): void {
+    this.agyProbeCache.clear();
+  }
 
   public async getStatus(
     provider: RealProvider,
@@ -67,9 +150,6 @@ export class ProviderAuthManager {
   ): Promise<ProviderAuthStatus> {
     if (provider === 'deepseek') {
       return this.checkDeepSeekStatus(store);
-    }
-    if (provider === 'antigravity') {
-      return this.checkAntigravityStatus(store);
     }
     if (provider === 'openrouter') {
       return this.checkOpenRouterStatus(store);
@@ -84,6 +164,9 @@ export class ProviderAuthManager {
     }
     if (provider === 'openai') {
       return this.checkOpenAiStatus(cliPath, activeLogin);
+    }
+    if (provider === 'antigravity') {
+      return this.checkAntigravityStatus(cliPath, activeLogin, this.activeLogouts.get('antigravity'));
     }
     return this.checkOpenCodeStatus(cliPath, activeLogin);
   }
@@ -226,26 +309,100 @@ export class ProviderAuthManager {
     };
   }
 
-  private checkAntigravityStatus(store?: AtelierStore): ProviderAuthStatus {
-    const savedKey = store?.getProviderSecret('antigravity')?.trim() || null;
-    const envKey = process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || null;
-    const effective = savedKey || envKey;
+  private async probeAntigravityAuth(
+    cliPath: string,
+    bypassCache: boolean,
+  ): Promise<AntigravityProbe> {
+    const cached = this.agyProbeCache.get(cliPath);
+    if (!bypassCache && cached && Date.now() - cached.at < AGY_PROBE_CACHE_MS) {
+      return {
+        authenticated: cached.authenticated,
+        models: cached.models,
+        versionLabel: cached.versionLabel,
+      };
+    }
+
+    const agyEnv = cleanAntigravityEnv();
+    let versionLabel = this.agyVersionCache.get(cliPath);
+    if (!versionLabel) {
+      const verRes = await execCliCapture(cliPath, ['--version'], 3500, agyEnv);
+      const rawVer = verRes.stdout.trim().split(/\r?\n/)[0]?.trim() || '';
+      versionLabel = rawVer ? (rawVer.startsWith('agy') ? rawVer : `agy ${rawVer}`) : 'agy CLI';
+      this.agyVersionCache.set(cliPath, versionLabel);
+    }
+
+    const res = await execCliCapture(cliPath, ['models'], 7000, agyEnv);
+    const models = parseAntigravityModelsOutput(res.stdout);
+    const combined = `${res.stdout}\n${res.stderr}`.trim();
+    const authenticated =
+      res.exitCode === 0 && models.length > 0 && !AGY_UNAUTH_RE.test(combined);
+
+    this.latestAntigravityModels = authenticated ? models : [];
+    const probe: AntigravityProbe = { authenticated, models, versionLabel };
+    this.agyProbeCache.set(cliPath, { at: Date.now(), ...probe });
+    return probe;
+  }
+
+  private async checkAntigravityStatus(
+    cliPath: string | null,
+    activeLogin?: ActiveLoginState,
+    activeLogout?: ActiveLogoutState,
+  ): Promise<ProviderAuthStatus> {
+    if (!cliPath) {
+      return {
+        provider: 'antigravity',
+        label: PROVIDER_LABELS.antigravity,
+        authMode: 'cli',
+        cliInstalled: false,
+        cliPath: null,
+        authenticated: false,
+        accountLabel: null,
+        loginInProgress: false,
+        authUrl: null,
+        message: 'Antigravity CLI (`agy`) not found on PATH. Install `agy` or set custom CLI path.',
+      };
+    }
+
+    const probe = await this.probeAntigravityAuth(cliPath, Boolean(activeLogin || activeLogout));
+    let nextLogin = activeLogin;
+    let nextLogout = activeLogout;
+
+    if (nextLogin && probe.authenticated) {
+      this.activeLogins.delete('antigravity');
+      const loginChild = nextLogin.child;
+      const closeTimer = setTimeout(() => killProcessTree(loginChild), 600);
+      closeTimer.unref?.();
+      invalidateModelCatalog('antigravity');
+      nextLogin = undefined;
+    }
+
+    if (nextLogout && !probe.authenticated) {
+      this.activeLogouts.delete('antigravity');
+      killProcessTree(nextLogout.child);
+      invalidateModelCatalog('antigravity');
+      nextLogout = undefined;
+    }
+
+    const loginInProgress = Boolean(nextLogin || nextLogout);
+    const message = nextLogout
+      ? 'Signing out of Antigravity CLI…'
+      : probe.authenticated
+        ? `Signed in (${probe.versionLabel} · ${probe.models.length} models)`
+        : nextLogin
+          ? 'Finish Google sign-in in the opened Antigravity CLI window…'
+          : 'CLI found. Click Sign in to authenticate with Google OAuth.';
 
     return {
       provider: 'antigravity',
       label: PROVIDER_LABELS.antigravity,
-      authMode: 'api_key',
+      authMode: 'cli',
       cliInstalled: true,
-      cliPath: null,
-      authenticated: Boolean(effective),
-      accountLabel: savedKey ? maskApiKey(savedKey) : envKey ? 'GEMINI_API_KEY' : null,
-      loginInProgress: false,
-      authUrl: null,
-      message: savedKey
-        ? `API key saved locally (${maskApiKey(savedKey)}).`
-        : envKey
-          ? 'Authenticated via GEMINI_API_KEY.'
-          : 'Not configured. Click API key to enter your Gemini API key (from Google AI Studio).',
+      cliPath,
+      authenticated: probe.authenticated,
+      accountLabel: probe.authenticated ? `Google OAuth (${probe.versionLabel})` : null,
+      loginInProgress,
+      authUrl: nextLogin?.authUrl ?? null,
+      message,
     };
   }
 
@@ -389,7 +546,7 @@ export class ProviderAuthManager {
     settings: Settings,
     store?: AtelierStore,
   ): Promise<ProviderAuthStatus> {
-    if (provider === 'deepseek' || provider === 'openrouter' || provider === 'antigravity') {
+    if (provider === 'deepseek' || provider === 'openrouter') {
       return this.getStatus(provider, settings, store);
     }
 
@@ -397,6 +554,56 @@ export class ProviderAuthManager {
     const cliPath = await resolveCliBinary(provider, customPath);
     if (!cliPath) {
       return this.getStatus(provider, settings, store);
+    }
+
+    if (provider === 'antigravity') {
+      store?.setProviderSecret('antigravity', null);
+      const pendingLogout = this.activeLogouts.get('antigravity');
+      if (pendingLogout) {
+        killProcessTree(pendingLogout.child);
+        this.activeLogouts.delete('antigravity');
+      }
+      const existing = this.activeLogins.get('antigravity');
+      if (existing) {
+        if (Date.now() - existing.startedAt <= 3000) {
+          return this.getStatus(provider, settings, store);
+        }
+        killProcessTree(existing.child);
+        this.activeLogins.delete('antigravity');
+      }
+      this.agyProbeCache.clear();
+      invalidateModelCatalog('antigravity');
+
+      const child = spawnInteractiveCliWindow(
+        'Antigravity Google Login',
+        cliPath,
+        [`--settings=${ensureAgyOAuthSettingsFile()}`],
+        cleanAntigravityEnv(),
+      );
+      const state: ActiveLoginState = {
+        child,
+        authUrl: null,
+        startedAt: Date.now(),
+      };
+      this.activeLogins.set('antigravity', state);
+
+      const timeout = setTimeout(() => {
+        if (this.activeLogins.get('antigravity') === state) {
+          this.activeLogins.delete('antigravity');
+          killProcessTree(child);
+        }
+      }, 180_000);
+      timeout.unref?.();
+
+      child.once('close', () => {
+        clearTimeout(timeout);
+        if (this.activeLogins.get('antigravity') === state) {
+          this.activeLogins.delete('antigravity');
+        }
+      });
+
+      await new Promise((r) => setTimeout(r, 450));
+      return this.getStatus('antigravity', settings, store);
     }
 
     // Return existing active login if already running (OpenCode allows launching multiple times to add providers)
@@ -415,17 +622,7 @@ export class ProviderAuthManager {
 
     const child =
       provider === 'opencode' && process.platform === 'win32'
-        ? spawnCli(
-            'cmd.exe',
-            [
-              '/c',
-              'start',
-              'OpenCode Login',
-              cliPath,
-              ...args,
-            ],
-            { stdin: 'ignore' },
-          )
+        ? spawnInteractiveCliWindow('OpenCode Login', cliPath, args)
         : spawnCli(cliPath, args, { stdin: 'ignore' });
 
     const state: ActiveLoginState = {
@@ -449,9 +646,10 @@ export class ProviderAuthManager {
     const timeout = setTimeout(() => {
       if (this.activeLogins.get(provider) === state) {
         this.activeLogins.delete(provider);
-        child.kill();
+        killProcessTree(child);
       }
     }, 180_000);
+    timeout.unref?.();
 
     child.once('close', () => {
       clearTimeout(timeout);
@@ -470,27 +668,78 @@ export class ProviderAuthManager {
     settings: Settings,
     store?: AtelierStore,
   ): Promise<ProviderAuthStatus> {
-    if (provider === 'deepseek' || provider === 'openrouter' || provider === 'antigravity') {
+    if (provider === 'deepseek' || provider === 'openrouter') {
       store?.setProviderSecret(provider, null);
       return this.getStatus(provider, settings, store);
     }
 
     const active = this.activeLogins.get(provider);
     if (active) {
-      active.child.kill();
+      killProcessTree(active.child);
       this.activeLogins.delete(provider);
     }
 
     const customPath = settings.cliPaths?.[provider];
     const cliPath = await resolveCliBinary(provider, customPath);
+
+    if (provider === 'antigravity') {
+      store?.setProviderSecret('antigravity', null);
+      const prevLogout = this.activeLogouts.get('antigravity');
+      if (prevLogout) {
+        killProcessTree(prevLogout.child);
+        this.activeLogouts.delete('antigravity');
+      }
+      this.agyProbeCache.clear();
+      invalidateModelCatalog('antigravity');
+
+      if (cliPath) {
+        const child = spawnInteractiveCliWindow(
+          'Antigravity Logout',
+          cliPath,
+          [`--settings=${ensureAgyOAuthSettingsFile()}`, '--prompt-interactive=/logout'],
+          cleanAntigravityEnv(),
+        );
+        const logoutState: ActiveLogoutState = { child, startedAt: Date.now() };
+        this.activeLogouts.set('antigravity', logoutState);
+
+        const timeout = setTimeout(() => {
+          if (this.activeLogouts.get('antigravity') === logoutState) {
+            this.activeLogouts.delete('antigravity');
+            killProcessTree(child);
+          }
+        }, 60_000);
+        timeout.unref?.();
+
+        child.once('close', () => {
+          clearTimeout(timeout);
+          if (this.activeLogouts.get('antigravity') === logoutState) {
+            this.activeLogouts.delete('antigravity');
+          }
+        });
+
+        const waits = process.env.VITEST ? [80, 120, 150] : [700, 1000, 1200];
+        for (const ms of waits) {
+          await new Promise((r) => setTimeout(r, ms));
+          if (this.activeLogouts.get('antigravity') !== logoutState) break;
+          const probe = await this.probeAntigravityAuth(cliPath, true);
+          if (!probe.authenticated) {
+            this.activeLogouts.delete('antigravity');
+            clearTimeout(timeout);
+            killProcessTree(child);
+            break;
+          }
+        }
+      }
+
+      return this.getStatus('antigravity', settings, store);
+    }
+
     if (cliPath) {
       if (provider === 'claude') {
         await execCliCapture(cliPath, ['auth', 'logout'], 4000);
       } else if (provider === 'opencode') {
         if (process.platform === 'win32') {
-          spawnCli('cmd.exe', ['/c', 'start', 'OpenCode Logout', cliPath, 'auth', 'logout'], {
-            stdin: 'ignore',
-          });
+          spawnInteractiveCliWindow('OpenCode Logout', cliPath, ['auth', 'logout']);
           await new Promise((r) => setTimeout(r, 300));
         } else {
           await execCliCapture(cliPath, ['auth', 'logout'], 4000);
@@ -505,8 +754,12 @@ export class ProviderAuthManager {
 
   public shutdown(): void {
     for (const active of this.activeLogins.values()) {
-      active.child.kill();
+      killProcessTree(active.child);
     }
     this.activeLogins.clear();
+    for (const active of this.activeLogouts.values()) {
+      killProcessTree(active.child);
+    }
+    this.activeLogouts.clear();
   }
 }
