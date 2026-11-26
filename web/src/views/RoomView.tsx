@@ -588,9 +588,9 @@ export function RoomView({
           >
             {tr('Task events')}
           </button>
-          {!search.open && <ChatSearchButton search={search} />}
         </div>
 
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {(activeTurnAgent || (queue?.queued.length ?? 0) > 0) && (
           <div
             style={{
@@ -706,6 +706,8 @@ export function RoomView({
             </button>
           </div>
         )}
+        {!search.open && <ChatSearchButton search={search} compact />}
+        </div>
       </div>
 
       {search.open && (

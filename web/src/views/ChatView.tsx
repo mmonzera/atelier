@@ -273,7 +273,7 @@ export function ChatView({
         }
         style={{ display: 'flex', alignItems: 'center', gap: 10, scrollMarginTop: 44 }}
       >
-        <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
+        <div style={{ flex: 1, height: 1, background: 'linear-gradient(to right, transparent, var(--border-subtle))' }} />
         <div
           style={{
             display: 'inline-flex',
@@ -282,7 +282,7 @@ export function ChatView({
             maxWidth: '70%',
             padding: '3px 10px',
             borderRadius: 'var(--radius-full)',
-            border: `1px solid ${isActive ? 'var(--border-default)' : 'var(--border-subtle)'}`,
+            border: `1px solid ${isActive ? 'rgba(255, 255, 255, 0.14)' : 'var(--border-subtle)'}`,
             background: 'var(--surface-1)',
             fontSize: 11.5,
             color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
@@ -304,13 +304,14 @@ export function ChatView({
                 height: 6,
                 borderRadius: '50%',
                 background: 'var(--agent-green)',
+                boxShadow: '0 0 0 3px rgba(56, 201, 118, 0.16)',
                 flexShrink: 0,
               }}
               title={tr('Active session')}
             />
           )}
         </div>
-        <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
+        <div style={{ flex: 1, height: 1, background: 'linear-gradient(to left, transparent, var(--border-subtle))' }} />
       </div>
     );
   };
@@ -967,33 +968,34 @@ export function ChatView({
         style={{
           flexShrink: 0,
           position: 'relative',
-          zIndex: 5,
-          padding: '4px 6px 2px 30px',
+          zIndex: 10,
+          padding: '0 22px 8px',
+          minHeight: 38,
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'space-between',
           gap: 8,
         }}
       >
+        {showSessions && channel ? (
+          <AgentSessionBar
+            channel={channel}
+            sessions={sessions}
+            busy={agent.status === 'working'}
+            onNavigate={scrollToSession}
+          />
+        ) : (
+          <span />
+        )}
         <div
           style={{
             minWidth: 0,
-            flex: 1,
             display: 'flex',
-            alignItems: 'center',
-            gap: 6,
+            justifyContent: 'flex-end',
+            ...(search.open ? { flex: 1, maxWidth: 420 } : { flexShrink: 0 }),
           }}
         >
-          {showSessions && channel && (
-            <AgentSessionBar
-              channel={channel}
-              sessions={sessions}
-              busy={agent.status === 'working'}
-              onNavigate={scrollToSession}
-            />
-          )}
-          <div style={{ minWidth: 0, ...(search.open ? { flex: 1, maxWidth: 340 } : {}) }}>
-            {search.open ? <ChatSearchBar search={search} /> : <ChatSearchButton search={search} />}
-          </div>
+          {search.open ? <ChatSearchBar search={search} /> : <ChatSearchButton search={search} />}
         </div>
       </div>
 

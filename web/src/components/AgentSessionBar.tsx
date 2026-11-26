@@ -58,7 +58,7 @@ function InlineNameForm({
         e.preventDefault();
         onSubmit();
       }}
-      style={{ display: 'flex', alignItems: 'center', gap: 4, padding: 4 }}
+      style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 6px' }}
     >
       <input
         autoFocus
@@ -66,14 +66,25 @@ function InlineNameForm({
         value={value}
         maxLength={80}
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => e.key === 'Escape' && onCancel()}
         placeholder={placeholder}
         style={fieldStyle}
       />
-      <button type="submit" disabled={pending} title={submitTitle} style={{ ...iconBtn, color: 'var(--text-primary)' }}>
+      <button
+        type="submit"
+        disabled={pending}
+        title={submitTitle}
+        className="session-inline-btn transition-atelier"
+        style={{ ...iconBtn, background: 'var(--surface-3)', color: 'var(--text-primary)' }}
+      >
         <Check size={14} />
       </button>
-      <button type="button" onClick={onCancel} title={tr('Cancel')} style={iconBtn}>
+      <button
+        type="button"
+        onClick={onCancel}
+        title={tr('Cancel')}
+        className="session-inline-btn transition-atelier"
+        style={iconBtn}
+      >
         <X size={14} />
       </button>
     </form>
@@ -122,7 +133,10 @@ export function AgentSessionBar({
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
+      if (e.key !== 'Escape') return;
+      if (creating) setCreating(false);
+      else if (renamingId) setRenamingId(null);
+      else close();
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
@@ -130,7 +144,7 @@ export function AgentSessionBar({
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, creating, renamingId]);
 
   const run = async (fn: () => Promise<unknown>, fallback: string) => {
     setPending(true);
@@ -171,52 +185,72 @@ export function AgentSessionBar({
   };
 
   return (
-    <div ref={rootRef} style={{ position: 'relative', minWidth: 0 }}>
+    <div ref={rootRef} style={{ position: 'relative', minWidth: 0, flexShrink: 0 }}>
       <button
         type="button"
         onClick={() => (open ? close() : setOpen(true))}
         title={tr('Chat sessions')}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="transition-atelier"
+        className="session-trigger transition-atelier"
         style={{
-          maxWidth: 240,
-          height: 28,
+          maxWidth: 230,
+          height: 30,
           padding: '0 10px',
           borderRadius: 'var(--radius-full)',
           display: 'inline-flex',
           alignItems: 'center',
           gap: 6,
           fontSize: 12,
+          fontWeight: 500,
           color: 'var(--text-primary)',
           background: open ? 'var(--surface-2)' : 'var(--surface-1)',
-          border: `1px solid ${open ? 'var(--border-default)' : 'var(--border-subtle)'}`,
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <MessagesSquare size={13} strokeWidth={1.6} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentLabel}</span>
+        {ordered.length > 1 && (
+          <span
+            className="mono-num"
+            style={{
+              fontSize: 10.5,
+              lineHeight: '16px',
+              padding: '0 5px',
+              borderRadius: 'var(--radius-full)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--text-tertiary)',
+              flexShrink: 0,
+            }}
+          >
+            {ordered.length}
+          </span>
+        )}
         <ChevronDown
           size={12}
-          style={{ flexShrink: 0, color: 'var(--text-tertiary)', transform: open ? 'rotate(180deg)' : undefined }}
+          style={{
+            flexShrink: 0,
+            color: 'var(--text-tertiary)',
+            transform: open ? 'rotate(180deg)' : 'none',
+            transition: 'transform 160ms var(--ease-atelier)',
+          }}
         />
       </button>
 
       {open && (
         <div
           role="listbox"
+          className="session-panel"
           style={{
             position: 'absolute',
-            top: 34,
+            top: 36,
             left: 0,
-            zIndex: 30,
-            width: 300,
+            zIndex: 60,
+            width: 304,
             maxHeight: 380,
             overflowY: 'auto',
             padding: 6,
-            borderRadius: 12,
-            border: '1px solid var(--border-default)',
-            background: 'var(--surface-2)',
-            boxShadow: '0 16px 40px rgba(0,0,0,0.45)',
             display: 'flex',
             flexDirection: 'column',
             gap: 2,
@@ -227,14 +261,14 @@ export function AgentSessionBar({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              padding: '4px 4px 4px 8px',
+              padding: '4px 4px 6px 8px',
             }}
           >
             <span
               style={{
-                fontSize: 11,
-                fontWeight: 500,
-                letterSpacing: 0.4,
+                fontSize: 10.5,
+                fontWeight: 600,
+                letterSpacing: '0.06em',
                 textTransform: 'uppercase',
                 color: 'var(--text-tertiary)',
               }}
@@ -247,17 +281,18 @@ export function AgentSessionBar({
                 disabled={pending || busy}
                 onClick={() => setCreating(true)}
                 title={busy ? tr('Wait for the agent to finish first') : tr('New session')}
-                className="transition-atelier"
+                className="session-new-btn transition-atelier"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
                   height: 24,
                   padding: '0 8px',
-                  borderRadius: 7,
-                  fontSize: 12,
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: 11.5,
+                  fontWeight: 500,
                   color: 'var(--text-primary)',
-                  background: 'var(--surface-1)',
+                  background: 'var(--surface-2)',
                   border: '1px solid var(--border-subtle)',
                   opacity: busy ? 0.5 : 1,
                 }}
@@ -302,14 +337,13 @@ export function AgentSessionBar({
                 key={s.id}
                 role="option"
                 aria-selected={isCurrent}
-                className="session-row"
+                className="session-row transition-atelier"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 2,
                   paddingRight: 4,
-                  borderRadius: 8,
-                  background: isCurrent ? 'var(--surface-3)' : 'transparent',
+                  borderRadius: 9,
                 }}
               >
                 <button
@@ -330,11 +364,14 @@ export function AgentSessionBar({
                 >
                   <span
                     style={{
-                      width: 6,
-                      height: 6,
+                      width: 7,
+                      height: 7,
                       borderRadius: '50%',
                       flexShrink: 0,
-                      background: isCurrent ? 'var(--agent-green)' : 'var(--border-default)',
+                      boxSizing: 'border-box',
+                      background: isCurrent ? 'var(--agent-green)' : 'transparent',
+                      border: isCurrent ? 'none' : '1.5px solid var(--text-muted)',
+                      boxShadow: isCurrent ? '0 0 0 3px rgba(56, 201, 118, 0.16)' : undefined,
                     }}
                   />
                   <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -352,7 +389,12 @@ export function AgentSessionBar({
                     </span>
                     <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
                       {new Date(s.startedAt).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}
-                      {isCurrent ? ` · ${tr('Active')}` : ''}
+                      {isCurrent && (
+                        <>
+                          {' · '}
+                          <span style={{ color: 'var(--agent-green)' }}>{tr('Active')}</span>
+                        </>
+                      )}
                     </span>
                   </span>
                 </button>
