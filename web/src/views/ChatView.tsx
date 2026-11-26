@@ -10,6 +10,7 @@ import {
   type BrowserSessionInfo,
   type BrowserTakeoverEvent,
   type Channel,
+  type CliPermissionRequest,
   type Message,
   type ModelEntry,
   type ModelProvider,
@@ -39,7 +40,7 @@ import {
 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { shownModels } from '../state/models';
-import { api, browserApi } from '../api';
+import { api, browserApi, permissionsApi } from '../api';
 import { MemoryChip } from '../components/MemoryChip';
 import {
   FormattedText,
@@ -142,6 +143,7 @@ interface ChatViewProps {
   onOpenTask: (task: Task) => void;
   onOpenEditAgent: () => void;
   browserApprovals?: BrowserApprovalRequest[];
+  cliApprovals?: CliPermissionRequest[];
   browserTakeovers?: Record<string, BrowserTakeoverEvent>;
   browserSessions?: BrowserSessionInfo[];
   onOpenBrowserTab?: () => void;
@@ -176,6 +178,7 @@ export function ChatView({
   onOpenTask,
   onOpenEditAgent,
   browserApprovals = [],
+  cliApprovals = [],
   browserTakeovers = {},
   browserSessions = [],
   onOpenBrowserTab,
@@ -1190,6 +1193,108 @@ export function ChatView({
             }}
           />
         )}
+
+        {cliApprovals
+          .filter((req) => req.agentId === agent.id)
+          .map((req) => (
+            <div
+              key={req.id}
+              className="msg-enter"
+              style={{
+                padding: '13px 15px',
+                borderRadius: 'var(--radius-md)',
+                background: 'rgba(244, 188, 46, 0.08)',
+                border: '1px solid rgba(244, 188, 46, 0.3)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                fontSize: 12.5,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
+                <ShieldAlert size={16} style={{ color: 'var(--agent-amber)', flexShrink: 0, marginTop: 1 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                    {tr('Permission Required')}: {req.target}
+                  </div>
+                  <div className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, wordBreak: 'break-all' }}>
+                    {req.rawTool}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  disabled={resolvingApprovalId === req.id}
+                  onClick={async () => {
+                    setResolvingApprovalId(req.id);
+                    try {
+                      await permissionsApi.resolveApproval(req.id, 'allow_always');
+                    } finally {
+                      setResolvingApprovalId(null);
+                    }
+                  }}
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--agent-green)',
+                    color: '#0d0d11',
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  {tr('Always allow {target}', { target: req.target })}
+                </button>
+                <button
+                  type="button"
+                  disabled={resolvingApprovalId === req.id}
+                  onClick={async () => {
+                    setResolvingApprovalId(req.id);
+                    try {
+                      await permissionsApi.resolveApproval(req.id, 'allow_once');
+                    } finally {
+                      setResolvingApprovalId(null);
+                    }
+                  }}
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border-default)',
+                    color: 'var(--text-primary)',
+                    fontSize: 12,
+                  }}
+                >
+                  {tr('Allow once')}
+                </button>
+                <button
+                  type="button"
+                  disabled={resolvingApprovalId === req.id}
+                  onClick={async () => {
+                    setResolvingApprovalId(req.id);
+                    try {
+                      await permissionsApi.resolveApproval(req.id, 'deny');
+                    } finally {
+                      setResolvingApprovalId(null);
+                    }
+                  }}
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border-default)',
+                    color: 'var(--agent-red)',
+                    fontSize: 12,
+                  }}
+                >
+                  {tr('Deny')}
+                </button>
+              </div>
+            </div>
+          ))}
 
         {browserApprovals
           .filter((req) => req.agentId === agent.id)

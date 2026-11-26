@@ -1,8 +1,10 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   type Agent,
   type AgentSkill,
   type Channel,
+  type CliPermissionDecision,
+  type CliPermissionRequest,
   type Message,
   type MessageActivitySummary,
   type MessageAttachment,
@@ -10,6 +12,7 @@ import {
   type ModelProvider,
   type ModelRef,
   type PendingFallbackOffer,
+  type PermissionGrant,
   type QueueItem,
   type QueueKind,
   type RoomQueueSnapshot,
@@ -51,6 +54,13 @@ import type { AgentRunner } from './runner.js';
 import type { EnqueueTaskFn } from './studio-tools.js';
 import { estimateTurnCostUsd } from './usage.js';
 import { renderCanon, SELECTIVE_MEMORY_PROMPT } from './prompts.js';
+import {
+  type DetectedPermissionDenial,
+  buildEffectiveTurnGrants,
+  detectAllPermissionDenials,
+  isPermissionAlreadyGranted,
+  makePermissionGrant,
+} from './permissions.js';
 import { selectMemory, type SelectResult } from '../memory/selector.js';
 import { memoryOwners } from '../memory/owners.js';
 
@@ -65,6 +75,7 @@ export class AgentRuntime {
   private readonly activeTurns = new Map<string, Promise<void>>();
   private readonly memorySummaries = new Map<string, AbortController>();
   private readonly cooldowns = new ProviderCooldownTracker();
+  private readonly pendingCliApprovals = new Map<string, CliPermissionRequest>();
   public readonly scheduler: RoomScheduler;
   public readonly loopGuard: LoopGuard;
   private shuttingDown = false;
@@ -326,6 +337,89 @@ export class AgentRuntime {
     this.scheduler.release(channelId, 'stopped');
     this.emitRoomQueue(channelId);
     return { stopped: Boolean(lease) };
+  }
+
+  public listCliApprovals(): CliPermissionRequest[] {
+    return [...this.pendingCliApprovals.values()];
+  }
+
+  private clearAgentCliApprovals(agentId: string): void {
+    for (const [id, req] of this.pendingCliApprovals) {
+      if (req.agentId === agentId) {
+        this.pendingCliApprovals.delete(id);
+        this.store.emitEvent({
+          type: 'cli-approval-resolved',
+          payload: { id, agentId, decision: 'deny' },
+        });
+      }
+    }
+  }
+
+  public resolveCliApproval(
+    id: string,
+    decision: CliPermissionDecision,
+  ): { ok: boolean; request?: CliPermissionRequest; grant?: PermissionGrant } {
+    const req = this.pendingCliApprovals.get(id);
+    if (!req) return { ok: false };
+
+    const matchingIds: string[] = [];
+    const mergedTools = new Set<string>(req.mcpTools ?? []);
+    for (const [pendingId, pending] of this.pendingCliApprovals) {
+      const sameAgent = pending.agentId === req.agentId;
+      const matchesTarget =
+        decision === 'allow_all_mcp'
+          ? pending.kind === 'mcp'
+          : pending.kind === req.kind && pending.target === req.target;
+      if (sameAgent && matchesTarget) {
+        matchingIds.push(pendingId);
+        for (const t of pending.mcpTools ?? []) mergedTools.add(t);
+        this.pendingCliApprovals.delete(pendingId);
+      }
+    }
+
+    const grant =
+      decision === 'allow_all_mcp'
+        ? makePermissionGrant('mcp', '*')
+        : makePermissionGrant(req.kind, req.target, [...mergedTools]);
+
+    if (decision === 'allow_always' || decision === 'allow_all_mcp') {
+      this.store.addApprovedPermission(grant);
+    }
+
+    for (const resolvedId of matchingIds) {
+      this.store.emitEvent({
+        type: 'cli-approval-resolved',
+        payload: {
+          id: resolvedId,
+          agentId: req.agentId,
+          decision,
+          ...(decision !== 'deny' ? { grant } : {}),
+        },
+      });
+    }
+
+    if (decision !== 'deny') {
+      this.store.enqueueItem({
+        agentId: req.agentId,
+        projectId: req.projectId,
+        channelId: req.channelId,
+        triggerMessageId: req.retryTriggerMessageId,
+        priority: 'resume',
+        kind: req.retryKind,
+        refId: req.retryRefId,
+        replyToAgentId: req.retryReplyToAgentId,
+        modelOverride: { provider: req.provider, model: req.model },
+        oneTimeGrants: decision === 'allow_once' ? [grant] : undefined,
+        permissionRetryDepth: 1,
+        prompt: `[Atelier System: User granted permission for ${grant.label}. Proceed now and execute the previously blocked tool call to answer the request.]\n\n${req.retryPrompt}`,
+      });
+      void this.drain(req.agentId);
+      if (req.channelId) {
+        this.kickNextInChannel(req.channelId);
+      }
+    }
+
+    return { ok: true, request: req, grant: decision !== 'deny' ? grant : undefined };
   }
 
   /**
@@ -734,6 +828,7 @@ export class AgentRuntime {
     if (!agent) return { stopped: false, agent: null };
 
     this.store.clearQueue(agentId);
+    this.clearAgentCliApprovals(agentId);
 
     const controller = this.activeAborts.get(agentId);
     const activeTurn = this.activeTurns.get(agentId);
@@ -999,6 +1094,7 @@ export class AgentRuntime {
 
   /** Stops every running turn (and clears their queues) but keeps the runtime usable. */
   public async stopAll(): Promise<void> {
+    this.pendingCliApprovals.clear();
     for (const controller of this.memorySummaries.values()) controller.abort();
     const ids = [...this.activeAborts.keys()];
     await Promise.allSettled(ids.map((id) => this.stop(id)));
@@ -1008,6 +1104,7 @@ export class AgentRuntime {
 
   public async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    this.pendingCliApprovals.clear();
     this.scheduler.close();
     for (const controller of this.memorySummaries.values()) controller.abort();
     for (const controller of this.activeAborts.values()) {
@@ -1298,6 +1395,67 @@ export class AgentRuntime {
       this.store.appendMessageDelta(replyMsg.id, delta);
     });
 
+    const effectiveGrants = buildEffectiveTurnGrants({
+      settingsGrants: settings.approvedPermissions,
+      oneTimeGrants: item.oneTimeGrants,
+      attachedMcp: this.store.getMcpServersForAgent(agent),
+    });
+    const deniedByKey = new Map<string, DetectedPermissionDenial & { mcpTools: Set<string> }>();
+    const recordDenial = (denial: DetectedPermissionDenial) => {
+      if (denial.kind === 'command' && !agent.allowShell) return;
+      if ((item.permissionRetryDepth ?? 0) >= 2) return;
+      if (isPermissionAlreadyGranted(effectiveGrants, denial)) return;
+      const key = `${denial.kind}:${denial.target}`;
+      const existing = deniedByKey.get(key);
+      if (existing) {
+        if (denial.mcpTool) existing.mcpTools.add(denial.mcpTool);
+        return;
+      }
+      deniedByKey.set(key, {
+        ...denial,
+        mcpTools: new Set(denial.mcpTool ? [denial.mcpTool] : []),
+      });
+    };
+    const emitCliApprovals = (): CliPermissionRequest[] => {
+      const created: CliPermissionRequest[] = [];
+      for (const entry of deniedByKey.values()) {
+        const mcpTools = [...entry.mcpTools];
+        const req: CliPermissionRequest = {
+          id: `perm_${randomUUID().slice(0, 12)}`,
+          agentId: agent.id,
+          agentName: agent.name,
+          projectId,
+          channelId: channel?.id ?? item.channelId ?? null,
+          messageId: replyMsg.id,
+          provider: effectiveProvider,
+          model: effectiveModel,
+          kind: entry.kind,
+          target: entry.target,
+          rawTool: entry.rawTool,
+          ...(mcpTools.length > 0 ? { mcpTools } : {}),
+          reason: entry.reason,
+          retryPrompt: item.prompt,
+          retryKind: item.kind,
+          retryRefId: item.refId,
+          retryTriggerMessageId: item.triggerMessageId ?? null,
+          retryReplyToAgentId: item.replyToAgentId ?? null,
+          createdAt: new Date().toISOString(),
+        };
+        this.pendingCliApprovals.set(req.id, req);
+        this.store.addActivity({
+          projectId,
+          agentId: agent.id,
+          messageId: replyMsg.id,
+          kind: 'status',
+          label: `Waiting permission: ${req.kind}(${req.target})`,
+          detail: req.reason,
+        });
+        this.store.emitEvent({ type: 'cli-approval', payload: req });
+        created.push(req);
+      }
+      return created;
+    };
+
     this.store.memory.beginTurn(agent.id);
     try {
       const refMessageId = item.triggerMessageId ?? item.refId;
@@ -1319,6 +1477,7 @@ export class AgentRuntime {
           ...(selective ? { memoryBlock: memorySelection?.text ?? '', omitCompaction: true } : {}),
           providerOverride: item.modelOverride?.provider,
           modelOverride: item.modelOverride?.model,
+          oneTimeGrants: item.oneTimeGrants,
           signal: controller.signal,
         },
         {
@@ -1352,6 +1511,9 @@ export class AgentRuntime {
           onSession: (id) => {
             sessionId = id;
           },
+          onPermissionDenied: (denial) => {
+            recordDenial(denial);
+          },
           onUsage: (inputTokens, outputTokens, costUsd) => {
             usageIn = inputTokens;
             usageOut = outputTokens;
@@ -1367,6 +1529,9 @@ export class AgentRuntime {
       );
 
       streamFilter.flush();
+      if (deniedByKey.size > 0) {
+        emitCliApprovals();
+      }
       const finalText =
         stripAtelierActions(rawFinalText) ||
         (turnActivities.length > 0 ? 'Completed turn.' : rawFinalText.trim());
@@ -1642,8 +1807,40 @@ export class AgentRuntime {
           pendingFallback: null,
         });
       } else {
-        releaseReason = 'error';
         const message = err instanceof Error ? err.message : String(err);
+        for (const denial of detectAllPermissionDenials(message)) {
+          recordDenial(denial);
+        }
+        if (deniedByKey.size > 0) {
+          releaseReason = 'done';
+          const created = emitCliApprovals();
+          const firstReq = created[0]!;
+          const existingText = this.store.getMessage(replyMsg.id)?.text.trim() ?? '';
+          this.store.finalizeMessage(replyMsg.id, {
+            ...(existingText
+              ? {
+                  appendText: `\n\nWaiting for permission approval to access ${firstReq.kind.toUpperCase()} "${firstReq.target}"…`,
+                }
+              : {
+                  text: `Waiting for permission approval to access ${firstReq.kind.toUpperCase()} "${firstReq.target}"…`,
+                }),
+            streaming: false,
+            durationMs,
+            metadata: {
+              activities: turnActivities,
+              provider: effectiveProvider,
+              model: effectiveModel,
+            },
+          });
+          this.store.updateAgent(agent.id, {
+            status: 'idle',
+            currentTask: null,
+            lastError: null,
+            pendingFallback: null,
+          });
+          return;
+        }
+        releaseReason = 'error';
         const classified = classifyTurnError(message);
         if (classified.cooldownMs > 0) {
           this.cooldowns.mark(effectiveProvider, effectiveModel, classified.cooldownMs, classified.kind);

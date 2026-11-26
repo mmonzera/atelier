@@ -23,10 +23,11 @@ import {
   RefreshCw,
   ShieldAlert,
   Trash2,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { shownModels } from '../state/models';
-import { api } from '../api';
+import { api, permissionsApi } from '../api';
 import {
   ModalShell,
   inputStyle,
@@ -902,6 +903,56 @@ export function SettingsView({
                 <ShieldAlert size={14} strokeWidth={1.5} style={{ color: 'var(--agent-red)' }} />{t('Allow shell-enabled agents full permissions (`bypassPermissions`) in')} {activeProject.name}
               </label>
               <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>{t('Per-project toggle: agents with shell execution enabled can run commands in the linked repo folder using your local user privileges.')}
+              </div>
+            </div>
+          )}
+
+          {(settings.approvedPermissions?.length ?? 0) > 0 && (
+            <div
+              style={{
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border-subtle)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)' }}>
+                {t('Saved CLI & MCP permissions')}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {(settings.approvedPermissions ?? []).map((grant) => (
+                  <span
+                    key={grant.key}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '3px 8px 3px 10px',
+                      borderRadius: 'var(--radius-full)',
+                      background: 'var(--surface-1)',
+                      border: '1px solid var(--border-default)',
+                      fontSize: 11.5,
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    <span>{grant.label}</span>
+                    <button
+                      type="button"
+                      title={t('Revoke permission')}
+                      onClick={() => void permissionsApi.revokeGrant(grant.key)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        color: 'var(--text-tertiary)',
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
               </div>
             </div>
           )}

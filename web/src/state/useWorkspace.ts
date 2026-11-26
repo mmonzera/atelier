@@ -4,6 +4,7 @@ import type {
   BrowserFrameEvent,
   BrowserSessionInfo,
   BrowserTakeoverEvent,
+  CliPermissionRequest,
   MeetingAppEvent,
   MeetingSession,
   MeetingStatusEvent,
@@ -25,6 +26,7 @@ export function useWorkspace() {
   const [loading, setLoading] = useState(true);
   const [browserSessions, setBrowserSessions] = useState<BrowserSessionInfo[]>([]);
   const [browserApprovals, setBrowserApprovals] = useState<BrowserApprovalRequest[]>([]);
+  const [cliApprovals, setCliApprovals] = useState<CliPermissionRequest[]>([]);
   const [browserFrames, setBrowserFrames] = useState<Record<string, BrowserFrameEvent>>({});
   const [browserTakeovers, setBrowserTakeovers] = useState<Record<string, BrowserTakeoverEvent>>({});
   const [sttDownload, setSttDownload] = useState<SttDownloadProgressEvent | null>(null);
@@ -50,6 +52,7 @@ export function useWorkspace() {
     const applySnapshotExtras = (snapshot: {
       browserSessions?: BrowserSessionInfo[];
       browserApprovals?: BrowserApprovalRequest[];
+      cliApprovals?: CliPermissionRequest[];
       activeMeeting?: MeetingStatusEvent | null;
       appUpdate?: AppUpdateStatus;
     }) => {
@@ -58,6 +61,9 @@ export function useWorkspace() {
       }
       if (Array.isArray(snapshot.browserApprovals)) {
         setBrowserApprovals(snapshot.browserApprovals);
+      }
+      if (Array.isArray(snapshot.cliApprovals)) {
+        setCliApprovals(snapshot.cliApprovals);
       }
       lastActive = snapshot.activeMeeting ?? null;
       setActiveMeeting(lastActive);
@@ -149,6 +155,20 @@ export function useWorkspace() {
           }
           if (parsed.type === 'browser-approval-resolved') {
             setBrowserApprovals((prev) => prev.filter((a) => a.id !== parsed.payload.id));
+            return;
+          }
+          if (parsed.type === 'cli-approval') {
+            setCliApprovals((prev) => {
+              const idx = prev.findIndex((a) => a.id === parsed.payload.id);
+              if (idx === -1) return [...prev, parsed.payload];
+              const copy = prev.slice();
+              copy[idx] = parsed.payload;
+              return copy;
+            });
+            return;
+          }
+          if (parsed.type === 'cli-approval-resolved') {
+            setCliApprovals((prev) => prev.filter((a) => a.id !== parsed.payload.id));
             return;
           }
           if (parsed.type === 'browser-takeover') {
@@ -287,6 +307,7 @@ export function useWorkspace() {
     loading,
     browserSessions,
     browserApprovals,
+    cliApprovals,
     browserFrames,
     browserTakeovers,
     sttDownload,

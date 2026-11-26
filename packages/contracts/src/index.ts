@@ -824,6 +824,53 @@ export interface BrowserApprovalResolvedEvent {
   allowed: boolean;
 }
 
+export type PermissionGrantKind = 'mcp' | 'tool' | 'command';
+
+export interface PermissionGrant {
+  /** Canonical key: `mcp:<server>` (or `mcp:*`), `tool:<name>`, `command:<pattern>` */
+  key: string;
+  kind: PermissionGrantKind;
+  /** Server name for `mcp` (e.g. `figelo` or `*`), tool name for `tool`, command pattern for `command` */
+  target: string;
+  label: string;
+  /** Optional observed MCP tool names (e.g. `['ping', 'list_figma_documents']`) for per-tool config overrides */
+  mcpTools?: string[];
+  createdAt: string;
+}
+
+export type CliPermissionDecision = 'allow_always' | 'allow_all_mcp' | 'allow_once' | 'deny';
+
+export interface CliPermissionRequest {
+  id: string;
+  agentId: string;
+  agentName: string;
+  projectId: string | null;
+  channelId: string | null;
+  messageId: string | null;
+  provider: ModelProvider;
+  model: string;
+  kind: PermissionGrantKind;
+  /** Canonical target, e.g. `figelo` for MCP server `figelo` */
+  target: string;
+  /** Exact blocked tool/command string observed, e.g. `figelo/ping` or `mcp__figelo__ping` */
+  rawTool: string;
+  mcpTools?: string[];
+  reason: string;
+  retryPrompt: string;
+  retryKind: QueueKind;
+  retryRefId: string | null;
+  retryTriggerMessageId: string | null;
+  retryReplyToAgentId: string | null;
+  createdAt: string;
+}
+
+export interface CliPermissionResolvedEvent {
+  id: string;
+  agentId: string;
+  decision: CliPermissionDecision;
+  grant?: PermissionGrant;
+}
+
 export interface BrowserTakeoverEvent {
   sessionId: string;
   agentId: string;
@@ -1553,6 +1600,7 @@ export interface Settings {
   meeting?: MeetingSettings;
   groupChat?: boolean;
   room?: ChannelSettings;
+  approvedPermissions?: PermissionGrant[];
 }
 
 export interface QueueItem {
@@ -1581,6 +1629,8 @@ export interface QueueItem {
     model: string;
     reason: FallbackErrorKind;
   } | null;
+  oneTimeGrants?: PermissionGrant[];
+  permissionRetryDepth?: number;
   createdAt: string;
 }
 
@@ -1598,6 +1648,7 @@ export interface WorkspaceState {
   settings: Settings;
   browserSessions?: BrowserSessionInfo[];
   browserApprovals?: BrowserApprovalRequest[];
+  cliApprovals?: CliPermissionRequest[];
   activeMeeting?: MeetingStatusEvent | null;
   appUpdate?: AppUpdateStatus;
 }
@@ -1720,6 +1771,7 @@ export interface SettingsInput {
   meeting?: Partial<MeetingSettings>;
   groupChat?: boolean;
   room?: Partial<ChannelSettings>;
+  approvedPermissions?: PermissionGrant[];
 }
 
 export interface ApiErrorResponse {
@@ -1766,6 +1818,8 @@ export type ServerEvent =
   | { type: 'browser-frame'; payload: BrowserFrameEvent }
   | { type: 'browser-approval'; payload: BrowserApprovalRequest }
   | { type: 'browser-approval-resolved'; payload: BrowserApprovalResolvedEvent }
+  | { type: 'cli-approval'; payload: CliPermissionRequest }
+  | { type: 'cli-approval-resolved'; payload: CliPermissionResolvedEvent }
   | { type: 'browser-takeover'; payload: BrowserTakeoverEvent }
   | { type: 'stt-download-progress'; payload: SttDownloadProgressEvent }
   | { type: 'cli-install-progress'; payload: CliInstallProgressEvent }

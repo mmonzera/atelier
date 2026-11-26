@@ -125,10 +125,23 @@ export function buildOpenCodeMcpConfig(
   servers: McpServerConfig[],
   majorVersion = 2,
   platform: NodeJS.Platform = process.platform,
-  opts?: { disabledGlobalNames?: Iterable<string>; allowShell?: boolean },
+  opts?: {
+    disabledGlobalNames?: Iterable<string>;
+    allowShell?: boolean;
+    allowedMcpNames?: Iterable<string>;
+    allowedTools?: Iterable<string>;
+  },
 ): Record<string, unknown> {
   const entries: Record<string, Record<string, unknown>> = {};
   const activeNames = new Set(servers.map((s) => s.name));
+  const allowedMcpSet = new Set(
+    Array.from(opts?.allowedMcpNames ?? [], (s) => s.trim()).filter(Boolean),
+  );
+  const allowedToolSet = new Set(
+    Array.from(opts?.allowedTools ?? [], (s) => s.trim()).filter(Boolean),
+  );
+  const allowAllMcp = allowedMcpSet.has('*');
+
   for (const s of servers) {
     if (s.transport === 'stdio') {
       const spec = toLaunchSpec(s, platform);
@@ -149,7 +162,9 @@ export function buildOpenCodeMcpConfig(
   }
   for (const rawName of opts?.disabledGlobalNames ?? []) {
     const globalName = rawName.trim();
-    if (!globalName || activeNames.has(globalName)) continue;
+    if (!globalName || activeNames.has(globalName) || allowAllMcp || allowedMcpSet.has(globalName)) {
+      continue;
+    }
     entries[globalName] =
       majorVersion >= 2
         ? { type: 'local', command: ['echo'], disabled: true }
@@ -161,20 +176,44 @@ export function buildOpenCodeMcpConfig(
 
   if (majorVersion >= 2) {
     if (hasEntries) out.mcp = { servers: entries };
-    const policies: Array<{ action: string; resource: string; effect: 'deny' }> = [];
-    if (servers.length === 0) {
+    const policies: Array<{ action: string; resource: string; effect: 'allow' | 'deny' }> = [];
+    if (servers.length === 0 && !allowAllMcp && allowedMcpSet.size === 0) {
       policies.push({ action: 'mcp.use', resource: '*', effect: 'deny' });
     }
     if (opts?.allowShell === false) {
       policies.push({ action: 'tool.use', resource: 'bash', effect: 'deny' });
+    }
+    if (allowAllMcp) {
+      policies.push({ action: 'mcp.use', resource: '*', effect: 'allow' });
+    } else {
+      for (const mcpName of allowedMcpSet) {
+        policies.push({ action: 'mcp.use', resource: mcpName, effect: 'allow' });
+      }
+    }
+    for (const toolName of allowedToolSet) {
+      policies.push({ action: 'tool.use', resource: toolName, effect: 'allow' });
     }
     if (policies.length > 0) {
       out.policies = policies;
     }
   } else {
     if (hasEntries) out.mcp = entries;
+    const permission: Record<string, 'allow' | 'deny'> = {};
     if (opts?.allowShell === false) {
-      out.permission = { bash: 'deny' };
+      permission.bash = 'deny';
+    }
+    if (allowAllMcp) {
+      permission['mcp*'] = 'allow';
+    } else {
+      for (const mcpName of allowedMcpSet) {
+        permission[`${mcpName}*`] = 'allow';
+      }
+    }
+    for (const toolName of allowedToolSet) {
+      permission[toolName] = 'allow';
+    }
+    if (Object.keys(permission).length > 0) {
+      out.permission = permission;
     }
   }
   return out;

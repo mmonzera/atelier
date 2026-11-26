@@ -11,6 +11,8 @@ import type {
   CanonEntry,
   Channel,
   ChannelSettings,
+  CliPermissionDecision,
+  CliPermissionRequest,
   AuthStatus,
   AutoBackupConfig,
   AutoBackupConfigInput,
@@ -44,6 +46,7 @@ import type {
   ModelEntry,
   ModelProvider,
   OnboardingStatus,
+  PermissionGrant,
   Project,
   ProviderAuthStatus,
   ProviderUsageLimit,
@@ -733,6 +736,26 @@ export const browserApi = {
       method: 'POST',
       body: JSON.stringify({ allow }),
     }),
+};
+
+export const permissionsApi = {
+  listApprovals: () =>
+    request<{ approvals: CliPermissionRequest[]; grants: PermissionGrant[] }>(
+      '/api/permissions/approvals',
+    ),
+  resolveApproval: (id: string, decision: CliPermissionDecision) =>
+    request<{ ok: boolean; grant?: PermissionGrant }>(
+      `/api/permissions/approvals/${encodeURIComponent(id)}/resolve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      },
+    ),
+  revokeGrant: (key: string) =>
+    request<{ ok: boolean; settings: Settings }>(
+      `/api/permissions/grants/${encodeURIComponent(key)}`,
+      { method: 'DELETE' },
+    ),
 };
 
 export const sttApi = {

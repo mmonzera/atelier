@@ -1,4 +1,5 @@
-import type { Agent, MessageAttachment, ModelProvider, Project } from '@atelier/contracts';
+import type { Agent, MessageAttachment, ModelProvider, PermissionGrant, Project } from '@atelier/contracts';
+import type { DetectedPermissionDenial } from './permissions.js';
 
 export interface Turn {
   agent: Agent;
@@ -23,6 +24,7 @@ export interface Turn {
   recallContinuation?: boolean;
   providerOverride?: ModelProvider;
   modelOverride?: string;
+  oneTimeGrants?: PermissionGrant[];
   signal: AbortSignal;
 }
 
@@ -30,6 +32,7 @@ export interface TurnCallbacks {
   onText(delta: string): void;
   onTool(name: string, input: unknown): void;
   onSession(sessionId: string): void;
+  onPermissionDenied?(denial: DetectedPermissionDenial): void;
   /** `costUsd` is the provider-reported cost when available (e.g. OpenRouter); otherwise it is estimated. */
   onUsage?(inputTokens: number, outputTokens: number, costUsd?: number): void;
   onContextTokens?(tokens: number): void;

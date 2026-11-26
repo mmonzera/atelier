@@ -14,6 +14,7 @@ import { AttachmentStore } from '../attachments.js';
 import { RoomContextBuilder } from '../channels/context.js';
 import { conversationTail, estimateTokens, getScopeKey } from './compactor.js';
 import { buildAgentSystemPrompt, renderCanon } from './prompts.js';
+import { buildClaudeExtraAllowedTools, buildEffectiveTurnGrants } from './permissions.js';
 import type { AgentRunner, Turn, TurnCallbacks } from './runner.js';
 import { applyAtelierActions } from './atelier-actions.js';
 import {
@@ -196,10 +197,22 @@ export class ClaudeAgentRunner implements AgentRunner {
       }
     }
 
+    const effectiveGrants = buildEffectiveTurnGrants({
+      settingsGrants: settings.approvedPermissions,
+      oneTimeGrants: turn.oneTimeGrants,
+      attachedMcp,
+    });
+    const extraGrantTools = buildClaudeExtraAllowedTools(effectiveGrants, turn.agent.allowShell);
     const extraMcpTools = attachedMcp.map((s) => `mcp__${s.name}__*`);
-    const allowedTools = turn.agent.allowShell
-      ? ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'mcp__atelier__*', ...extraMcpTools]
-      : ['Read', 'Write', 'mcp__atelier__*', ...extraMcpTools];
+    const allowedTools = [
+      ...new Set([
+        ...(turn.agent.allowShell
+          ? ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'mcp__atelier__*']
+          : ['Read', 'Write', 'mcp__atelier__*']),
+        ...extraMcpTools,
+        ...extraGrantTools,
+      ]),
+    ];
 
     const abortController = new AbortController();
     const onAbort = () => abortController.abort();

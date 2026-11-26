@@ -177,6 +177,7 @@ export async function startAtelierServer(opts?: {
       roomQueues,
       browserSessions: browserManager.listSessions(),
       browserApprovals: browserManager.listApprovals(),
+      cliApprovals: runtime.listCliApprovals(),
       activeMeeting: meetingService.getActiveMeetingStatus(),
       appUpdate: appUpdate.getStatus(),
     };

@@ -980,6 +980,37 @@ export function createHttpRouter(deps: {
     return c.json({ ok: true });
   });
 
+  api.get('/permissions/approvals', (c) =>
+    c.json({
+      approvals: runtime.listCliApprovals(),
+      grants: store.getSettings().approvedPermissions ?? [],
+    }),
+  );
+
+  api.post('/permissions/approvals/:id/resolve', async (c) => {
+    const id = c.req.param('id');
+    const body = await c.req.json().catch(() => null);
+    const parsed = z
+      .object({
+        decision: z.enum(['allow_always', 'allow_all_mcp', 'allow_once', 'deny']),
+      })
+      .safeParse(body);
+    if (!parsed.success) {
+      return c.json(apiError('invalid_decision', 'Invalid permission decision.'), 400);
+    }
+    const res = runtime.resolveCliApproval(id, parsed.data.decision);
+    if (!res.ok) {
+      return c.json(apiError('approval_not_found', `Permission approval ${id} not found.`), 404);
+    }
+    return c.json({ ok: true, ...(res.grant ? { grant: res.grant } : {}) });
+  });
+
+  api.delete('/permissions/grants/:key', (c) => {
+    const key = decodeURIComponent(c.req.param('key'));
+    const settings = store.removeApprovedPermission(key);
+    return c.json({ ok: true, settings });
+  });
+
   api.post('/channels/:id/chains/:rootMessageId/continue', (c) => {
     const channelId = c.req.param('id');
     const rootMessageId = c.req.param('rootMessageId');
@@ -1269,6 +1300,19 @@ export function createHttpRouter(deps: {
               .max(50)
               .optional(),
           })
+          .optional(),
+        approvedPermissions: z
+          .array(
+            z.object({
+              key: z.string().trim().min(1).max(200),
+              kind: z.enum(['mcp', 'tool', 'command']),
+              target: z.string().trim().min(1).max(200),
+              label: z.string().trim().min(1).max(200),
+              mcpTools: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
+              createdAt: z.string().trim().min(1).max(60),
+            }),
+          )
+          .max(200)
           .optional(),
       })
       .safeParse(body);

@@ -38,6 +38,7 @@ import {
   type ModelProvider,
   type ModelRef,
   type PendingFallbackOffer,
+  type PermissionGrant,
   type PortEntry,
   type Project,
   type ProjectRepo,
@@ -58,6 +59,7 @@ import {
 } from '@atelier/contracts';
 import type { EventBus } from './bus.js';
 import { buildMessageStub } from './channels/context.js';
+import { mergePermissionGrants } from './agents/permissions.js';
 import { ChannelService } from './channels/service.js';
 import type { AppConfig } from './config.js';
 import type { AtelierDb } from './db.js';
@@ -634,7 +636,35 @@ export class AtelierStore {
       fallbackChain: Array.isArray(parsed.fallbackChain) ? parsed.fallbackChain : [],
       sitePresets: Array.isArray(parsed.sitePresets) ? (parsed.sitePresets as SitePreset[]) : [],
       meeting: this.normalizeMeetingSettings(parsed.meeting),
+      approvedPermissions: this.normalizeApprovedPermissions(parsed.approvedPermissions),
     };
+  }
+
+  private normalizeApprovedPermissions(raw: unknown): PermissionGrant[] {
+    if (!Array.isArray(raw)) return [];
+    let merged: PermissionGrant[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue;
+      const g = item as Partial<PermissionGrant>;
+      if (
+        (g.kind !== 'mcp' && g.kind !== 'tool' && g.kind !== 'command') ||
+        typeof g.target !== 'string' ||
+        !g.target.trim()
+      ) {
+        continue;
+      }
+      merged = mergePermissionGrants(merged, {
+        key: typeof g.key === 'string' && g.key ? g.key : `${g.kind}:${g.target.trim()}`,
+        kind: g.kind,
+        target: g.target.trim(),
+        label: typeof g.label === 'string' && g.label ? g.label : `${g.kind} · ${g.target.trim()}`,
+        ...(Array.isArray(g.mcpTools) && g.mcpTools.length > 0
+          ? { mcpTools: g.mcpTools.map(String).filter(Boolean) }
+          : {}),
+        createdAt: typeof g.createdAt === 'string' && g.createdAt ? g.createdAt : nowIso(),
+      });
+    }
+    return merged;
   }
 
   private normalizeMemory(raw?: Partial<MemorySettings> | null): MemorySettings {
@@ -710,6 +740,44 @@ export class AtelierStore {
         meeting: input.meeting
           ? this.normalizeMeetingSettings({ ...(current.meeting ?? DEFAULT_MEETING_SETTINGS), ...input.meeting })
           : this.normalizeMeetingSettings(current.meeting),
+        approvedPermissions:
+          input.approvedPermissions !== undefined
+            ? this.normalizeApprovedPermissions(input.approvedPermissions)
+            : (current.approvedPermissions ?? []),
+      };
+      this.db.sqlite
+        .prepare(`UPDATE settings SET data = ? WHERE id = 1`)
+        .run(JSON.stringify(updated));
+      return [{ type: 'settings-changed', payload: updated }];
+    });
+    return updated;
+  }
+
+  public addApprovedPermission(grant: PermissionGrant): Settings {
+    let updated!: Settings;
+    this.runTx(() => {
+      const current = this.getSettings();
+      const next = mergePermissionGrants(current.approvedPermissions ?? [], grant);
+      updated = {
+        ...current,
+        approvedPermissions: next,
+      };
+      this.db.sqlite
+        .prepare(`UPDATE settings SET data = ? WHERE id = 1`)
+        .run(JSON.stringify(updated));
+      return [{ type: 'settings-changed', payload: updated }];
+    });
+    return updated;
+  }
+
+  public removeApprovedPermission(key: string): Settings {
+    let updated!: Settings;
+    this.runTx(() => {
+      const current = this.getSettings();
+      const next = (current.approvedPermissions ?? []).filter((g) => g.key !== key);
+      updated = {
+        ...current,
+        approvedPermissions: next,
       };
       this.db.sqlite
         .prepare(`UPDATE settings SET data = ? WHERE id = 1`)
@@ -2391,6 +2459,8 @@ export class AtelierStore {
     modelOverride?: ModelRef | null;
     fallbackAttempt?: number;
     fallbackFrom?: { provider: ModelProvider; model: string; reason: FallbackErrorKind } | null;
+    oneTimeGrants?: PermissionGrant[];
+    permissionRetryDepth?: number;
   }): { item: QueueItem; agent: Agent | null } {
     const item: QueueItem = {
       id: newId('q'),
@@ -2413,6 +2483,10 @@ export class AtelierStore {
       modelOverride: input.modelOverride ?? null,
       fallbackAttempt: input.fallbackAttempt ?? 0,
       fallbackFrom: input.fallbackFrom ?? null,
+      ...(input.oneTimeGrants?.length ? { oneTimeGrants: input.oneTimeGrants } : {}),
+      ...(input.permissionRetryDepth !== undefined
+        ? { permissionRetryDepth: input.permissionRetryDepth }
+        : {}),
       createdAt: nowIso(),
     };
     let updatedAgent: Agent | null = null;

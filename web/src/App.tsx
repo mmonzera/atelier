@@ -19,6 +19,7 @@ import { setBootStage } from './components/BootLoader';
 import { MeetingAppPrompt } from './components/MeetingAppPrompt';
 import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingRecordingPill } from './components/MeetingRecordingPill';
+import { PermissionApprovalModal } from './components/PermissionApprovalModal';
 import { PatternBackground } from './components/PatternBackground';
 import { LeftRail } from './components/LeftRail';
 import { RightPanel } from './components/RightPanel';
@@ -95,6 +96,7 @@ export function App() {
     loading,
     browserSessions,
     browserApprovals,
+    cliApprovals,
     browserFrames,
     browserTakeovers,
     sttDownload,
@@ -756,6 +758,7 @@ export function App() {
                     onOpenTask={(task) => setModal({ type: 'edit-task', taskId: task.id })}
                     onOpenEditAgent={() => setModal({ type: 'edit-agent', agentId: activeAgent.id })}
                     browserApprovals={browserApprovals}
+                    cliApprovals={cliApprovals}
                     browserTakeovers={browserTakeovers}
                     browserSessions={browserSessions}
                     onOpenBrowserTab={() => setAgentTab('browser')}
@@ -973,6 +976,7 @@ export function App() {
                 }
                 onOpenTask={(task) => setModal({ type: 'edit-task', taskId: task.id })}
                 browserApprovals={browserApprovals}
+                cliApprovals={cliApprovals}
                 browserTakeovers={browserTakeovers}
                 browserSessions={browserSessions}
               />
@@ -999,6 +1003,7 @@ export function App() {
                   setModal({ type: 'edit-agent', agentId: activeProjectAgent.id })
                 }
                 browserApprovals={browserApprovals}
+                cliApprovals={cliApprovals}
                 browserTakeovers={browserTakeovers}
                 browserSessions={browserSessions}
                 onOpenBrowserTab={() => setActiveTab('browser')}
@@ -1298,6 +1303,8 @@ export function App() {
           onClose={() => setModal(null)}
         />
       )}
+
+      {cliApprovals.length > 0 && <PermissionApprovalModal approvals={cliApprovals} />}
     </div>
     </FilePreviewProvider>
   );

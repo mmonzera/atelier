@@ -1232,4 +1232,12 @@ export const id: Record<string, string> = {
   "Zoom out": "Perkecil",
   "Reset zoom": "Reset zoom",
   "This file format cannot be rendered inline, but you can inspect its file path or download it.": "Format file ini tidak dapat dirender langsung, tetapi kamu tetap bisa melihat path file atau mengunduhnya.",
+  "Permission Required": "Izin Akses Diperlukan",
+  "Always allow {target}": "Izinkan selalu {target}",
+  "Allow all MCP servers": "Izinkan semua server MCP",
+  "Saved permission for {target}": "Izin untuk {target} disimpan permanen",
+  "Saved permission for all MCP servers": "Izin untuk semua server MCP disimpan permanen",
+  "Saved CLI & MCP permissions": "Izin CLI & MCP tersimpan",
+  "Revoke permission": "Cabut izin",
+  "Choosing Always Allow saves this permission permanently across all agents and CLI models (Antigravity, ChatGPT, Claude, OpenCode) so it will never ask again.": "Memilih Izinkan Selalu akan menyimpan izin ini secara permanen untuk semua agent dan model CLI (Antigravity, ChatGPT, Claude, OpenCode) sehingga tidak akan ditanyakan lagi.",
 };

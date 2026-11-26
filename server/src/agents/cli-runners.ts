@@ -35,6 +35,17 @@ import { conversationTail, estimateTokens, getScopeKey } from './compactor.js';
 import { McpTurnBridge, applyMcpAtelierActions } from '../mcp/client.js';
 import { resolveMcpAuth } from '../mcp/oauth.js';
 import { buildAgentSystemPrompt, renderCanon } from './prompts.js';
+import {
+  buildAntigravityAllowedRules,
+  buildClaudeExtraAllowedTools,
+  buildCodexPermissionArgs,
+  buildEffectiveTurnGrants,
+  detectAllPermissionDenials,
+  detectPermissionDenial,
+  parseClaudeToolDenial,
+  parseCodexItemDenial,
+  parseOpenCodeEventDenial,
+} from './permissions.js';
 import type { AgentRunner, Turn, TurnCallbacks } from './runner.js';
 import {
   ACTION_TAG_RE,
@@ -225,6 +236,7 @@ export interface AntigravityInvocationOptions {
   attachmentDir: string;
   artifactDir?: string | null;
   resumeConversationId?: string | null;
+  allowedPermissions?: string[];
   fullPrompt: string;
 }
 
@@ -243,17 +255,27 @@ export function buildAntigravityCliInvocation(
   let mode: string | null = null;
   let skipPermissions = false;
   const inlineSettings: Record<string, unknown> = { modelProvider: '' };
+  const allowRules = !opts.memoryOnly ? (opts.allowedPermissions ?? []).filter(Boolean) : [];
 
   if (opts.memoryOnly) {
     inlineSettings.toolPermission = 'strict';
   } else if (!opts.allowShell) {
     mode = 'accept-edits';
-    inlineSettings.permissions = { deny: ['command(*)'] };
+    inlineSettings.permissions = {
+      deny: ['command(*)'],
+      ...(allowRules.length > 0 ? { allow: allowRules } : {}),
+    };
   } else if (opts.allowFullPermissions) {
     mode = 'auto';
     skipPermissions = true;
+    if (allowRules.length > 0) {
+      inlineSettings.permissions = { allow: allowRules };
+    }
   } else {
     mode = 'auto';
+    if (allowRules.length > 0) {
+      inlineSettings.permissions = { allow: allowRules };
+    }
   }
 
   const args = [
@@ -289,7 +311,10 @@ export function buildAntigravityCliInvocation(
 export function parseAntigravityStreamLine(
   line: string,
   acc: string,
-  cb: Pick<TurnCallbacks, 'onText' | 'onTool' | 'onSession' | 'onUsage' | 'onContextTokens'>,
+  cb: Pick<
+    TurnCallbacks,
+    'onText' | 'onTool' | 'onSession' | 'onUsage' | 'onContextTokens' | 'onPermissionDenied'
+  >,
 ): { acc: string; error?: string } {
   let ev: Record<string, unknown>;
   try {
@@ -325,17 +350,22 @@ export function parseAntigravityStreamLine(
       cb.onText(stepUpdate.text_delta);
       return { acc: acc + stepUpdate.text_delta };
     }
-    if (stepUpdate.step_type === 'tool' && stepUpdate.state === 'DONE') {
-      const toolInfo =
-        stepUpdate.tool_info && typeof stepUpdate.tool_info === 'object'
-          ? (stepUpdate.tool_info as Record<string, unknown>)
-          : null;
-      const toolName =
-        (typeof stepUpdate.tool_name === 'string' && stepUpdate.tool_name) ||
-        (typeof toolInfo?.name === 'string' && toolInfo.name) ||
-        '';
-      if (toolName) {
-        cb.onTool(toolName, toolInfo?.parameters ?? {});
+    if (stepUpdate.step_type === 'tool') {
+      for (const denial of detectAllPermissionDenials(JSON.stringify(stepUpdate), { strictCliOnly: true })) {
+        cb.onPermissionDenied?.(denial);
+      }
+      if (stepUpdate.state === 'DONE') {
+        const toolInfo =
+          stepUpdate.tool_info && typeof stepUpdate.tool_info === 'object'
+            ? (stepUpdate.tool_info as Record<string, unknown>)
+            : null;
+        const toolName =
+          (typeof stepUpdate.tool_name === 'string' && stepUpdate.tool_name) ||
+          (typeof toolInfo?.name === 'string' && toolInfo.name) ||
+          '';
+        if (toolName) {
+          cb.onTool(toolName, toolInfo?.parameters ?? {});
+        }
       }
     }
   } else if (ev.event === 'result' && resultObj) {
@@ -352,6 +382,9 @@ export function parseAntigravityStreamLine(
         typeof resultObj.error === 'string' && resultObj.error.trim()
           ? resultObj.error.trim()
           : `Antigravity CLI ended with status ${resultObj.status}`;
+      for (const denial of detectAllPermissionDenials(errMsg)) {
+        cb.onPermissionDenied?.(denial);
+      }
       return { acc, error: errMsg };
     }
     if (typeof resultObj.response === 'string' && resultObj.response && !acc) {
@@ -817,8 +850,19 @@ export class CliAgentRunner implements AgentRunner {
         ? 'bypassPermissions'
         : 'auto';
 
+    const effectiveGrants = buildEffectiveTurnGrants({
+      settingsGrants: this.store.getSettings().approvedPermissions,
+      oneTimeGrants: turn.oneTimeGrants,
+      attachedMcp: opts.mcpServers,
+    });
     const baseTools = turn.agent.allowShell ? ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'] : ['Read', 'Write'];
-    const allowedTools = [...baseTools, ...claudeAllowedMcpTools(opts.mcpServers)].join(',');
+    const allowedTools = [
+      ...new Set([
+        ...baseTools,
+        ...claudeAllowedMcpTools(opts.mcpServers),
+        ...buildClaudeExtraAllowedTools(effectiveGrants, turn.agent.allowShell),
+      ]),
+    ].join(',');
     const args = [
       '-p',
       '--output-format=stream-json',
@@ -861,6 +905,7 @@ export class CliAgentRunner implements AgentRunner {
     const fullPrompt = this.composeCliPrompt(turn, opts.systemPrompt, promptBody, Boolean(nativeResumeId));
 
     let claudeError: string | null = null;
+    const seenClaudeTools = new Map<string, { name: string; input: Record<string, unknown> }>();
     try {
       const out = await this.execStreaming(binPath, args, opts.cwd, fullPrompt, turn.signal, (line, acc) => {
         try {
@@ -883,7 +928,46 @@ export class CliAgentRunner implements AgentRunner {
                 if (block && typeof block === 'object') {
                   const b = block as Record<string, unknown>;
                   if (b.type === 'tool_use' && typeof b.name === 'string') {
+                    const toolInput =
+                      b.input && typeof b.input === 'object' ? (b.input as Record<string, unknown>) : {};
+                    if (typeof b.id === 'string') {
+                      seenClaudeTools.set(b.id, { name: b.name, input: toolInput });
+                    }
                     cb.onTool(b.name, b.input ?? {});
+                  }
+                }
+              }
+            }
+          } else if (ev.type === 'user' && ev.message && typeof ev.message === 'object') {
+            const msg = ev.message as Record<string, unknown>;
+            if (Array.isArray(msg.content)) {
+              for (const block of msg.content) {
+                if (!block || typeof block !== 'object') continue;
+                const b = block as Record<string, unknown>;
+                if (b.type === 'tool_result' && b.is_error === true) {
+                  const errText =
+                    typeof b.content === 'string'
+                      ? b.content
+                      : Array.isArray(b.content)
+                        ? b.content
+                            .map((c) =>
+                              c && typeof c === 'object' && typeof (c as Record<string, unknown>).text === 'string'
+                                ? String((c as Record<string, unknown>).text)
+                                : '',
+                            )
+                            .join(' ')
+                        : '';
+                  if (errText) {
+                    const textDenial = detectPermissionDenial(errText);
+                    if (textDenial) {
+                      cb.onPermissionDenied?.(textDenial);
+                    } else if (/permission|approval|denied|not\s+allowed/i.test(errText)) {
+                      const toolMeta = typeof b.tool_use_id === 'string' ? seenClaudeTools.get(b.tool_use_id) : undefined;
+                      if (toolMeta) {
+                        const parsed = parseClaudeToolDenial(toolMeta.name, toolMeta.input, errText);
+                        if (parsed) cb.onPermissionDenied?.(parsed);
+                      }
+                    }
                   }
                 }
               }
@@ -895,6 +979,19 @@ export class CliAgentRunner implements AgentRunner {
               cb.onContextTokens?.(Number(u.input_tokens ?? 0) +
                 Number(u.cache_read_input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0));
             }
+            if (Array.isArray(ev.permission_denials)) {
+              for (const item of ev.permission_denials) {
+                if (!item || typeof item !== 'object') continue;
+                const rec = item as Record<string, unknown>;
+                const toolName = String(rec.tool_name || rec.tool || '');
+                const toolInput =
+                  rec.tool_input && typeof rec.tool_input === 'object'
+                    ? (rec.tool_input as Record<string, unknown>)
+                    : undefined;
+                const denial = parseClaudeToolDenial(toolName, toolInput);
+                if (denial) cb.onPermissionDenied?.(denial);
+              }
+            }
             if (ev.is_error === true) {
               claudeError =
                 typeof ev.result === 'string' && ev.result.trim()
@@ -902,6 +999,9 @@ export class CliAgentRunner implements AgentRunner {
                   : Array.isArray(ev.errors) && ev.errors.length > 0
                     ? ev.errors.map(String).join('; ')
                     : 'Claude CLI returned an error';
+              for (const denial of detectAllPermissionDenials(claudeError)) {
+                cb.onPermissionDenied?.(denial);
+              }
               return acc;
             }
             if (typeof ev.result === 'string' && !acc) {
@@ -959,11 +1059,27 @@ export class CliAgentRunner implements AgentRunner {
         ? 'danger-full-access'
         : 'workspace-write';
 
+    const effectiveGrants = buildEffectiveTurnGrants({
+      settingsGrants: this.store.getSettings().approvedPermissions,
+      oneTimeGrants: turn.oneTimeGrants,
+      attachedMcp: opts.mcpServers,
+    });
+    const artifactDir = this.store.artifactDirectory(turn.project?.id ?? null);
+    const extraDirs = [
+      this.attachmentStore.directory,
+      ...(fs.existsSync(artifactDir) ? [artifactDir] : []),
+    ];
+
     const imageArgs = this.attachmentStore
       .imagePaths(turn.attachments)
       .map((p) => `--image=${p}`);
     const args = [
       'exec',
+      ...buildCodexPermissionArgs(effectiveGrants, {
+        allowShell: turn.agent.allowShell,
+        memoryOnly: Boolean(turn.memoryOnly),
+        extraDirs,
+      }),
       ...(turn.memoryOnly ? ['--ephemeral', '--ignore-user-config', '--disable', 'shell_tool'] : []),
       ...buildCodexMcpArgs(opts.mcpServers, process.platform, {
         'atelier-browser': BROWSER_TOOL_NAMES,
@@ -991,8 +1107,10 @@ export class CliAgentRunner implements AgentRunner {
           const ev = JSON.parse(line) as Record<string, unknown>;
           if (ev.type === 'thread.started' && typeof ev.thread_id === 'string') {
             cb.onSession(`openai:${ev.thread_id}`);
-          } else if (ev.type === 'item.completed' && ev.item && typeof ev.item === 'object') {
+          } else if ((ev.type === 'item.completed' || ev.type === 'item.failed') && ev.item && typeof ev.item === 'object') {
             const item = ev.item as Record<string, unknown>;
+            const denial = parseCodexItemDenial(item);
+            if (denial) cb.onPermissionDenied?.(denial);
             if (item.type === 'agent_message' && typeof item.text === 'string') {
               cb.onText(item.text);
               return acc ? `${acc}\n${item.text}` : item.text;
@@ -1011,11 +1129,17 @@ export class CliAgentRunner implements AgentRunner {
             cb.onContextTokens?.(inputTok);
           } else if (ev.type === 'error' && typeof ev.message === 'string' && ev.message.trim()) {
             codexError = ev.message.trim();
+            for (const denial of detectAllPermissionDenials(codexError)) {
+              cb.onPermissionDenied?.(denial);
+            }
           } else if (ev.type === 'turn.failed' && ev.error && typeof ev.error === 'object') {
             codexTurnFailed = true;
             const errObj = ev.error as Record<string, unknown>;
             if (typeof errObj.message === 'string' && errObj.message.trim()) {
               codexError = errObj.message.trim();
+              for (const denial of detectAllPermissionDenials(codexError)) {
+                cb.onPermissionDenied?.(denial);
+              }
             }
           }
         } catch {
@@ -1069,6 +1193,12 @@ export class CliAgentRunner implements AgentRunner {
       Boolean(nativeResumeId),
     );
 
+    const effectiveGrants = buildEffectiveTurnGrants({
+      settingsGrants: this.store.getSettings().approvedPermissions,
+      oneTimeGrants: turn.oneTimeGrants,
+      attachedMcp: opts.mcpServers,
+    });
+    const allowedPermissions = buildAntigravityAllowedRules(effectiveGrants, turn.agent.allowShell);
     const artifactDir = this.store.artifactDirectory(turn.project?.id ?? null);
     const { args, stdinPayload } = buildAntigravityCliInvocation({
       model: opts.model,
@@ -1079,6 +1209,7 @@ export class CliAgentRunner implements AgentRunner {
       attachmentDir: this.attachmentStore.directory,
       artifactDir: fs.existsSync(artifactDir) ? artifactDir : null,
       resumeConversationId: nativeResumeId,
+      allowedPermissions: allowedPermissions.length > 0 ? allowedPermissions : undefined,
       fullPrompt,
     });
 
@@ -1106,6 +1237,11 @@ export class CliAgentRunner implements AgentRunner {
         cleanAntigravityEnv(),
         opts.budgetSignal,
       );
+      if (out && !turn.memoryOnly) {
+        for (const denial of detectAllPermissionDenials(out, { strictCliOnly: true })) {
+          cb.onPermissionDenied?.(denial);
+        }
+      }
       if (streamError && !turn.signal.aborted) {
         throw new Error(formatAuthHint(streamError));
       }
@@ -1548,6 +1684,16 @@ export class CliAgentRunner implements AgentRunner {
     const isolation: string[] = [...standaloneArgs];
     let tempConfigPath: string | null = null;
 
+    const settings = this.store.getSettings();
+    const effectiveGrants = buildEffectiveTurnGrants({
+      settingsGrants: settings.approvedPermissions,
+      oneTimeGrants: turn.oneTimeGrants,
+      attachedMcp: opts.mcpServers,
+    });
+    const allowedMcpNames = effectiveGrants.filter((g) => g.kind === 'mcp').map((g) => g.target);
+    const allowedTools = effectiveGrants.filter((g) => g.kind === 'tool').map((g) => g.target);
+    const isolateGlobalMcp = settings.mcpServers.length > 0;
+
     let configObj: Record<string, unknown> | null = null;
     if (turn.memoryOnly) {
       configObj =
@@ -1560,13 +1706,17 @@ export class CliAgentRunner implements AgentRunner {
           : { permission: { '*': 'deny' } };
     } else if (
       opts.mcpServers.length > 0 ||
-      globalMcpNames.size > 0 ||
+      (isolateGlobalMcp && globalMcpNames.size > 0) ||
+      allowedMcpNames.length > 0 ||
+      allowedTools.length > 0 ||
       !turn.agent.allowShell ||
       matchedCustom
     ) {
       configObj = buildOpenCodeMcpConfig(opts.mcpServers, major, process.platform, {
-        disabledGlobalNames: globalMcpNames,
+        disabledGlobalNames: isolateGlobalMcp ? globalMcpNames : [],
         allowShell: turn.agent.allowShell,
+        allowedMcpNames,
+        allowedTools,
       });
       if (matchedCustom) {
         const rootKey = major >= 2 ? 'providers' : 'provider';
@@ -1591,6 +1741,7 @@ export class CliAgentRunner implements AgentRunner {
     const args = [
       ...isolation,
       'run',
+      ...(!turn.memoryOnly && major >= 2 ? ['--auto'] : []),
       '--format=json',
       `--model=${opts.model}`,
       ...(nativeResumeId ? [`--session=${nativeResumeId}`] : []),
@@ -1620,6 +1771,9 @@ export class CliAgentRunner implements AgentRunner {
                   ? ev.session_id
                   : null;
             if (sid) cb.onSession(`opencode:${sid}`);
+
+            const denial = parseOpenCodeEventDenial(ev);
+            if (denial) cb.onPermissionDenied?.(denial);
 
             if (ev.type === 'error') {
               const errObj =

@@ -9,6 +9,7 @@ import {
   type BrowserSessionInfo,
   type BrowserTakeoverEvent,
   type Channel,
+  type CliPermissionRequest,
   type Message,
   type ModelEntry,
   type ModelProvider,
@@ -30,13 +31,14 @@ import {
   RefreshCw,
   Reply,
   RotateCcw,
+  ShieldAlert,
   SkipForward,
   Sparkles,
   Square,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../api';
+import { api, permissionsApi } from '../api';
 import { MemoryChip } from '../components/MemoryChip';
 import { FormattedText, getColorVar } from '../components/Atoms';
 import { MessageAttachments, isAttachmentOnlyText } from '../components/AttachmentViews';
@@ -72,6 +74,7 @@ interface RoomViewProps {
   onCreateTaskFromReply?: (description: string) => void;
   onOpenTask: (task: Task) => void;
   browserApprovals?: BrowserApprovalRequest[];
+  cliApprovals?: CliPermissionRequest[];
   browserTakeovers?: Record<string, BrowserTakeoverEvent>;
   browserSessions?: BrowserSessionInfo[];
 }
@@ -164,6 +167,7 @@ export function RoomView({
   onRetryAgent,
   onCreateTaskFromReply,
   onOpenTask,
+  cliApprovals = [],
 }: RoomViewProps) {
   const tr = useT();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -1259,6 +1263,81 @@ export function RoomView({
             );
           })
         )}
+
+        {cliApprovals
+          .filter((req) => req.channelId === channel.id || agents.some((a) => a.id === req.agentId))
+          .map((req) => (
+            <div
+              key={req.id}
+              style={{
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'rgba(244, 188, 46, 0.08)',
+                border: '1px solid rgba(244, 188, 46, 0.3)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                fontSize: 12.5,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ShieldAlert size={15} style={{ color: 'var(--agent-amber)', flexShrink: 0 }} />
+                <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                  {req.agentName} · {tr('Permission Required')}: {req.target}
+                </span>
+                <span className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  {req.rawTool}
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => void permissionsApi.resolveApproval(req.id, 'allow_always')}
+                  style={{
+                    height: 26,
+                    padding: '0 11px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--agent-green)',
+                    color: '#0d0d11',
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                  }}
+                >
+                  {tr('Always allow {target}', { target: req.target })}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void permissionsApi.resolveApproval(req.id, 'allow_once')}
+                  style={{
+                    height: 26,
+                    padding: '0 11px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border-default)',
+                    color: 'var(--text-primary)',
+                    fontSize: 11.5,
+                  }}
+                >
+                  {tr('Allow once')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void permissionsApi.resolveApproval(req.id, 'deny')}
+                  style={{
+                    height: 26,
+                    padding: '0 11px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border-default)',
+                    color: 'var(--agent-red)',
+                    fontSize: 11.5,
+                  }}
+                >
+                  {tr('Deny')}
+                </button>
+              </div>
+            </div>
+          ))}
 
         {erroredAgents.map((errAgent) => (
           <div
