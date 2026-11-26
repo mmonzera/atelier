@@ -105,6 +105,17 @@ export interface ModelCatalog {
   note?: string;
 }
 
+export type CliInstallStatus = 'downloading' | 'extracting' | 'verifying' | 'done' | 'error';
+
+export interface CliInstallProgressEvent {
+  provider: RealProvider;
+  status: CliInstallStatus;
+  percent: number | null;
+  message: string;
+  cliPath?: string | null;
+  error?: string | null;
+}
+
 export interface ProviderAuthStatus {
   provider: RealProvider;
   label: string;
@@ -114,6 +125,8 @@ export interface ProviderAuthStatus {
   authenticated: boolean;
   accountLabel: string | null;
   loginInProgress: boolean;
+  installInProgress?: boolean;
+  installPercent?: number | null;
   authUrl: string | null;
   message: string;
 }
@@ -1755,6 +1768,7 @@ export type ServerEvent =
   | { type: 'browser-approval-resolved'; payload: BrowserApprovalResolvedEvent }
   | { type: 'browser-takeover'; payload: BrowserTakeoverEvent }
   | { type: 'stt-download-progress'; payload: SttDownloadProgressEvent }
+  | { type: 'cli-install-progress'; payload: CliInstallProgressEvent }
   | { type: 'meeting-status'; payload: MeetingStatusEvent }
   | { type: 'meeting-app'; payload: MeetingAppEvent }
   | { type: 'meeting-level'; payload: MeetingLevelEvent }

@@ -5,6 +5,7 @@ import type { Server } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono } from 'hono';
+import { CliInstaller } from './agents/cli-installer.js';
 import { ProviderAuthManager } from './agents/provider-auth.js';
 import { AgentRuntime } from './agents/runtime.js';
 import type { AgentRunner } from './agents/runner.js';
@@ -105,6 +106,12 @@ export async function startAtelierServer(opts?: {
     browserManager,
   );
   const authManager = new ProviderAuthManager();
+  const cliInstaller = new CliInstaller({
+    dataDir: config.dataDir,
+    store,
+    authManager,
+    onProgress: (payload) => bus.broadcast({ type: 'cli-install-progress', payload }),
+  });
 
   const sttInstaller = new SttInstaller({
     dataDir: config.dataDir,
@@ -201,6 +208,7 @@ export async function startAtelierServer(opts?: {
       runtime,
       config,
       authManager,
+      cliInstaller,
       vault,
       securityRoutes: createSecurityRoutes({
         vault,

@@ -15,6 +15,7 @@ import {
 } from '@atelier/contracts';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { CliInstallError, CliInstaller } from './agents/cli-installer.js';
 import { discoverLocalCodexModels } from './agents/cli-runners.js';
 import { getModelCatalog } from './agents/model-catalog.js';
 import { ProviderAuthManager } from './agents/provider-auth.js';
@@ -76,6 +77,7 @@ export function createHttpRouter(deps: {
   runtime: AgentRuntime;
   config: AppConfig;
   authManager?: ProviderAuthManager;
+  cliInstaller?: CliInstaller;
   /** Optional app lock: when set, every route except the lock screen's requires a session. */
   vault?: LocalVault;
   /** Auth + backup routes, mounted behind the origin check (and the lock gate for non-public ones). */
@@ -97,6 +99,13 @@ export function createHttpRouter(deps: {
       currentVersion: process.env.ATELIER_APP_VERSION || '0.1.0',
     });
   const authManager = deps.authManager ?? new ProviderAuthManager();
+  const cliInstaller =
+    deps.cliInstaller ??
+    new CliInstaller({
+      dataDir: config.dataDir,
+      store,
+      authManager,
+    });
   const api = new Hono();
 
   api.use('*', async (c, next) => {
@@ -1569,14 +1578,39 @@ if(p.ok)setTimeout(()=>window.close(),1200)</script>`);
 
   // Multi-provider OAuth login, API keys & CLI status
   api.get('/providers/status', async (c) => {
-    const [providers, codexModels] = await Promise.all([
+    const [rawProviders, codexModels] = await Promise.all([
       authManager.getStatuses(store.getSettings(), store),
       Promise.resolve(discoverLocalCodexModels()),
     ]);
+    const providers = rawProviders.map((p) => {
+      const active = cliInstaller.getActiveInstall(p.provider);
+      return active
+        ? { ...p, installInProgress: true, installPercent: active.percent }
+        : p;
+    });
     return c.json({
       providers,
       discoveredModels: [...codexModels, ...authManager.getDiscoveredAntigravityModels()],
     });
+  });
+
+  api.post('/providers/:provider/install', (c) => {
+    const parsed = providerSchema.safeParse(c.req.param('provider'));
+    if (!parsed.success) {
+      return c.json(apiError('invalid_provider', 'Unsupported provider.'), 400);
+    }
+    try {
+      const install = cliInstaller.startInstall(parsed.data);
+      return c.json({ install }, 202);
+    } catch (err) {
+      if (err instanceof CliInstallError) {
+        return c.json(apiError(err.code, err.message), err.status);
+      }
+      return c.json(
+        apiError('install_failed', err instanceof Error ? err.message : 'Failed to start CLI installation.'),
+        500,
+      );
+    }
   });
 
   // Every model a provider offers (live where the provider has a list), for the model picker settings

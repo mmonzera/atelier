@@ -1,6 +1,7 @@
 import { useT } from '../../i18n';
 import {
   BUILT_IN_MODELS,
+  type CliInstallProgressEvent,
   type ModelEntry,
   type ProviderAuthStatus,
   type RealProvider,
@@ -8,6 +9,7 @@ import {
 } from '@atelier/contracts';
 import {
   Check,
+  Download,
   ExternalLink,
   Key,
   LogIn,
@@ -78,6 +80,7 @@ export function ModelsProvidersPanel({
   const [localDiscovered, setLocalDiscovered] = useState<ModelEntry[]>(discoveredModels);
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [busyProvider, setBusyProvider] = useState<RealProvider | null>(null);
+  const [installProgress, setInstallProgress] = useState<Partial<Record<RealProvider, CliInstallProgressEvent>>>({});
   const [expandedCliPath, setExpandedCliPath] = useState<Partial<Record<RealProvider, boolean>>>({});
   const [cliPathDrafts, setCliPathDrafts] = useState<Partial<Record<RealProvider, string>>>(
     settings.cliPaths ?? {},
@@ -118,6 +121,36 @@ export function ModelsProvidersPanel({
     return () => window.clearInterval(id);
   }, [providers, loadStatuses]);
 
+  useEffect(() => {
+    const onProgress = (event: Event) => {
+      const ev = (event as CustomEvent<CliInstallProgressEvent>).detail;
+      if (!ev || !ev.provider) return;
+      if (ev.status === 'done') {
+        setInstallProgress((prev) => {
+          const next = { ...prev };
+          delete next[ev.provider];
+          return next;
+        });
+        toast.success(t('{v0} CLI installed and ready', { v0: PROVIDER_SHORT[ev.provider] }));
+        void loadStatuses();
+        return;
+      }
+      if (ev.status === 'error') {
+        setInstallProgress((prev) => {
+          const next = { ...prev };
+          delete next[ev.provider];
+          return next;
+        });
+        setError(ev.error || ev.message);
+        void loadStatuses();
+        return;
+      }
+      setInstallProgress((prev) => ({ ...prev, [ev.provider]: ev }));
+    };
+    window.addEventListener('atelier:cli-install-progress', onProgress);
+    return () => window.removeEventListener('atelier:cli-install-progress', onProgress);
+  }, [loadStatuses, t]);
+
   const allModels = useMemo(() => {
     const merged: ModelEntry[] = [];
     const seen = new Set<string>();
@@ -155,6 +188,19 @@ export function ModelsProvidersPanel({
       setProviders((prev) => prev.map((p) => (p.provider === provider ? res.status : p)));
     } catch (err) {
       setError(err instanceof Error ? err.message : t('Failed to start login'));
+    } finally {
+      setBusyProvider(null);
+    }
+  };
+
+  const handleInstallCli = async (provider: RealProvider) => {
+    setBusyProvider(provider);
+    setError(null);
+    try {
+      const res = await api.installProviderCli(provider);
+      setInstallProgress((prev) => ({ ...prev, [provider]: res.install }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('Failed to start CLI installation'));
     } finally {
       setBusyProvider(null);
     }
@@ -412,7 +458,10 @@ export function ModelsProvidersPanel({
                   : p.cliInstalled
                     ? 'ready'
                     : 'missing';
-                const isBusy = busyProvider === p.provider;
+                const activeInstall = installProgress[p.provider];
+                const isInstalling = Boolean(activeInstall || p.installInProgress);
+                const installPct = activeInstall?.percent ?? p.installPercent ?? null;
+                const isBusy = busyProvider === p.provider || isInstalling;
                 const cliOpen = Boolean(expandedCliPath[p.provider]);
                 const keyOpen = Boolean(expandedApiKey[p.provider]);
 
@@ -617,27 +666,58 @@ export function ModelsProvidersPanel({
                                   {p.loginInProgress ? t('Signing out…') : t('Sign out')}
                                 </button>
                               </>
+                            ) : !p.cliInstalled || isInstalling ? (
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => void handleInstallCli(p.provider)}
+                                className="transition-atelier"
+                                style={{
+                                  height: 30,
+                                  padding: '0 12px',
+                                  borderRadius: 'var(--radius-full)',
+                                  background: isInstalling
+                                    ? 'var(--surface-3)'
+                                    : 'var(--action-primary)',
+                                  border: '1px solid transparent',
+                                  color: isInstalling
+                                    ? 'var(--text-primary)'
+                                    : 'var(--action-primary-fg)',
+                                  fontSize: 12,
+                                  fontWeight: 500,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  cursor: isBusy ? 'wait' : 'pointer',
+                                  opacity: isBusy ? 0.85 : 1,
+                                }}
+                              >
+                                <Download size={12} strokeWidth={1.6} />
+                                {isInstalling
+                                  ? installPct !== null
+                                    ? `${t('Installing…')} ${installPct}%`
+                                    : t('Installing…')
+                                  : t('Install CLI')}
+                              </button>
                             ) : (
                               <button
                                 type="button"
-                                disabled={isBusy || !p.cliInstalled}
+                                disabled={isBusy}
                                 onClick={() => void handleLogin(p.provider)}
                                 className="transition-atelier"
                                 style={{
                                   height: 30,
                                   padding: '0 12px',
                                   borderRadius: 'var(--radius-full)',
-                                  background: p.cliInstalled
-                                    ? 'rgba(255, 255, 255, 0.11)'
-                                    : 'var(--surface-3)',
-                                  border: `1px solid ${p.cliInstalled ? 'var(--border-default)' : 'transparent'}`,
-                                  color: p.cliInstalled ? 'var(--text-primary)' : 'var(--text-muted)',
+                                  background: 'rgba(255, 255, 255, 0.11)',
+                                  border: '1px solid var(--border-default)',
+                                  color: 'var(--text-primary)',
                                   fontSize: 12,
                                   fontWeight: 500,
                                   display: 'inline-flex',
                                   alignItems: 'center',
                                   gap: 5,
-                                  cursor: p.cliInstalled ? 'pointer' : 'not-allowed',
+                                  cursor: 'pointer',
                                 }}
                               >
                                 <LogIn size={12} strokeWidth={1.5} />
@@ -699,6 +779,31 @@ export function ModelsProvidersPanel({
                       </div>
                     )}
 
+                    {isInstalling && (
+                      <div style={{ paddingLeft: 48, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                          {activeInstall?.message || t('Installing CLI…')}
+                        </div>
+                        <div
+                          style={{
+                            height: 4,
+                            borderRadius: 9999,
+                            background: 'var(--surface-3)',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: '100%',
+                              width: installPct !== null ? `${installPct}%` : '45%',
+                              background: 'var(--agent-blue)',
+                              transition: 'width 0.2s ease',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     {p.authMode !== 'api_key' && cliOpen && (
                       <div
                         style={{
@@ -727,6 +832,16 @@ export function ModelsProvidersPanel({
                           style={{ ...secondaryBtnStyle, height: 32, padding: '0 12px', fontSize: 12 }}
                         >{t('Save path')}
                         </button>
+                        {p.cliInstalled && (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleInstallCli(p.provider)}
+                            style={{ ...secondaryBtnStyle, height: 32, padding: '0 12px', fontSize: 12 }}
+                          >
+                            {t('Update CLI')}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

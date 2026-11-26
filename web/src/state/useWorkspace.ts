@@ -215,6 +215,10 @@ export function useWorkspace() {
             setAppUpdate(parsed.payload);
             return;
           }
+          if (parsed.type === 'cli-install-progress') {
+            window.dispatchEvent(new CustomEvent('atelier:cli-install-progress', { detail: parsed.payload }));
+            return;
+          }
 
           dispatch(parsed);
           if (parsed.type === 'snapshot') {

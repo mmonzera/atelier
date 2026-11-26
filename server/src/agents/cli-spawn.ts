@@ -22,12 +22,15 @@ function getCandidatePaths(provider: RealProvider): string[] {
         ];
       case 'openai':
         return [
+          path.join(appData, 'Atelier', 'data', 'cli', 'openai', 'package', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'),
+          path.join(appData, 'Atelier', 'data', 'cli', 'openai', 'package', 'vendor', 'aarch64-pc-windows-msvc', 'bin', 'codex.exe'),
           path.join(appData, 'npm', 'codex.exe'),
           path.join(home, '.local', 'bin', 'codex.exe'),
           path.join(appData, 'npm', 'codex.cmd'),
         ];
       case 'opencode':
         return [
+          path.join(appData, 'Atelier', 'data', 'cli', 'opencode', 'package', 'bin', 'opencode.exe'),
           path.join(home, '.opencode', 'bin', 'opencode.exe'),
           path.join(localAppData, 'opencode', 'opencode.exe'),
           path.join(appData, 'npm', 'opencode.cmd'),

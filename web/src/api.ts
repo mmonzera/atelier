@@ -1,6 +1,7 @@
 import type {
   AppUpdateStatus,
   AudioDevicesInfo,
+  CliInstallProgressEvent,
   ModelProvider as MeetingNotesProvider,
   Agent,
   BrowserApprovalRequest,
@@ -502,6 +503,11 @@ export const api = {
 
   loginProvider: (provider: RealProvider) =>
     request<{ status: ProviderAuthStatus }>(`/api/providers/${provider}/login`, {
+      method: 'POST',
+    }),
+
+  installProviderCli: (provider: RealProvider) =>
+    request<{ install: CliInstallProgressEvent }>(`/api/providers/${provider}/install`, {
       method: 'POST',
     }),
 
