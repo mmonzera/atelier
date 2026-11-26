@@ -1643,7 +1643,7 @@ export class CliAgentRunner implements AgentRunner {
           }
           return acc;
         },
-        15 * 60_000,
+        idleTimeoutMs() || 3 * 60_000,
         spawnEnv,
         opts.budgetSignal,
       );

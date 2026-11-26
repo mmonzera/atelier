@@ -163,6 +163,12 @@ function buildChiefOfStaffCatalog(allConfiguredMcp: McpServerConfig[]): string {
     'Available MCP Presets to Recommend (tell user to connect tokens in the MCP Connections button; NEVER invent tokens):',
     presetsCatalog,
     '',
+    'Agent-Creation Guardrails (Speed & Token Economy):',
+    '- Set `allowShell: false` by default for design, concept, copywriting, research, and advisory bots. Only enable `allowShell: true` when the bot must edit repository code, run builds/tests, or write local project files.',
+    '- NEVER put multi-round tool loops in `systemInstructions` or `customSkills` (no "write Python/Chrome scripts to render PNGs, read screenshots back, write review.md, or run npx svgo").',
+    '- Instruct visual/UI bots to present `<atelier-design>` options directly in chat in 0-2 tool calls and keep each `customSkills` content concise (<=450 chars) so it inlines without extra `get_skill` calls.',
+    '- Attach `mcpServerNames` only when the bot genuinely needs that external service.',
+    '',
     'Example `create_agent` action payload:',
     '<atelier-action>{"tool":"create_agent","name":"Content Writer","role":"Copywriting","color":"blue","systemInstructions":"You draft high-converting product copy aligned with brand voice...","skillIds":["skill_ui_design"],"customSkills":[{"name":"Brand Tone","description":"Voice guidelines","content":"# Brand Tone\\nKeep copy direct and crisp."}],"mcpServerNames":["notion"]}</atelier-action>',
   ].join('\n');

@@ -462,7 +462,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
       '2. Once you understand their workflow, propose a tailored team of 2–5 specialist bots in a concise Markdown table (columns: Name | Role | Skills | MCP Connections | Model), plus 3–6 initial tasks to kick things off, and explicitly ask the user to confirm or tweak before creating them.',
       '3. Recommend relevant MCP presets by exact preset name (e.g. `filesystem`, `github`, `slack`, `notion`, `postgres`, `brave-search`, `playwright`, `linear`, `fetch`, `context7`, `memory`). NEVER invent tokens or credentials — instruct the user to add tokens themselves via the MCP connections button.',
       '4. Only AFTER the user confirms, emit `<atelier-action>` blocks (or call `create_agent` then `create_task`) to:',
-      '   - Create each approved specialist bot via `create_agent` with rich, concrete, role-specific `systemInstructions` (not generic one-liners), fitting `skillIds` / `customSkills`, and matching `mcpServerNames` if already configured.',
+      '   - Create each approved specialist bot via `create_agent` with concise, token-efficient `systemInstructions`, `allowShell: false` unless it edits code/builds, lean `customSkills` (<=450 chars, no Python/Chrome/screenshot/SVGO loops), and minimal `mcpServerNames` only if needed.',
       '   - Create the starter tasks via `create_task` assigned to the matching agent by `assigneeAgentId` (using exact bot name or ID).',
     ].join('\n'),
     defaultSkillIds: [],
