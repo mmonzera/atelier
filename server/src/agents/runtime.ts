@@ -1395,16 +1395,15 @@ export class AgentRuntime {
       this.store.appendMessageDelta(replyMsg.id, delta);
     });
 
-    const effectiveGrants = buildEffectiveTurnGrants({
+    const explicitUserGrants = buildEffectiveTurnGrants({
       settingsGrants: settings.approvedPermissions,
       oneTimeGrants: item.oneTimeGrants,
-      attachedMcp: this.store.getMcpServersForAgent(agent),
     });
     const deniedByKey = new Map<string, DetectedPermissionDenial & { mcpTools: Set<string> }>();
     const recordDenial = (denial: DetectedPermissionDenial) => {
       if (denial.kind === 'command' && !agent.allowShell) return;
       if ((item.permissionRetryDepth ?? 0) >= 2) return;
-      if (isPermissionAlreadyGranted(effectiveGrants, denial)) return;
+      if (isPermissionAlreadyGranted(explicitUserGrants, denial)) return;
       const key = `${denial.kind}:${denial.target}`;
       const existing = deniedByKey.get(key);
       if (existing) {

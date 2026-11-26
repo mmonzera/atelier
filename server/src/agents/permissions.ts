@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type {
   McpServerConfig,
   PermissionGrant,
@@ -129,6 +132,8 @@ export function buildEffectiveTurnGrants(opts: {
   return merged;
 }
 
+const AGY_ALLOWED_TOOL_WRAPPERS = new Set(['read_file', 'write_file', 'read_url', 'mcp']);
+
 export function buildAntigravityAllowedRules(
   grants: readonly PermissionGrant[],
   allowShell: boolean,
@@ -140,14 +145,15 @@ export function buildAntigravityAllowedRules(
         rules.add('mcp(*)');
       } else {
         rules.add(`mcp(${g.target}/*)`);
-        rules.add(`mcp(${g.target})`);
         for (const tool of g.mcpTools ?? []) {
           rules.add(`mcp(${g.target}/${tool})`);
         }
       }
     } else if (g.kind === 'tool') {
-      rules.add(`${g.target}(*)`);
-      rules.add(g.target);
+      const lower = g.target.trim().toLowerCase();
+      if (AGY_ALLOWED_TOOL_WRAPPERS.has(lower) || (lower === 'command' && allowShell)) {
+        rules.add(`${lower}(*)`);
+      }
     } else if (g.kind === 'command' && allowShell) {
       rules.add(`command(${g.target})`);
     }
@@ -166,6 +172,7 @@ export function buildClaudeExtraAllowedTools(
         tools.add('mcp__*');
       } else {
         tools.add(`mcp__${g.target}`);
+        tools.add(`mcp__${g.target}__*`);
         for (const t of g.mcpTools ?? []) {
           tools.add(`mcp__${g.target}__${t}`);
         }
@@ -179,9 +186,66 @@ export function buildClaudeExtraAllowedTools(
   return [...tools];
 }
 
+export function discoverGlobalCodexMcpNames(codexHome?: string): Set<string> {
+  const home = codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  const configPath = path.join(home, 'config.toml');
+  if (!fs.existsSync(configPath)) return new Set();
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const names = new Set<string>();
+    const lines = raw.split(/\r?\n/);
+    let currentServer: string | null = null;
+    let currentHasTransport = false;
+    const flush = () => {
+      if (currentServer && currentHasTransport) {
+        names.add(currentServer);
+      }
+    };
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const headerMatch = /^\[mcp_servers\.([^\]]+)\]\s*(?:#.*)?$/.exec(line);
+      if (headerMatch) {
+        flush();
+        const inner = headerMatch[1]!.trim();
+        const quoted = /^["']([^"']+)["']$/.exec(inner);
+        if (quoted) {
+          currentServer = quoted[1]!.trim();
+          currentHasTransport = false;
+        } else if (!inner.includes('.')) {
+          currentServer = inner;
+          currentHasTransport = false;
+        } else {
+          currentServer = null;
+          currentHasTransport = false;
+        }
+        continue;
+      }
+      if (line.startsWith('[')) {
+        flush();
+        currentServer = null;
+        currentHasTransport = false;
+        continue;
+      }
+      if (currentServer && /^(?:command|url)\s*=/.test(line)) {
+        currentHasTransport = true;
+      }
+    }
+    flush();
+    return names;
+  } catch {
+    return new Set();
+  }
+}
+
 export function buildCodexPermissionArgs(
   grants: readonly PermissionGrant[],
-  opts: { allowShell: boolean; memoryOnly: boolean; extraDirs?: readonly string[] },
+  opts: {
+    allowShell: boolean;
+    memoryOnly: boolean;
+    extraDirs?: readonly string[];
+    knownMcpServers?: Iterable<string>;
+  },
 ): string[] {
   if (opts.memoryOnly) return [];
   const args: string[] = ['--trust', '-c', 'approval_policy="never"'];
@@ -190,19 +254,40 @@ export function buildCodexPermissionArgs(
       args.push(`--add-dir=${dir}`);
     }
   }
-  const seenToolOverrides = new Set<string>();
+  const toKey = (name: string) =>
+    /^[a-zA-Z0-9_-]+$/.test(name) ? name : name.replace(/[^a-zA-Z0-9_-]/g, '-');
+
+  const knownKeyByName = new Map<string, string>();
+  for (const rawName of opts.knownMcpServers ?? []) {
+    const clean = rawName.trim();
+    if (!clean) continue;
+    const keyName = toKey(clean);
+    knownKeyByName.set(clean, keyName);
+    knownKeyByName.set(keyName, keyName);
+  }
+
+  const seenOverrides = new Set<string>();
+  const pushOverride = (override: string) => {
+    if (!seenOverrides.has(override)) {
+      seenOverrides.add(override);
+      args.push('-c', override);
+    }
+  };
+
   for (const g of grants) {
-    if (g.kind !== 'mcp' || g.target === '*' || !g.mcpTools?.length) continue;
-    const keyName = /^[a-zA-Z0-9_-]+$/.test(g.target)
-      ? g.target
-      : g.target.replace(/[^a-zA-Z0-9_-]/g, '-');
-    for (const toolName of g.mcpTools) {
-      if (!/^[a-zA-Z0-9_-]+$/.test(toolName)) continue;
-      const override = `mcp_servers.${keyName}.tools.${toolName}.approval_mode="approve"`;
-      if (!seenToolOverrides.has(override)) {
-        seenToolOverrides.add(override);
-        args.push('-c', override);
+    if (g.kind !== 'mcp') continue;
+    if (g.target === '*') {
+      for (const keyName of new Set(knownKeyByName.values())) {
+        pushOverride(`mcp_servers.${keyName}.default_tools_approval_mode="approve"`);
       }
+      continue;
+    }
+    const keyName = knownKeyByName.get(g.target) ?? knownKeyByName.get(toKey(g.target));
+    if (!keyName) continue;
+    pushOverride(`mcp_servers.${keyName}.default_tools_approval_mode="approve"`);
+    for (const toolName of g.mcpTools ?? []) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(toolName)) continue;
+      pushOverride(`mcp_servers.${keyName}.tools.${toolName}.approval_mode="approve"`);
     }
   }
   return args;
@@ -215,6 +300,8 @@ const CLAUDE_TEXT_DENIED_RE =
   /(?:requested permissions to use|Permission to use)\s+([a-zA-Z0-9_:-]+)(?:\s+has been denied)?/i;
 const CODEX_TEXT_DENIED_RE =
   /(?:approval\s+(?:required|denied|rejected)\s+for\s+(?:mcp|tool|command)\s+"?([^"\n]+?)"?|(?:mcp(?:\s+tool)?|tool)\s+"?([a-zA-Z0-9_./:-]+)"?\s+(?:was\s+)?(?:rejected|denied|blocked)\s+by\s+(?:user|policy|approval))/i;
+const CODEX_MCP_POLICY_NEVER_RE =
+  /MCP tool call requires approval,\s*but approval policy is never/i;
 const OPENCODE_TEXT_DENIED_RE =
   /(?:policy\s+denied\s+(?:for\s+)?(mcp\.use|tool\.use|plugin\.use|skill\.use)\s*(?:\(([^)]+)\)|[:\s]+"?([^"\n]+)"?)?|permission\s+denied\s+for\s+(?:mcp|tool)\s+"?([^"\n]+)"?)/i;
 
@@ -309,6 +396,14 @@ export function detectAllPermissionDenials(
         push({ kind: 'tool', target: raw, rawTool: raw, reason: codexMatch[0] });
       }
     }
+  }
+  if (CODEX_MCP_POLICY_NEVER_RE.test(text) && !results.some((r) => r.kind === 'mcp')) {
+    push({
+      kind: 'mcp',
+      target: '*',
+      rawTool: 'mcp/*',
+      reason: 'MCP tool call requires approval, but approval policy is never',
+    });
   }
 
   const ocMatch = OPENCODE_TEXT_DENIED_RE.exec(text);

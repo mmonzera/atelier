@@ -11,6 +11,7 @@ import {
   buildEffectiveTurnGrants,
   detectAllPermissionDenials,
   detectPermissionDenial,
+  discoverGlobalCodexMcpNames,
   isPermissionAlreadyGranted,
   makePermissionGrant,
   mergePermissionGrants,
@@ -19,11 +20,12 @@ import {
   parseCodexItemDenial,
   parseOpenCodeEventDenial,
 } from '../src/agents/permissions.js';
+import { composeCliPrompt } from '../src/agents/cli-runners.js';
 import { AtelierDb } from '../src/db.js';
 import { AtelierStore } from '../src/store.js';
 import { loadConfig } from '../src/config.js';
 import { startAtelierServer, type AtelierServerHandle } from '../src/index.js';
-import { buildOpenCodeMcpConfig } from '../src/mcp/config.js';
+import { buildCodexMcpArgs, buildOpenCodeMcpConfig } from '../src/mcp/config.js';
 
 const tempDirs: string[] = [];
 const handles: AtelierServerHandle[] = [];
@@ -117,6 +119,8 @@ describe('Unified CLI permission helpers', () => {
       attachedMcp: [attached],
       settingsGrants: [
         makePermissionGrant('mcp', 'figelo', ['ping', 'list_figma_documents']),
+        makePermissionGrant('tool', 'WebFetch'),
+        makePermissionGrant('tool', 'read_file'),
         makePermissionGrant('command', 'npm test'),
       ],
     });
@@ -125,6 +129,10 @@ describe('Unified CLI permission helpers', () => {
     expect(agyNoShell).toContain('mcp(figcraft/*)');
     expect(agyNoShell).toContain('mcp(figelo/*)');
     expect(agyNoShell).toContain('mcp(figelo/ping)');
+    expect(agyNoShell).toContain('read_file(*)');
+    // Bare mcp(<server>) and foreign tool names like WebFetch must never be emitted to agy
+    expect(agyNoShell).not.toContain('mcp(figelo)');
+    expect(agyNoShell).not.toContain('WebFetch(*)');
     expect(agyNoShell).not.toContain('command(npm test)');
 
     const agyWithShell = buildAntigravityAllowedRules(grants, true);
@@ -132,22 +140,80 @@ describe('Unified CLI permission helpers', () => {
 
     const claudeTools = buildClaudeExtraAllowedTools(grants, false);
     expect(claudeTools).toContain('mcp__figcraft');
+    expect(claudeTools).toContain('mcp__figcraft__*');
     expect(claudeTools).toContain('mcp__figelo');
+    expect(claudeTools).toContain('mcp__figelo__*');
     expect(claudeTools).toContain('mcp__figelo__ping');
     expect(claudeTools).not.toContain('Bash(npm test)');
 
+    // buildCodexMcpArgs always sets default_tools_approval_mode="approve" for attached servers
+    const attachedCodexArgs = buildCodexMcpArgs([
+      {
+        id: 'mcp_figelo',
+        name: 'figelo-mcp',
+        transport: 'http',
+        url: 'http://127.0.0.1:4444/mcp',
+        enabled: true,
+      },
+    ]);
+    expect(attachedCodexArgs).toContain(
+      'mcp_servers.figelo-mcp.default_tools_approval_mode="approve"',
+    );
+
+    // buildCodexPermissionArgs emits default_tools_approval_mode ONLY for known servers (never unknown/foreign ones)
     const codexArgs = buildCodexPermissionArgs(grants, {
       allowShell: false,
       memoryOnly: false,
       extraDirs: ['D:\\data\\attachments'],
+      knownMcpServers: ['figcraft', 'figelo'],
     });
     expect(codexArgs[0]).toBe('--trust');
     expect(codexArgs).toContain('approval_policy="never"');
     expect(codexArgs).toContain('--add-dir=D:\\data\\attachments');
+    expect(codexArgs).toContain('mcp_servers.figelo.default_tools_approval_mode="approve"');
     expect(codexArgs).toContain('mcp_servers.figelo.tools.ping.approval_mode="approve"');
     expect(codexArgs).toContain(
       'mcp_servers.figelo.tools.list_figma_documents.approval_mode="approve"',
     );
+
+    const codexUnknownOnly = buildCodexPermissionArgs(
+      [makePermissionGrant('mcp', 'not-configured-in-codex')],
+      { allowShell: false, memoryOnly: false, knownMcpServers: ['figcraft'] },
+    );
+    expect(codexUnknownOnly.some((a) => a.includes('not-configured-in-codex'))).toBe(false);
+
+    // discoverGlobalCodexMcpNames reads [mcp_servers.*] tables with transport and ignores stub sections
+    const tmpCodexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-codex-home-'));
+    tempDirs.push(tmpCodexHome);
+    fs.writeFileSync(
+      path.join(tmpCodexHome, 'config.toml'),
+      [
+        '[mcp_servers.brilliant]',
+        'url = "http://127.0.0.1:3333/mcp"',
+        '[mcp_servers.figcraft.env]',
+        'FIGCRAFT_ACCESS = "edit"',
+        '[mcp_servers.stub_no_transport]',
+        '[mcp_servers."figelo-mcp"]',
+        'command = "node"',
+      ].join('\n'),
+      'utf8',
+    );
+    const discovered = discoverGlobalCodexMcpNames(tmpCodexHome);
+    expect(discovered.has('brilliant')).toBe(true);
+    expect(discovered.has('figelo-mcp')).toBe(true);
+    expect(discovered.has('stub_no_transport')).toBe(false);
+    expect(discovered.has('figcraft')).toBe(false);
+
+    // composeCliPrompt injects newly attached MCP Action Bridge guide on resumed turns
+    const resumedPrompt = composeCliPrompt(
+      { canonChanged: false },
+      'SYS',
+      'User asks about figelo',
+      true,
+      'MCP Action Bridge (live tools for this turn):\n[figelo-mcp] ping()',
+    );
+    expect(resumedPrompt).toContain('MCP Action Bridge (live tools for this turn):');
+    expect(resumedPrompt).toContain('User asks about figelo');
 
     const ocCfg = buildOpenCodeMcpConfig([], 2, 'win32', {
       disabledGlobalNames: ['figelo', 'other-mcp'],
@@ -206,6 +272,10 @@ describe('Unified CLI permission helpers', () => {
     expect(
       detectPermissionDenial('Claude requested permissions to use mcp__figelo__ping'),
     ).toMatchObject({ kind: 'mcp', target: 'figelo', mcpTool: 'ping' });
+
+    expect(
+      detectPermissionDenial('MCP tool call requires approval, but approval policy is never'),
+    ).toMatchObject({ kind: 'mcp', target: '*' });
   });
 });
 
@@ -431,6 +501,66 @@ describe('End-to-end 4-CLI permission escalation & persistent auto-grant', () =>
       expect(delRes.status).toBe(200);
       const afterDel = (await delRes.json()) as { settings: Settings };
       expect(afterDel.settings.approvedPermissions ?? []).toEqual([]);
+
+      // 4. Even for an attached MCP server, if Codex ever returns "MCP tool call requires approval, but approval policy is never",
+      //    runtime still surfaces the popup instead of swallowing it!
+      const attachedSrvRes = await fetch(`${baseUrl}/api/mcp/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'figelo-mcp',
+          transport: 'http',
+          url: 'http://127.0.0.1:4444/mcp',
+          enabled: true,
+        }),
+      });
+      const { server: figeloSrv } = (await attachedSrvRes.json()) as { server: { id: string } };
+      await fetch(`${baseUrl}/api/agents/${agent.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mcpServerIds: [figeloSrv.id],
+          providerOverride: 'openai',
+          modelOverride: 'gpt-6.1-terra',
+        }),
+      });
+      const fakeCodexAttached = createFakeCli(
+        dir,
+        'codex-attached',
+        `
+        const args = process.argv.slice(2);
+        const hasDefaultApprove = args.includes('mcp_servers.figelo-mcp.default_tools_approval_mode="approve"');
+        process.stdin.resume();
+        process.stdin.on('end', () => {
+          console.log(JSON.stringify({ type: 'thread.started', thread_id: 'cx-att-1' }));
+          if (!hasDefaultApprove) {
+            console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'MCP tool call requires approval, but approval policy is never' } }));
+          } else {
+            console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'CODEX_ATTACHED_OK' } }));
+          }
+          console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 3, output_tokens: 2 } }));
+        });
+        `,
+      );
+      await fetch(`${baseUrl}/api/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cliPaths: { openai: fakeCodexAttached } }),
+      });
+      await fetch(`${baseUrl}/api/agents/${agent.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: '@figelo-mcp check open file' }),
+      });
+      await waitFor(async () => {
+        const res = await fetch(`${baseUrl}/api/state`);
+        const st = (await res.json()) as {
+          messages: Array<{ agentId: string; text: string; streaming: boolean }>;
+        };
+        return st.messages.some(
+          (m) => m.agentId === agent.id && !m.streaming && m.text.includes('CODEX_ATTACHED_OK'),
+        );
+      });
     } finally {
       ws.close();
     }

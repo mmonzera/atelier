@@ -92,6 +92,7 @@ export function buildCodexMcpArgs(
         out.push('-c', `mcp_servers.${keyName}.http_headers=${formatTomlStringMap(s.headers)}`);
       }
     }
+    out.push('-c', `mcp_servers.${keyName}.default_tools_approval_mode="approve"`);
     const approved = autoApproveTools?.[s.name] ?? autoApproveTools?.[keyName];
     if (approved) {
       for (const toolName of approved) {
@@ -118,7 +119,7 @@ export function writeAgentMcpConfigFile(
 }
 
 export function claudeAllowedMcpTools(servers: McpServerConfig[]): string[] {
-  return servers.map((s) => `mcp__${s.name}`);
+  return servers.flatMap((s) => [`mcp__${s.name}`, `mcp__${s.name}__*`]);
 }
 
 export function buildOpenCodeMcpConfig(

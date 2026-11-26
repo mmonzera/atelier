@@ -42,6 +42,7 @@ import {
   buildEffectiveTurnGrants,
   detectAllPermissionDenials,
   detectPermissionDenial,
+  discoverGlobalCodexMcpNames,
   parseClaudeToolDenial,
   parseCodexItemDenial,
   parseOpenCodeEventDenial,
@@ -405,10 +406,18 @@ export function composeCliPrompt(
   systemPrompt: string,
   promptBody: string,
   resumed: boolean,
+  mcpBridgeGuide?: string,
 ): string {
   if (!resumed) return `${systemPrompt}\n\n---\n\n${promptBody}`;
+  const updates: string[] = [];
   if (turn.canonChanged && turn.canonText) {
-    return `Canon update since last turn (replaces previous Canon):\n${turn.canonText}\n\n${promptBody}`;
+    updates.push(`Canon update since last turn (replaces previous Canon):\n${turn.canonText}`);
+  }
+  if (mcpBridgeGuide?.trim()) {
+    updates.push(mcpBridgeGuide.trim());
+  }
+  if (updates.length > 0) {
+    return `${updates.join('\n\n')}\n\n${promptBody}`;
   }
   return promptBody;
 }
@@ -491,8 +500,14 @@ export class CliAgentRunner implements AgentRunner {
    * so only send the prompt body (plus a Canon update when it changed) instead of
    * re-sending the whole system prompt every turn.
    */
-  private composeCliPrompt(turn: Turn, systemPrompt: string, promptBody: string, resumed: boolean): string {
-    return composeCliPrompt(turn, systemPrompt, promptBody, resumed);
+  private composeCliPrompt(
+    turn: Turn,
+    systemPrompt: string,
+    promptBody: string,
+    resumed: boolean,
+    mcpBridgeGuide?: string,
+  ): string {
+    return composeCliPrompt(turn, systemPrompt, promptBody, resumed, mcpBridgeGuide);
   }
 
   async run(turn: Turn, cb: TurnCallbacks): Promise<{ finalText: string }> {
@@ -558,6 +573,7 @@ export class CliAgentRunner implements AgentRunner {
       }
     }
 
+    const mcpBridgeGuide = mcpBridge?.formatPromptCatalog() ?? '';
     const systemPrompt = buildAgentSystemPrompt(
       turn.agent,
       turn.project,
@@ -569,7 +585,7 @@ export class CliAgentRunner implements AgentRunner {
       turn.omitCompaction ? null : compaction,
       [],
       turn.canonText ?? renderCanon(this.store.listCanon(scopeKey)).text,
-      mcpBridge?.formatPromptCatalog() ?? '',
+      mcpBridgeGuide,
     );
 
     const tools = createStudioTools({
@@ -619,6 +635,7 @@ export class CliAgentRunner implements AgentRunner {
         model,
         systemPrompt,
         attachedMcp: mcpForTurn,
+        mcpBridgeGuide,
         budgetSignal: budgetController.signal,
         maxToolCalls,
       });
@@ -743,11 +760,12 @@ export class CliAgentRunner implements AgentRunner {
       model: string;
       systemPrompt: string;
       attachedMcp: McpServerConfig[];
+      mcpBridgeGuide?: string;
       budgetSignal?: AbortSignal;
       maxToolCalls?: number;
     },
   ): Promise<string> {
-    const { cwd, model, systemPrompt, attachedMcp, budgetSignal, maxToolCalls } = opts;
+    const { cwd, model, systemPrompt, attachedMcp, mcpBridgeGuide, budgetSignal, maxToolCalls } = opts;
     const settings = this.store.getSettings();
     if (provider === 'claude') {
       return this.runClaude(turn, cb, {
@@ -795,6 +813,7 @@ export class CliAgentRunner implements AgentRunner {
         effort: settings.reasoningEffort.toLowerCase(),
         customPath: settings.cliPaths?.antigravity,
         mcpServers: attachedMcp,
+        mcpBridgeGuide,
         budgetSignal,
       });
     }
@@ -1070,6 +1089,10 @@ export class CliAgentRunner implements AgentRunner {
       ...(fs.existsSync(artifactDir) ? [artifactDir] : []),
     ];
 
+    const knownMcpServers = [
+      ...opts.mcpServers.map((s) => s.name),
+      ...discoverGlobalCodexMcpNames(),
+    ];
     const imageArgs = this.attachmentStore
       .imagePaths(turn.attachments)
       .map((p) => `--image=${p}`);
@@ -1079,6 +1102,7 @@ export class CliAgentRunner implements AgentRunner {
         allowShell: turn.agent.allowShell,
         memoryOnly: Boolean(turn.memoryOnly),
         extraDirs,
+        knownMcpServers,
       }),
       ...(turn.memoryOnly ? ['--ephemeral', '--ignore-user-config', '--disable', 'shell_tool'] : []),
       ...buildCodexMcpArgs(opts.mcpServers, process.platform, {
@@ -1101,6 +1125,7 @@ export class CliAgentRunner implements AgentRunner {
 
     let codexError: string | null = null;
     let codexTurnFailed = false;
+    let codexDenialSeen = false;
     try {
       const out = await this.execStreaming(binPath, args, opts.cwd, fullPrompt, turn.signal, (line, acc) => {
         try {
@@ -1110,7 +1135,10 @@ export class CliAgentRunner implements AgentRunner {
           } else if ((ev.type === 'item.completed' || ev.type === 'item.failed') && ev.item && typeof ev.item === 'object') {
             const item = ev.item as Record<string, unknown>;
             const denial = parseCodexItemDenial(item);
-            if (denial) cb.onPermissionDenied?.(denial);
+            if (denial) {
+              codexDenialSeen = true;
+              cb.onPermissionDenied?.(denial);
+            }
             if (item.type === 'agent_message' && typeof item.text === 'string') {
               cb.onText(item.text);
               return acc ? `${acc}\n${item.text}` : item.text;
@@ -1130,6 +1158,7 @@ export class CliAgentRunner implements AgentRunner {
           } else if (ev.type === 'error' && typeof ev.message === 'string' && ev.message.trim()) {
             codexError = ev.message.trim();
             for (const denial of detectAllPermissionDenials(codexError)) {
+              codexDenialSeen = true;
               cb.onPermissionDenied?.(denial);
             }
           } else if (ev.type === 'turn.failed' && ev.error && typeof ev.error === 'object') {
@@ -1138,6 +1167,7 @@ export class CliAgentRunner implements AgentRunner {
             if (typeof errObj.message === 'string' && errObj.message.trim()) {
               codexError = errObj.message.trim();
               for (const denial of detectAllPermissionDenials(codexError)) {
+                codexDenialSeen = true;
                 cb.onPermissionDenied?.(denial);
               }
             }
@@ -1150,6 +1180,25 @@ export class CliAgentRunner implements AgentRunner {
         }
         return acc;
       }, idleTimeoutMs(), undefined, opts.budgetSignal);
+      if (
+        !codexDenialSeen &&
+        out &&
+        /MCP tool call requires approval,\s*but approval policy is never/i.test(out)
+      ) {
+        const lowerOut = out.toLowerCase();
+        const matchedAttached = opts.mcpServers.find((s) =>
+          lowerOut.includes(s.name.toLowerCase()),
+        );
+        const target =
+          matchedAttached?.name ??
+          (opts.mcpServers.length === 1 ? opts.mcpServers[0]!.name : '*');
+        cb.onPermissionDenied?.({
+          kind: 'mcp',
+          target,
+          rawTool: target === '*' ? 'mcp/*' : `${target}/*`,
+          reason: 'MCP tool call requires approval, but approval policy is never',
+        });
+      }
       if (!turn.signal.aborted && (codexTurnFailed || (!out && codexError))) {
         throw new Error(codexError || 'Codex CLI turn failed');
       }
@@ -1172,6 +1221,7 @@ export class CliAgentRunner implements AgentRunner {
       effort: string;
       customPath?: string;
       mcpServers: McpServerConfig[];
+      mcpBridgeGuide?: string;
       budgetSignal?: AbortSignal;
     },
   ): Promise<string> {
@@ -1191,6 +1241,7 @@ export class CliAgentRunner implements AgentRunner {
       opts.systemPrompt,
       promptBody,
       Boolean(nativeResumeId),
+      opts.mcpBridgeGuide,
     );
 
     const effectiveGrants = buildEffectiveTurnGrants({
