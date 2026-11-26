@@ -196,6 +196,7 @@ export function buildAgentSystemPrompt(
   compaction?: ThreadCompaction | null,
   canon: CanonEntry[] = [],
   canonText = renderCanon(canon).text,
+  mcpBridgeGuide = '',
 ): string {
   const enabledSkills = agent.skills.filter((s) => s.enabled);
   // Short skills stay inline. Long ones are listed by name and loaded on demand with get_skill,
@@ -323,6 +324,7 @@ export function buildAgentSystemPrompt(
     '',
     'Connected MCP tools:',
     mcpSection,
+    ...(mcpBridgeGuide ? ['', mcpBridgeGuide] : []),
     ...browserGuide,
     // Dynamic
     '',

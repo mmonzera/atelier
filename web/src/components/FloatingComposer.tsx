@@ -500,17 +500,53 @@ export function FloatingComposer({
       });
       const skillIds = pickedSkills.map((s) => s.id);
       setPickedSkills([]);
-      // plugins called with "@": make sure the agent can use them, then name them in the message
+      // plugins called with "@": attach to the mentioned agent(s) (or @all in a room, else the active agent)
       const plugins = pickedPlugins;
       setPickedPlugins([]);
       const mentionedAgents = pickedAgents;
       setPickedAgents([]);
-      for (const plugin of plugins) {
-        if (agent.mcpServerIds?.includes(plugin.id) && plugin.enabled) continue;
-        try {
-          await setPluginAttached(agent, plugin, true);
-        } catch (err) {
-          toast.error(err instanceof Error ? err.message : t('Could not attach {name}', { name: plugin.name }));
+      if (plugins.length > 0) {
+        const isBroadcastAll =
+          roomMode &&
+          /(?:^|\s)@(?:all|semua)(?=$|[\s.,!?:;)])/i.test(text) &&
+          Boolean(projectAgents?.length);
+        const targetAgents =
+          mentionedAgents.length > 0
+            ? mentionedAgents
+            : isBroadcastAll
+              ? projectAgents!
+              : [agent];
+
+        for (const target of targetAgents) {
+          const existingIds = target.mcpServerIds ?? [];
+          const missingIds = plugins
+            .map((p) => p.id)
+            .filter((id) => !existingIds.includes(id));
+          if (missingIds.length === 0) continue;
+          try {
+            await api.updateAgent(target.id, {
+              mcpServerIds: [...existingIds, ...missingIds],
+            });
+          } catch (err) {
+            toast.error(
+              err instanceof Error
+                ? err.message
+                : t('Could not attach {name}', { name: plugins.map((p) => p.name).join(', ') }),
+            );
+          }
+        }
+
+        const disabledPlugins = plugins.filter((p) => !p.enabled);
+        for (const plugin of disabledPlugins) {
+          try {
+            await api.updateMcpServer(plugin.id, { enabled: true });
+          } catch (err) {
+            toast.error(
+              err instanceof Error
+                ? err.message
+                : t('Could not attach {name}', { name: plugin.name }),
+            );
+          }
         }
       }
       const withPlugins = plugins.length
