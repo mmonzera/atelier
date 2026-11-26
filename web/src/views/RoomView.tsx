@@ -41,7 +41,7 @@ import { MemoryChip } from '../components/MemoryChip';
 import { FormattedText, getColorVar } from '../components/Atoms';
 import { MessageAttachments, isAttachmentOnlyText } from '../components/AttachmentViews';
 import { ChatSearchBar, ChatSearchButton, useChatSearch } from '../components/ChatSearch';
-import { WorkPointsChecklist } from '../components/ChatWorkPanel';
+import { GeneratedMediaStrip, WorkPointsChecklist } from '../components/ChatWorkPanel';
 import { DesignOptionsCard, DesignPendingCard } from '../components/DesignOptionsCard';
 import { ProviderIcon } from '../components/ProviderIcon';
 import { QaReportCard } from '../components/QaReportCard';
@@ -1183,6 +1183,8 @@ export function RoomView({
                       </div>
                     );
                   })}
+
+                {msgActivities.length > 0 && <GeneratedMediaStrip activities={msgActivities} />}
 
                 {msg.metadata?.qaRun && (
                   <div style={{ width: '100%', maxWidth: '88%' }}>

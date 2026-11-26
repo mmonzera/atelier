@@ -1,8 +1,9 @@
 import type { DesignBlock, DesignOption } from '@atelier/contracts';
-import { Check, Maximize2, Sparkles } from 'lucide-react';
+import { Check, FolderOpen, Maximize2, Sparkles } from 'lucide-react';
 import { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { workspaceImageUrl } from '../api';
+import { useFilePreview } from './FilePreviewModal';
 import { ModalShell, primaryBtnStyle, secondaryBtnStyle } from './modals/ModalShell';
 import { useT, t } from '../i18n';
 
@@ -116,6 +117,7 @@ export function DesignOptionsCard({
   streaming: boolean;
 }) {
   const t = useT();
+  const { openFilePreview } = useFilePreview();
   const [zoom, setZoom] = useState<DesignOption | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -227,6 +229,22 @@ export function DesignOptionsCard({
                   >
                     <Maximize2 size={12} strokeWidth={1.6} />{t('Enlarge')}
                   </button>
+                  {o.kind === 'image' && o.src && !o.src.startsWith('data:') && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openFilePreview({
+                          path: o.src,
+                          name: o.label,
+                          initialShowPath: true,
+                        })
+                      }
+                      title={o.src}
+                      style={{ ...secondaryBtnStyle, height: 30, padding: '0 10px', fontSize: 12 }}
+                    >
+                      <FolderOpen size={12} strokeWidth={1.6} />{t('Path')}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

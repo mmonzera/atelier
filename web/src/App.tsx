@@ -14,6 +14,7 @@ import { Download, Plus, Sparkles, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import { FloatingComposer } from './components/FloatingComposer';
+import { FilePreviewProvider } from './components/FilePreviewModal';
 import { setBootStage } from './components/BootLoader';
 import { MeetingAppPrompt } from './components/MeetingAppPrompt';
 import { MeetingRecorder } from './components/MeetingRecorder';
@@ -523,6 +524,7 @@ export function App() {
       (viewMode === 'agent' && (agentTab === 'reports' || agentTab === 'library' || agentTab === 'browser')));
 
   return (
+    <FilePreviewProvider>
     <div
       style={{
         position: 'relative',
@@ -1297,6 +1299,7 @@ export function App() {
         />
       )}
     </div>
+    </FilePreviewProvider>
   );
 }
 

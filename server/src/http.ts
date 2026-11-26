@@ -40,6 +40,7 @@ import type { LocalVault } from './security/vault.js';
 import { ATTACHMENT_ONLY_TEXT } from '@atelier/contracts';
 import { AttachmentError, AttachmentStore } from './attachments.js';
 import { createAttachmentRoutes } from './attachments-routes.js';
+import { createFilePreviewRoutes } from './file-preview-routes.js';
 import { createLibraryRoutes } from './library-routes.js';
 import { CanonInputSchema } from './memory-files.js';
 
@@ -126,6 +127,7 @@ export function createHttpRouter(deps: {
   if (deps.sttRoutes) api.route('/', deps.sttRoutes);
   if (deps.meetingRoutes) api.route('/', deps.meetingRoutes);
   api.route('/', createAttachmentRoutes({ store, config }));
+  api.route('/', createFilePreviewRoutes({ store, config }));
   api.route('/', createLibraryRoutes({ store, config }));
 
   api.get('/health', (c) => {

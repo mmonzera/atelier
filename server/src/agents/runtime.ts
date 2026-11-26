@@ -1330,7 +1330,7 @@ export class AgentRuntime {
             if (leaseChannelId) this.scheduler.heartbeat(leaseChannelId);
             const rawDetail =
               input && typeof input === 'object'
-                ? JSON.stringify(input).slice(0, 120)
+                ? JSON.stringify(input).slice(0, 480)
                 : String(input ?? '');
             const detail = this.browserManager ? this.browserManager.redact(rawDetail) : rawDetail;
             const act = this.store.addActivity({

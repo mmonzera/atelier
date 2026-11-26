@@ -1893,18 +1893,82 @@ export const ATTACHMENT_LIMITS = {
 /** Message text used when the user sends attachments without typing anything. */
 export const ATTACHMENT_ONLY_TEXT = 'Please look at the attached file(s).';
 
-/** An image saved in a project: a chat upload or a design-option artifact. */
+/** An image or document saved in a project: a chat upload, a design/generated artifact, or a workspace deliverable. */
+export type PreviewFileKind = 'markdown' | 'image' | 'svg' | 'pdf' | 'word' | 'excel' | 'text' | 'file';
+
+export interface WordPreviewRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  code?: boolean;
+  href?: string;
+}
+
+export type WordPreviewBlock =
+  | { type: 'heading'; level: number; runs: WordPreviewRun[] }
+  | { type: 'paragraph'; runs: WordPreviewRun[] }
+  | { type: 'list-item'; ordered: boolean; level: number; runs: WordPreviewRun[] }
+  | { type: 'table'; rows: WordPreviewRun[][][] }
+  | { type: 'image'; src: string; alt?: string };
+
+export interface ExcelPreviewSheet {
+  name: string;
+  rows: string[][];
+  totalRows: number;
+  totalCols: number;
+}
+
+export interface FilePreviewData {
+  name: string;
+  /** Full absolute path on this computer. */
+  filePath: string;
+  sizeBytes: number;
+  mime: string;
+  kind: PreviewFileKind;
+  /** Same-origin URL that serves raw bytes (for images, PDFs, or downloading). */
+  rawUrl: string;
+  /** Download URL with Content-Disposition: attachment. */
+  downloadUrl: string;
+  updatedAt?: string;
+  markdown?: string;
+  text?: string;
+  lang?: string;
+  word?: {
+    blocks: WordPreviewBlock[];
+  };
+  excel?: {
+    sheets: ExcelPreviewSheet[];
+  };
+}
+
+export interface WorkspaceFileEntry {
+  name: string;
+  /** Path relative to the workspace root (or display label). */
+  relativePath: string;
+  /** Full absolute path on disk. */
+  filePath: string;
+  sizeBytes: number;
+  kind: PreviewFileKind;
+  updatedAt: string;
+}
+
 export interface LibraryImage {
-  /** Attachment id (att_…) or artifact id (art_…). */
+  /** Attachment id (att_…), artifact id (art_…), or workspace file id. */
   id: string;
-  source: 'attachment' | 'artifact';
+  source: 'attachment' | 'artifact' | 'workspace';
   name: string;
   mime: string;
   sizeBytes: number;
-  /** Same-origin URL that serves the image (already URL-encoded). */
+  /** Same-origin URL that serves the file or image (already URL-encoded). */
   url: string;
   createdAt: string;
   messageId?: string;
+  /** Full local disk path on this machine (for "Show file path" action). */
+  filePath?: string;
+  /** Rich preview kind (image, svg, markdown, pdf, word, excel, text, file). */
+  previewKind?: PreviewFileKind;
 }
 
 export type DesignOptionKind = 'html' | 'svg' | 'image';

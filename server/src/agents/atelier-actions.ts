@@ -51,8 +51,8 @@ export function applyAtelierActions(
           const result = tools.optimize_svg(parsed);
           if (recall.length < maxRecall) recall.push({ tool: 'optimize_svg', result });
           cb.onTool('atelier.optimize_svg', {
-            inputPath: parsed.inputPath,
-            outputPath: parsed.outputPath,
+            path: result.workspacePath ?? result.path ?? parsed.outputPath ?? parsed.inputPath,
+            artifactId: result.artifactId,
             ok: result.ok,
           });
           actionsExecuted += 1;
@@ -128,9 +128,10 @@ export async function applyVisualAtelierActions(
       const parsed = GenerateImageToolSchema.parse(m.args);
       const res = await tools.generate_image(parsed, signal);
       cb.onTool('atelier.generate_image', {
-        prompt: parsed.prompt.slice(0, 80),
-        ok: res.ok,
+        path: res.workspacePath ?? res.path,
         artifactId: res.artifactId,
+        prompt: parsed.prompt.slice(0, 60),
+        ok: res.ok,
       });
       results.push({ tool: 'generate_image', result: res });
     } catch (err) {

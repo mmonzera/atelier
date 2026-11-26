@@ -6,11 +6,15 @@ import {
   ChevronRight,
   ChevronUp,
   Circle,
+  Eye,
+  FileImage,
+  FolderOpen,
   Loader2,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useT } from '../i18n';
 import { getColorVar } from './Atoms';
+import { useFilePreview } from './FilePreviewModal';
 import { ProviderIcon } from './ProviderIcon';
 
 export interface WorkPoint {
@@ -18,6 +22,8 @@ export interface WorkPoint {
   title: string;
   status: 'done' | 'in_progress' | 'pending' | 'error';
   count: number;
+  filePath?: string;
+  artifactId?: string;
 }
 
 export type WorkPointActivity = Pick<Activity, 'id' | 'kind' | 'label' | 'createdAt'> & {
@@ -89,6 +95,36 @@ function hostFromUrl(raw: string | null): string | null {
   }
 }
 
+function extractActivityFileTarget(act: WorkPointActivity): { filePath?: string; artifactId?: string } {
+  const detail = parseJsonDetail(act.detail);
+  if (detail) {
+    const artifactId = firstString(detail, ['artifactId']) ?? undefined;
+    let filePath =
+      firstString(detail, [
+        'file_path',
+        'path',
+        'TargetFile',
+        'AbsolutePath',
+        'outputPath',
+        'inputPath',
+        'workspacePath',
+      ]) ?? undefined;
+    if (!filePath && Array.isArray(detail.changes) && detail.changes[0] && typeof detail.changes[0] === 'object') {
+      filePath =
+        firstString(detail.changes[0] as Record<string, unknown>, ['path', 'file_path']) ?? undefined;
+    }
+    if (filePath || artifactId) return { filePath, artifactId };
+  }
+  if (act.detail && !act.detail.trim().startsWith('{')) {
+    const arrowIdx = act.detail.indexOf('->');
+    const candidate = (arrowIdx >= 0 ? act.detail.slice(arrowIdx + 2) : act.detail).trim();
+    if (/^(?:[a-zA-Z]:[\\/]|\/)[^\n"*?<>|]+\.[a-zA-Z0-9]+$/i.test(candidate)) {
+      return { filePath: candidate };
+    }
+  }
+  return {};
+}
+
 function activityToTitle(act: WorkPointActivity, agents: Agent[]): string {
   const label = act.label.trim();
   const lower = label.toLowerCase();
@@ -118,6 +154,27 @@ function activityToTitle(act: WorkPointActivity, agents: Agent[]): string {
     }
     const base = fileBasename(firstString(detail, ['file_path', 'path', 'TargetFile', 'AbsolutePath']));
     return base ? `Edited ${base}` : 'Edited file';
+  }
+
+  if (lower === 'atelier.generate_image' || lower.startsWith('generated image')) {
+    const base = fileBasename(
+      firstString(detail, ['path', 'outputPath', 'workspacePath']) ??
+        extractActivityFileTarget(act).filePath ??
+        null,
+    );
+    const prompt = firstString(detail, ['prompt']);
+    if (base) return `Generated image · ${base}`;
+    if (prompt) return `Generated image · ${trimMiddle(prompt, 34)}`;
+    return 'Generated image';
+  }
+
+  if (lower === 'atelier.optimize_svg' || lower.startsWith('optimized svg')) {
+    const base = fileBasename(
+      firstString(detail, ['path', 'outputPath', 'inputPath', 'workspacePath']) ??
+        extractActivityFileTarget(act).filePath ??
+        null,
+    );
+    return base ? `Optimized SVG · ${base}` : 'Optimized SVG';
   }
 
   if (lower === 'bash' || lower === 'run_command' || lower === 'shell') {
@@ -188,11 +245,21 @@ export function summarizeActivitiesToWorkPoints(
   for (const act of activities) {
     const status: WorkPoint['status'] = act.kind === 'error' ? 'error' : 'done';
     const title = activityToTitle(act, agents);
+    const { filePath, artifactId } = extractActivityFileTarget(act);
     const prev = points[points.length - 1];
     if (prev && prev.title === title && prev.status === status) {
       prev.count += 1;
+      if (filePath && !prev.filePath) prev.filePath = filePath;
+      if (artifactId && !prev.artifactId) prev.artifactId = artifactId;
     } else {
-      points.push({ id: act.id, title, status, count: 1 });
+      points.push({
+        id: act.id,
+        title,
+        status,
+        count: 1,
+        ...(filePath ? { filePath } : {}),
+        ...(artifactId ? { artifactId } : {}),
+      });
     }
   }
   if (isStreaming && points.length > 0) {
@@ -202,6 +269,165 @@ export function summarizeActivitiesToWorkPoints(
     }
   }
   return points;
+}
+
+export interface GeneratedMediaItem {
+  id: string;
+  label: string;
+  filePath?: string;
+  artifactId?: string;
+  rawUrl: string;
+}
+
+export function extractGeneratedMediaFromActivities(
+  activities: WorkPointActivity[],
+): GeneratedMediaItem[] {
+  const out: GeneratedMediaItem[] = [];
+  const seen = new Set<string>();
+  for (const act of activities) {
+    if (act.kind === 'error') continue;
+    const lower = act.label.trim().toLowerCase();
+    const isGenImg = lower === 'atelier.generate_image' || lower.startsWith('generated image');
+    const isOptSvg = lower === 'atelier.optimize_svg' || lower.startsWith('optimized svg');
+    if (!isGenImg && !isOptSvg) continue;
+
+    const detail = parseJsonDetail(act.detail);
+    if (detail && detail.ok === false) continue;
+    const { filePath, artifactId } = extractActivityFileTarget(act);
+    if (!filePath && !artifactId) continue;
+
+    const dedupeKey = artifactId ?? filePath!;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    const qs = new URLSearchParams();
+    if (artifactId) qs.set('artifactId', artifactId);
+    else if (filePath) qs.set('path', filePath);
+
+    const label =
+      fileBasename(filePath ?? null) ??
+      firstString(detail, ['prompt'])?.slice(0, 40) ??
+      (isOptSvg ? 'optimized.svg' : 'generated-image.png');
+
+    out.push({
+      id: act.id,
+      label,
+      filePath,
+      artifactId,
+      rawUrl: `/api/files/raw?${qs.toString()}`,
+    });
+  }
+  return out;
+}
+
+export function GeneratedMediaStrip({ activities }: { activities: WorkPointActivity[] }) {
+  const tr = useT();
+  const { openFilePreview } = useFilePreview();
+  const items = extractGeneratedMediaFromActivities(activities);
+  if (items.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+      {items.map((item) => (
+        <div
+          key={item.id}
+          style={{
+            width: 240,
+            borderRadius: 12,
+            overflow: 'hidden',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border-subtle)',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() =>
+              openFilePreview({
+                path: item.filePath,
+                artifactId: item.artifactId,
+                name: item.label,
+              })
+            }
+            title={tr('Preview {name}', { name: item.label })}
+            style={{
+              padding: 0,
+              border: 0,
+              background: '#0a0a0e',
+              cursor: 'zoom-in',
+              display: 'block',
+            }}
+          >
+            <img
+              src={item.rawUrl}
+              alt={item.label}
+              loading="lazy"
+              style={{
+                width: '100%',
+                height: 140,
+                objectFit: 'contain',
+                display: 'block',
+              }}
+            />
+          </button>
+          <div
+            style={{
+              padding: '7px 10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 6,
+            }}
+          >
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                minWidth: 0,
+                fontSize: 12,
+                fontWeight: 500,
+                color: 'var(--text-primary)',
+              }}
+            >
+              <FileImage size={12} strokeWidth={1.6} style={{ flexShrink: 0, color: 'var(--agent-purple)' }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {item.label}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                openFilePreview({
+                  path: item.filePath,
+                  artifactId: item.artifactId,
+                  name: item.label,
+                  initialShowPath: true,
+                })
+              }
+              title={item.filePath ?? tr('Show file path')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 7px',
+                borderRadius: 6,
+                background: 'var(--surface-3)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--text-secondary)',
+                fontSize: 11,
+                flexShrink: 0,
+              }}
+            >
+              <FolderOpen size={11} strokeWidth={1.7} />
+              {tr('Show file path')}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function WorkPointStatusIcon({ status }: { status: WorkPoint['status'] }) {
@@ -262,6 +488,7 @@ export function WorkPointsChecklist({
   onToggle: () => void;
 }) {
   const tr = useT();
+  const { openFilePreview } = useFilePreview();
   const points = summarizeActivitiesToWorkPoints(activities, streaming, agents);
   const queuedItems: WorkPoint[] = streaming
     ? pendingTasks.slice(0, 3).map((t) => ({
@@ -391,6 +618,61 @@ export function WorkPointsChecklist({
                   }}
                 >
                   ×{pt.count}
+                </span>
+              )}
+              {(pt.filePath || pt.artifactId) && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openFilePreview({
+                        path: pt.filePath,
+                        artifactId: pt.artifactId,
+                        name: fileBasename(pt.filePath ?? null) ?? pt.title,
+                      })
+                    }
+                    title={tr('Preview file')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      padding: '1px 6px',
+                      borderRadius: 5,
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-secondary)',
+                      fontSize: 10.5,
+                    }}
+                  >
+                    <Eye size={10} strokeWidth={1.75} />
+                    {tr('Preview')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openFilePreview({
+                        path: pt.filePath,
+                        artifactId: pt.artifactId,
+                        name: fileBasename(pt.filePath ?? null) ?? pt.title,
+                        initialShowPath: true,
+                      })
+                    }
+                    title={pt.filePath ?? tr('Show file path')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      padding: '1px 6px',
+                      borderRadius: 5,
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-secondary)',
+                      fontSize: 10.5,
+                    }}
+                  >
+                    <FolderOpen size={10} strokeWidth={1.75} />
+                    {tr('Path')}
+                  </button>
                 </span>
               )}
             </div>

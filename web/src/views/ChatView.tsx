@@ -49,7 +49,7 @@ import {
 import { AgentSessionBar, sessionLabel } from '../components/AgentSessionBar';
 import { MessageAttachments, isAttachmentOnlyText } from '../components/AttachmentViews';
 import { ChatSearchBar, ChatSearchButton, useChatSearch } from '../components/ChatSearch';
-import { ParallelAgentsStrip, WorkPointsChecklist } from '../components/ChatWorkPanel';
+import { GeneratedMediaStrip, ParallelAgentsStrip, WorkPointsChecklist } from '../components/ChatWorkPanel';
 import { DesignOptionsCard, DesignPendingCard } from '../components/DesignOptionsCard';
 import { ProviderIcon } from '../components/ProviderIcon';
 import { BotMascot } from '../components/mascot/BotMascot';
@@ -740,6 +740,8 @@ export function ChatView({
               </div>
             );
           })}
+
+        {msgActivities.length > 0 && <GeneratedMediaStrip activities={msgActivities} />}
 
         {msg.metadata?.browserScreenshots && msg.metadata.browserScreenshots.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>

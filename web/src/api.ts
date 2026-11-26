@@ -19,6 +19,7 @@ import type {
   CreateSiteCredentialInput,
   DetectedSitePreset,
   ExportBackupInput,
+  FilePreviewData,
   LibraryImage,
   MeetingMode,
   MeetingSession,
@@ -65,6 +66,7 @@ import type {
   UpdateTaskInput,
   UsageDashboardResponse,
   UsageRange,
+  WorkspaceFileEntry,
   WorkspaceState,
 } from '@atelier/contracts';
 
@@ -267,9 +269,40 @@ export const api = {
     ),
 
   libraryImages: (scope: string | null, agentId?: string) =>
-    request<{ images: LibraryImage[] }>(
+    request<{ images: LibraryImage[]; documents?: LibraryImage[] }>(
       `/api/projects/${encodeURIComponent(scope ?? 'direct')}/library${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`,
     ),
+
+  filePreview: (params: {
+    path?: string;
+    attachmentId?: string;
+    artifactId?: string;
+    svgMessageId?: string;
+    svgIndex?: number;
+    scope?: string | null;
+    agentId?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params.path) qs.set('path', params.path);
+    if (params.attachmentId) qs.set('attachmentId', params.attachmentId);
+    if (params.artifactId) qs.set('artifactId', params.artifactId);
+    if (params.svgMessageId) qs.set('svgMessageId', params.svgMessageId);
+    if (params.svgIndex !== undefined) qs.set('svgIndex', String(params.svgIndex));
+    if (params.scope) qs.set('scope', params.scope);
+    if (params.agentId) qs.set('agentId', params.agentId);
+    return request<{ preview: FilePreviewData }>(`/api/files/preview?${qs.toString()}`);
+  },
+
+  workspaceFiles: (scope: string | null, agentId?: string) =>
+    request<{ files: WorkspaceFileEntry[] }>(
+      `/api/projects/${encodeURIComponent(scope ?? 'direct')}/files${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`,
+    ),
+
+  revealFilePath: (params: { path?: string; attachmentId?: string; artifactId?: string }) =>
+    request<{ ok: boolean; filePath: string }>('/api/fs/reveal', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
 
   pickDesign: (scope: string | null, messageId: string, optionId: string, segmentIndex: number) =>
     request<{ entry: CanonEntry }>(`/api/projects/${encodeURIComponent(scope ?? 'direct')}/canon/pick`, {

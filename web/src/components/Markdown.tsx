@@ -1,7 +1,8 @@
 import { extractSvgBlocks } from '@atelier/contracts';
-import { Check, Code, Copy, Download, Eye, FileImage } from 'lucide-react';
+import { Check, Code, Copy, Download, Eye, FileImage, FolderOpen, Maximize2 } from 'lucide-react';
 import { Fragment, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useT } from '../i18n';
+import { useFilePreview } from './FilePreviewModal';
 
 /**
  * Small, dependency-free markdown renderer for chat messages. It builds React elements only
@@ -128,7 +129,10 @@ export function parseMarkdown(text: string): Block[] {
 }
 
 const INLINE =
-  /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*|__[^_\n]+?__)|(\[[^\]\n]+\]\([^)\s]+\))|(https?:\/\/[^\s<>)]+)|(\*[^*\s][^*\n]*?\*|(?<![\w])_[^_\s][^_\n]*?_(?![\w]))/g;
+  /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*|__[^_\n]+?__)|(!\[[^\]\n]*\]\([^)\s]+\))|(\[[^\]\n]+\]\([^)\s]+\))|(https?:\/\/[^\s<>)]+)|(\*[^*\s][^*\n]*?\*|(?<![\w])_[^_\s][^_\n]*?_(?![\w]))/g;
+
+const PREVIEWABLE_FILE_PATH_RE =
+  /^(?:[a-zA-Z]:[\\/][^\n`"*?<>|]+|\.?\.?[\\/][^\n`"*?<>|]+|[\w.-]+(?:[\\/][\w.-]+)*)\.(?:md|markdown|mdx|pdf|docx|xlsx|csv|tsv|png|jpe?g|gif|webp|svg)$/i;
 
 const inlineCode: CSSProperties = {
   fontFamily: 'var(--font-mono)',
@@ -140,6 +144,176 @@ const inlineCode: CSSProperties = {
   color: 'var(--text-primary)',
 };
 
+function PreviewableInlineCode({ text }: { text: string }) {
+  const t = useT();
+  const { openFilePreview } = useFilePreview();
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '1px 5px',
+        borderRadius: 5,
+        background: 'var(--surface-2)',
+        border: '1px solid var(--border-subtle)',
+        verticalAlign: 'baseline',
+      }}
+    >
+      <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.88em', color: 'var(--text-primary)' }}>
+        {text}
+      </code>
+      <button
+        type="button"
+        onClick={() => openFilePreview({ path: text, name: text.split(/[\\/]/).pop() || text })}
+        title={t('Preview file & show path')}
+        aria-label={t('Preview file & show path')}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '1px 3px',
+          borderRadius: 4,
+          color: 'var(--agent-blue)',
+          cursor: 'pointer',
+        }}
+      >
+        <Eye size={11} strokeWidth={1.8} />
+      </button>
+    </span>
+  );
+}
+
+function InlineMarkdownImage({ alt, src }: { alt: string; src: string }) {
+  const t = useT();
+  const { openFilePreview } = useFilePreview();
+  const [showPath, setShowPath] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const isRemote = /^https?:\/\/|^data:image\//i.test(src);
+  const resolvedSrc = isRemote
+    ? src
+    : src.startsWith('/api/')
+      ? src
+      : `/api/files/raw?path=${encodeURIComponent(src)}`;
+  const displayName = alt || src.split(/[\\/]/).pop() || 'image';
+
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        flexDirection: 'column',
+        borderRadius: 12,
+        border: '1px solid var(--border-subtle)',
+        background: 'var(--surface-1)',
+        overflow: 'hidden',
+        margin: '6px 0',
+        maxWidth: '100%',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          padding: '5px 10px',
+          background: 'var(--surface-2)',
+          borderBottom: '1px solid var(--border-subtle)',
+          fontSize: 11.5,
+          color: 'var(--text-secondary)',
+        }}
+      >
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <FileImage size={13} strokeWidth={1.6} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</span>
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => setShowPath((v) => !v)}
+            style={toolbarButton}
+            title={t('Show file path')}
+          >
+            <FolderOpen size={11} strokeWidth={1.7} />
+            {t('Path')}
+          </button>
+          {!isRemote && (
+            <button
+              type="button"
+              onClick={() => openFilePreview({ path: src, name: displayName, initialShowPath: true })}
+              style={toolbarButton}
+              title={t('Open in previewer')}
+            >
+              <Maximize2 size={11} strokeWidth={1.7} />
+              {t('Preview')}
+            </button>
+          )}
+        </span>
+      </div>
+      {showPath && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            padding: '5px 10px',
+            background: 'var(--surface-2)',
+            borderBottom: '1px solid var(--border-subtle)',
+            fontSize: 11,
+          }}
+        >
+          <code
+            style={{
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--text-primary)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {src}
+          </code>
+          <button
+            type="button"
+            style={toolbarButton}
+            onClick={() => {
+              void navigator.clipboard?.writeText(src).then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1400);
+              });
+            }}
+          >
+            {copied ? <Check size={11} /> : <Copy size={11} />}
+            {copied ? t('Copied') : t('Copy path')}
+          </button>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          if (!isRemote) openFilePreview({ path: src, name: displayName });
+        }}
+        style={{
+          padding: 10,
+          border: 0,
+          background: 'var(--surface-1)',
+          cursor: isRemote ? 'default' : 'zoom-in',
+          display: 'flex',
+          justifyContent: 'center',
+        }}
+      >
+        <img
+          src={resolvedSrc}
+          alt={displayName}
+          loading="lazy"
+          style={{ maxWidth: '100%', maxHeight: 360, objectFit: 'contain', borderRadius: 6 }}
+        />
+      </button>
+    </div>
+  );
+}
+
 function safeHref(raw: string): string | null {
   try {
     const url = new URL(raw);
@@ -150,6 +324,26 @@ function safeHref(raw: string): string | null {
 }
 
 function Link({ href, children }: { href: string; children: ReactNode }) {
+  const { openFilePreview } = useFilePreview();
+  if (PREVIEWABLE_FILE_PATH_RE.test(href) && !/^https?:\/\//i.test(href)) {
+    return (
+      <button
+        type="button"
+        onClick={() => openFilePreview({ path: href, name: href.split(/[\\/]/).pop() || href })}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          color: 'var(--agent-blue)',
+          textDecoration: 'underline',
+          textUnderlineOffset: 2,
+          cursor: 'pointer',
+        }}
+      >
+        {children}
+      </button>
+    );
+  }
   const safe = safeHref(href);
   if (!safe) return <>{children}</>;
   return (
@@ -174,7 +368,12 @@ export function renderInline(text: string, keyPrefix = 'i'): ReactNode[] {
     const token = match[0];
     const key = `${keyPrefix}-${n++}`;
     if (match[1]) {
-      out.push(<code key={key} style={inlineCode}>{token.slice(1, -1)}</code>);
+      const codeContent = token.slice(1, -1).trim();
+      if (PREVIEWABLE_FILE_PATH_RE.test(codeContent)) {
+        out.push(<PreviewableInlineCode key={key} text={codeContent} />);
+      } else {
+        out.push(<code key={key} style={inlineCode}>{token.slice(1, -1)}</code>);
+      }
     } else if (match[2]) {
       out.push(
         <strong key={key} style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
@@ -182,9 +381,12 @@ export function renderInline(text: string, keyPrefix = 'i'): ReactNode[] {
         </strong>,
       );
     } else if (match[3]) {
+      const m = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(token)!;
+      out.push(<InlineMarkdownImage key={key} alt={m[1]!} src={m[2]!} />);
+    } else if (match[4]) {
       const m = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token)!;
       out.push(<Link key={key} href={m[2]!}>{renderInline(m[1]!, key)}</Link>);
-    } else if (match[4]) {
+    } else if (match[5]) {
       const trimmed = token.replace(/[.,;:!?]+$/, '');
       out.push(<Link key={key} href={trimmed}>{trimmed}</Link>);
       if (trimmed.length < token.length) out.push(token.slice(trimmed.length));
@@ -348,10 +550,13 @@ function downloadSvg(name: string, svg: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
-/** A finished SVG drawing: shown as the picture, with its file name, download and copy. */
+/** A finished SVG drawing: shown as the picture, with its file name, file path action, download and copy. */
 function SvgBlock({ name, svg }: { name: string; svg: string }) {
   const t = useT();
+  const { openFilePreview } = useFilePreview();
   const [showCode, setShowCode] = useState(false);
+  const [showPath, setShowPath] = useState(false);
+  const [pathCopied, setPathCopied] = useState(false);
   const src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   return (
     <div
@@ -398,7 +603,26 @@ function SvgBlock({ name, svg }: { name: string; svg: string }) {
             <Download size={13} strokeWidth={1.75} />
           </button>
         </span>
-        <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
+        <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="transition-atelier"
+            style={toolbarButton}
+            onClick={() => setShowPath((v) => !v)}
+            title={t('Show file path')}
+          >
+            <FolderOpen size={12} strokeWidth={1.75} />
+            {t('Show file path')}
+          </button>
+          <button
+            type="button"
+            className="transition-atelier"
+            style={toolbarButton}
+            onClick={() => openFilePreview({ inlineSvg: svg, name, filePath: name, initialShowPath: true })}
+            title={t('Open in previewer')}
+          >
+            <Maximize2 size={12} strokeWidth={1.75} />
+          </button>
           <button type="button" className="transition-atelier" style={toolbarButton} onClick={() => setShowCode((v) => !v)}>
             {showCode ? <Eye size={12} strokeWidth={1.75} /> : <Code size={12} strokeWidth={1.75} />}
             {showCode ? t('Preview') : t('Code')}
@@ -406,6 +630,35 @@ function SvgBlock({ name, svg }: { name: string; svg: string }) {
           <CopyButton text={svg} />
         </span>
       </div>
+      {showPath && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            padding: '5px 10px',
+            background: 'var(--surface-2)',
+            borderBottom: '1px solid var(--border-subtle)',
+            fontSize: 11.5,
+          }}
+        >
+          <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{name}</code>
+          <button
+            type="button"
+            style={toolbarButton}
+            onClick={() => {
+              void navigator.clipboard?.writeText(name).then(() => {
+                setPathCopied(true);
+                window.setTimeout(() => setPathCopied(false), 1400);
+              });
+            }}
+          >
+            {pathCopied ? <Check size={11} /> : <Copy size={11} />}
+            {pathCopied ? t('Copied') : t('Copy path')}
+          </button>
+        </div>
+      )}
       {showCode ? (
         <pre
           style={{
@@ -436,9 +689,21 @@ function SvgBlock({ name, svg }: { name: string; svg: string }) {
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const t = useT();
+  const { openFilePreview } = useFilePreview();
   const isMarkdown = lang === 'md' || lang === 'markdown';
   const [preview, setPreview] = useState(isMarkdown);
+  const [showPath, setShowPath] = useState(false);
+  const [pathCopied, setPathCopied] = useState(false);
   const label = LANG_LABELS[lang] ?? (lang ? lang.toUpperCase() : 'Code');
+
+  // Detect if the first line of the code block has a file path comment or frontmatter path
+  const detectedPath = useMemo(() => {
+    const firstLine = code.split('\n')[0]?.trim() ?? '';
+    const commentMatch = /^(?:\/\/|#|<!--)\s*(?:file|path)?\s*:?\s*([^\s>]+\.[a-zA-Z0-9]+)\s*(?:-->)?$/i.exec(firstLine);
+    if (commentMatch) return commentMatch[1]!;
+    return isMarkdown ? 'markdown-preview.md' : '';
+  }, [code, isMarkdown]);
+
   return (
     <div
       style={{
@@ -461,16 +726,73 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
         }}
       >
         <span style={{ fontSize: 11, color: 'var(--text-tertiary)', letterSpacing: 0.3 }}>{label}</span>
-        <span style={{ display: 'inline-flex', gap: 6 }}>
+        <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
           {isMarkdown && (
-            <button type="button" className="transition-atelier" style={toolbarButton} onClick={() => setPreview((v) => !v)}>
-              {preview ? <Code size={12} strokeWidth={1.75} /> : <Eye size={12} strokeWidth={1.75} />}
-              {preview ? t('Source') : t('Preview')}
-            </button>
+            <>
+              <button type="button" className="transition-atelier" style={toolbarButton} onClick={() => setPreview((v) => !v)}>
+                {preview ? <Code size={12} strokeWidth={1.75} /> : <Eye size={12} strokeWidth={1.75} />}
+                {preview ? t('Source') : t('Preview')}
+              </button>
+              <button
+                type="button"
+                className="transition-atelier"
+                style={toolbarButton}
+                onClick={() => setShowPath((v) => !v)}
+                title={t('Show file path')}
+              >
+                <FolderOpen size={12} strokeWidth={1.75} />
+                {t('Show file path')}
+              </button>
+              <button
+                type="button"
+                className="transition-atelier"
+                style={toolbarButton}
+                onClick={() =>
+                  openFilePreview({
+                    inlineMarkdown: code,
+                    name: detectedPath || 'markdown-preview.md',
+                    filePath: detectedPath || 'inline:markdown-preview.md',
+                    initialShowPath: true,
+                  })
+                }
+                title={t('Open in Markdown Previewer')}
+              >
+                <Maximize2 size={12} strokeWidth={1.75} />
+              </button>
+            </>
           )}
           <CopyButton text={code} />
         </span>
       </div>
+      {showPath && detectedPath && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            padding: '5px 10px',
+            background: 'var(--surface-2)',
+            borderBottom: '1px solid var(--border-subtle)',
+            fontSize: 11.5,
+          }}
+        >
+          <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{detectedPath}</code>
+          <button
+            type="button"
+            style={toolbarButton}
+            onClick={() => {
+              void navigator.clipboard?.writeText(detectedPath).then(() => {
+                setPathCopied(true);
+                window.setTimeout(() => setPathCopied(false), 1400);
+              });
+            }}
+          >
+            {pathCopied ? <Check size={11} /> : <Copy size={11} />}
+            {pathCopied ? t('Copied') : t('Copy path')}
+          </button>
+        </div>
+      )}
       {isMarkdown && preview ? (
         <div style={{ padding: '10px 14px' }}>
           <Markdown text={code} />

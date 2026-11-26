@@ -1,9 +1,8 @@
-import { ATTACHMENT_ONLY_TEXT, type MessageAttachment } from '@atelier/contracts';
-import { FileText, Paperclip, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { ATTACHMENT_ONLY_TEXT, type MessageAttachment, type PreviewFileKind } from '@atelier/contracts';
+import { Download, Eye, FolderOpen, Paperclip, X } from 'lucide-react';
 import { attachmentUrl } from '../api';
 import { useT } from '../i18n';
+import { FileKindIcon, useFilePreview } from './FilePreviewModal';
 
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -16,118 +15,201 @@ export function isAttachmentOnlyText(text: string): boolean {
   return text.trim() === ATTACHMENT_ONLY_TEXT;
 }
 
-function Lightbox({ attachment, onClose }: { attachment: MessageAttachment; onClose: () => void }) {
-  const t = useT();
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-  return (
-    <div
-      role="dialog"
-      aria-label={attachment.name}
-      onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 300,
-        background: 'rgba(6, 6, 9, 0.86)',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10,
-        padding: 24,
-      }}
-    >
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label={t('Close preview')}
-        style={{ position: 'absolute', top: 16, right: 16, color: 'var(--text-secondary)' }}
-      >
-        <X size={20} />
-      </button>
-      <img
-        src={attachmentUrl(attachment)}
-        alt={attachment.name}
-        onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: '92vw', maxHeight: '84vh', objectFit: 'contain', borderRadius: 8 }}
-      />
-      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-        {attachment.name} · {formatBytes(attachment.size)}
-      </div>
-    </div>
-  );
+function guessAttachmentPreviewKind(a: MessageAttachment): PreviewFileKind {
+  if (a.kind === 'image') return 'image';
+  const ext = a.name.split('.').pop()?.toLowerCase() ?? '';
+  if (ext === 'md' || ext === 'markdown' || ext === 'mdx') return 'markdown';
+  if (ext === 'svg') return 'svg';
+  if (ext === 'pdf' || a.mime === 'application/pdf') return 'pdf';
+  if (ext === 'docx') return 'word';
+  if (ext === 'xlsx' || ext === 'csv' || ext === 'tsv') return 'excel';
+  if (a.kind === 'text') return 'text';
+  return 'file';
 }
 
-/** Attachments inside a sent message: image thumbnails (click to enlarge) and file chips (download). */
+/**
+ * Attachments inside a sent message: image thumbnails and document chips (.md, .pdf, .docx, .xlsx, .csv, .txt).
+ * Clicking any attachment opens the universal FilePreviewModal with full preview and "Show file path" action.
+ */
 export function MessageAttachments({ attachments }: { attachments: MessageAttachment[] }) {
   const t = useT();
-  const [open, setOpen] = useState<MessageAttachment | null>(null);
+  const { openFilePreview } = useFilePreview();
   const images = attachments.filter((a) => a.kind === 'image');
   const others = attachments.filter((a) => a.kind !== 'image');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
       {images.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
           {images.map((a) => (
-            <button
+            <div
               key={a.id}
-              type="button"
-              onClick={() => setOpen(a)}
-              title={`${a.name} · ${formatBytes(a.size)}`}
               style={{
-                padding: 0,
+                position: 'relative',
                 borderRadius: 12,
                 overflow: 'hidden',
                 border: '1px solid var(--border-default)',
                 background: 'var(--surface-2)',
-                lineHeight: 0,
-                cursor: 'zoom-in',
               }}
             >
-              <img
-                src={attachmentUrl(a)}
-                alt={a.name}
-                loading="lazy"
-                style={{ maxWidth: images.length === 1 ? 260 : 130, maxHeight: images.length === 1 ? 200 : 100, objectFit: 'cover', display: 'block' }}
-              />
-            </button>
+              <button
+                type="button"
+                onClick={() => openFilePreview({ attachmentId: a.id, name: a.name })}
+                title={`${a.name} · ${formatBytes(a.size)}`}
+                style={{
+                  padding: 0,
+                  border: 0,
+                  background: 'transparent',
+                  lineHeight: 0,
+                  cursor: 'zoom-in',
+                  display: 'block',
+                }}
+              >
+                <img
+                  src={attachmentUrl(a)}
+                  alt={a.name}
+                  loading="lazy"
+                  style={{
+                    maxWidth: images.length === 1 ? 260 : 130,
+                    maxHeight: images.length === 1 ? 200 : 100,
+                    objectFit: 'cover',
+                    display: 'block',
+                  }}
+                />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openFilePreview({ attachmentId: a.id, name: a.name, initialShowPath: true });
+                }}
+                title={t('Show file path')}
+                aria-label={t('Show file path')}
+                style={{
+                  position: 'absolute',
+                  bottom: 6,
+                  right: 6,
+                  height: 22,
+                  padding: '0 7px',
+                  borderRadius: 'var(--radius-full)',
+                  background: 'rgba(13, 13, 17, 0.82)',
+                  border: '1px solid var(--border-default)',
+                  color: 'var(--text-primary)',
+                  fontSize: 10.5,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  backdropFilter: 'blur(4px)',
+                }}
+              >
+                <FolderOpen size={11} strokeWidth={1.75} />
+                <span>{t('Path')}</span>
+              </button>
+            </div>
           ))}
         </div>
       )}
       {others.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
-          {others.map((a) => (
-            <a
-              key={a.id}
-              href={attachmentUrl(a)}
-              download={a.name}
-              title={t('Download')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 7,
-                maxWidth: 240,
-                padding: '6px 10px',
-                borderRadius: 10,
-                background: 'var(--surface-2)',
-                border: '1px solid var(--border-default)',
-                color: 'var(--text-primary)',
-                fontSize: 12,
-                textDecoration: 'none',
-              }}
-            >
-              <FileText size={14} strokeWidth={1.5} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
-              <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{formatBytes(a.size)}</span>
-            </a>
-          ))}
+          {others.map((a) => {
+            const pKind = guessAttachmentPreviewKind(a);
+            return (
+              <div
+                key={a.id}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  maxWidth: 320,
+                  padding: '5px 8px 5px 10px',
+                  borderRadius: 10,
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border-default)',
+                  color: 'var(--text-primary)',
+                  fontSize: 12,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => openFilePreview({ attachmentId: a.id, name: a.name })}
+                  title={t('Preview {name}', { name: a.name })}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 7,
+                    minWidth: 0,
+                    flex: 1,
+                    color: 'var(--text-primary)',
+                    textAlign: 'left',
+                  }}
+                >
+                  <FileKindIcon kind={pKind} size={14} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                  <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{formatBytes(a.size)}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openFilePreview({ attachmentId: a.id, name: a.name })}
+                  title={t('Preview')}
+                  aria-label={t('Preview')}
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: 6,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--text-secondary)',
+                    background: 'var(--surface-3)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Eye size={12} strokeWidth={1.7} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openFilePreview({ attachmentId: a.id, name: a.name, initialShowPath: true })}
+                  title={t('Show file path')}
+                  aria-label={t('Show file path')}
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: 6,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--text-secondary)',
+                    background: 'var(--surface-3)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <FolderOpen size={12} strokeWidth={1.7} />
+                </button>
+                <a
+                  href={attachmentUrl(a)}
+                  download={a.name}
+                  title={t('Download')}
+                  aria-label={t('Download')}
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: 6,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--text-secondary)',
+                    background: 'var(--surface-3)',
+                    flexShrink: 0,
+                    textDecoration: 'none',
+                  }}
+                >
+                  <Download size={12} strokeWidth={1.7} />
+                </a>
+              </div>
+            );
+          })}
         </div>
       )}
-      {open && createPortal(<Lightbox attachment={open} onClose={() => setOpen(null)} />, document.body)}
     </div>
   );
 }
