@@ -398,6 +398,13 @@ export class AgentRuntime {
       });
     }
 
+    const retryOneTimeGrants =
+      decision === 'allow_once'
+        ? [grant]
+        : decision === 'allow_all_mcp' && req.kind === 'mcp' && req.target && req.target !== '*'
+          ? [makePermissionGrant('mcp', req.target, [...mergedTools])]
+          : undefined;
+
     if (decision !== 'deny') {
       this.store.enqueueItem({
         agentId: req.agentId,
@@ -409,7 +416,7 @@ export class AgentRuntime {
         refId: req.retryRefId,
         replyToAgentId: req.retryReplyToAgentId,
         modelOverride: { provider: req.provider, model: req.model },
-        oneTimeGrants: decision === 'allow_once' ? [grant] : undefined,
+        oneTimeGrants: retryOneTimeGrants,
         permissionRetryDepth: 1,
         prompt: `[Atelier System: User granted permission for ${grant.label}. Proceed now and execute the previously blocked tool call to answer the request.]\n\n${req.retryPrompt}`,
       });

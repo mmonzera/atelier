@@ -11,6 +11,7 @@ import {
   buildEffectiveTurnGrants,
   detectAllPermissionDenials,
   detectPermissionDenial,
+  discoverGlobalClaudeMcpNames,
   discoverGlobalCodexMcpNames,
   isPermissionAlreadyGranted,
   makePermissionGrant,
@@ -145,6 +146,62 @@ describe('Unified CLI permission helpers', () => {
     expect(claudeTools).toContain('mcp__figelo__*');
     expect(claudeTools).toContain('mcp__figelo__ping');
     expect(claudeTools).not.toContain('Bash(npm test)');
+
+    // Wildcard MCP grant expands to concrete per-server rules for Claude CLI
+    const claudeWildcardTools = buildClaudeExtraAllowedTools(
+      [makePermissionGrant('mcp', '*')],
+      false,
+      ['figelo', 'figma-remote'],
+    );
+    expect(claudeWildcardTools).toContain('mcp__*');
+    expect(claudeWildcardTools).toContain('mcp__figelo');
+    expect(claudeWildcardTools).toContain('mcp__figelo__*');
+    expect(claudeWildcardTools).toContain('mcp__figma-remote');
+    expect(claudeWildcardTools).toContain('mcp__figma-remote__*');
+
+    // discoverGlobalClaudeMcpNames reads ~/.claude.json, project-scoped entries, ~/.claude/settings.json, and <cwd>/.mcp.json
+    const tmpClaudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-claude-home-'));
+    tempDirs.push(tmpClaudeHome);
+    const tmpProject = path.join(tmpClaudeHome, 'proj', 'sub');
+    const tmpOtherProject = path.join(tmpClaudeHome, 'other-proj');
+    fs.mkdirSync(path.join(tmpClaudeHome, '.claude'), { recursive: true });
+    fs.mkdirSync(tmpProject, { recursive: true });
+    fs.mkdirSync(tmpOtherProject, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpClaudeHome, '.claude.json'),
+      JSON.stringify({
+        mcpServers: { figelo: { command: 'node' } },
+        projects: {
+          [path.join(tmpClaudeHome, 'proj')]: {
+            mcpServers: { 'proj-mcp': { url: 'http://127.0.0.1:4000' } },
+          },
+          [tmpOtherProject]: {
+            mcpServers: { 'unrelated-mcp': { url: 'http://127.0.0.1:5000' } },
+          },
+        },
+      }),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmpClaudeHome, '.claude', 'settings.json'),
+      JSON.stringify({ enabledMcpjsonServers: ['settings-mcp'] }),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(tmpProject, '.mcp.json'),
+      JSON.stringify({ mcpServers: { 'cwd-mcp': { command: 'npx' } } }),
+      'utf8',
+    );
+    const claudeDiscovered = discoverGlobalClaudeMcpNames({
+      homeDir: tmpClaudeHome,
+      claudeConfigDir: path.join(tmpClaudeHome, '.claude'),
+      cwd: tmpProject,
+    });
+    expect(claudeDiscovered.has('figelo')).toBe(true);
+    expect(claudeDiscovered.has('proj-mcp')).toBe(true);
+    expect(claudeDiscovered.has('settings-mcp')).toBe(true);
+    expect(claudeDiscovered.has('cwd-mcp')).toBe(true);
+    expect(claudeDiscovered.has('unrelated-mcp')).toBe(false);
 
     // buildCodexMcpArgs always sets default_tools_approval_mode="approve" for attached servers
     const attachedCodexArgs = buildCodexMcpArgs([

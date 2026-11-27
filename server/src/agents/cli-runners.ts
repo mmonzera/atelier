@@ -42,6 +42,7 @@ import {
   buildEffectiveTurnGrants,
   detectAllPermissionDenials,
   detectPermissionDenial,
+  discoverGlobalClaudeMcpNames,
   discoverGlobalCodexMcpNames,
   parseClaudeToolDenial,
   parseCodexItemDenial,
@@ -877,11 +878,15 @@ export class CliAgentRunner implements AgentRunner {
       attachedMcp: opts.mcpServers,
     });
     const baseTools = turn.agent.allowShell ? ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'] : ['Read', 'Write'];
+    const knownClaudeMcpServers = new Set<string>([
+      ...opts.mcpServers.map((s) => s.name),
+      ...discoverGlobalClaudeMcpNames({ cwd: opts.cwd }),
+    ]);
     const allowedTools = [
       ...new Set([
         ...baseTools,
         ...claudeAllowedMcpTools(opts.mcpServers),
-        ...buildClaudeExtraAllowedTools(effectiveGrants, turn.agent.allowShell),
+        ...buildClaudeExtraAllowedTools(effectiveGrants, turn.agent.allowShell, knownClaudeMcpServers),
       ]),
     ].join(',');
     const args = [

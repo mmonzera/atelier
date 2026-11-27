@@ -14,7 +14,11 @@ import { AttachmentStore } from '../attachments.js';
 import { RoomContextBuilder } from '../channels/context.js';
 import { conversationTail, estimateTokens, getScopeKey } from './compactor.js';
 import { buildAgentSystemPrompt, renderCanon } from './prompts.js';
-import { buildClaudeExtraAllowedTools, buildEffectiveTurnGrants } from './permissions.js';
+import {
+  buildClaudeExtraAllowedTools,
+  buildEffectiveTurnGrants,
+  discoverGlobalClaudeMcpNames,
+} from './permissions.js';
 import type { AgentRunner, Turn, TurnCallbacks } from './runner.js';
 import { applyAtelierActions } from './atelier-actions.js';
 import {
@@ -202,7 +206,15 @@ export class ClaudeAgentRunner implements AgentRunner {
       oneTimeGrants: turn.oneTimeGrants,
       attachedMcp,
     });
-    const extraGrantTools = buildClaudeExtraAllowedTools(effectiveGrants, turn.agent.allowShell);
+    const knownClaudeMcpServers = new Set<string>([
+      ...attachedMcp.map((s) => s.name),
+      ...discoverGlobalClaudeMcpNames({ cwd }),
+    ]);
+    const extraGrantTools = buildClaudeExtraAllowedTools(
+      effectiveGrants,
+      turn.agent.allowShell,
+      knownClaudeMcpServers,
+    );
     const extraMcpTools = attachedMcp.map((s) => `mcp__${s.name}__*`);
     const allowedTools = [
       ...new Set([

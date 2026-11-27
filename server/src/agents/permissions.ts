@@ -164,12 +164,24 @@ export function buildAntigravityAllowedRules(
 export function buildClaudeExtraAllowedTools(
   grants: readonly PermissionGrant[],
   allowShell: boolean,
+  knownMcpServers?: Iterable<string>,
 ): string[] {
   const tools = new Set<string>();
+  const knownServers = new Set<string>();
+  for (const rawName of knownMcpServers ?? []) {
+    const clean = rawName.trim();
+    if (clean) knownServers.add(clean);
+  }
   for (const g of grants) {
     if (g.kind === 'mcp') {
       if (g.target === '*') {
         tools.add('mcp__*');
+        // Claude CLI does not treat a bare `mcp__*` as a wildcard across all MCP
+        // servers — expand it to explicit per-server allow patterns for every known server.
+        for (const server of knownServers) {
+          tools.add(`mcp__${server}`);
+          tools.add(`mcp__${server}__*`);
+        }
       } else {
         tools.add(`mcp__${g.target}`);
         tools.add(`mcp__${g.target}__*`);
@@ -184,6 +196,87 @@ export function buildClaudeExtraAllowedTools(
     }
   }
   return [...tools];
+}
+
+function collectMcpNamesFromJsonObject(obj: unknown, out: Set<string>): void {
+  if (!obj || typeof obj !== 'object') return;
+  const rec = obj as Record<string, unknown>;
+  if (rec.mcpServers && typeof rec.mcpServers === 'object' && !Array.isArray(rec.mcpServers)) {
+    for (const key of Object.keys(rec.mcpServers as Record<string, unknown>)) {
+      const clean = key.trim();
+      if (clean) out.add(clean);
+    }
+  }
+  if (Array.isArray(rec.enabledMcpjsonServers)) {
+    for (const item of rec.enabledMcpjsonServers) {
+      if (typeof item === 'string' && item.trim()) out.add(item.trim());
+    }
+  }
+}
+
+function readJsonFileSafe(filePath: string): unknown {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+export function discoverGlobalClaudeMcpNames(opts?: {
+  homeDir?: string;
+  claudeConfigDir?: string;
+  cwd?: string;
+}): Set<string> {
+  const names = new Set<string>();
+  const homeDir = opts?.homeDir || os.homedir();
+  const claudeConfigDir = opts?.claudeConfigDir || process.env.CLAUDE_CONFIG_DIR || path.join(homeDir, '.claude');
+
+  const claudeJsonCandidates = new Set<string>([
+    path.join(homeDir, '.claude.json'),
+    path.join(claudeConfigDir, '.claude.json'),
+  ]);
+
+  const normalizedCwd = opts?.cwd ? path.resolve(opts.cwd) : null;
+  for (const claudeJsonPath of claudeJsonCandidates) {
+    const parsed = readJsonFileSafe(claudeJsonPath);
+    if (!parsed || typeof parsed !== 'object') continue;
+    collectMcpNamesFromJsonObject(parsed, names);
+    const projects = (parsed as Record<string, unknown>).projects;
+    if (projects && typeof projects === 'object' && !Array.isArray(projects)) {
+      for (const [projPath, projCfg] of Object.entries(projects as Record<string, unknown>)) {
+        if (!normalizedCwd) {
+          collectMcpNamesFromJsonObject(projCfg, names);
+          continue;
+        }
+        const resolvedProj = path.resolve(projPath);
+        if (
+          normalizedCwd === resolvedProj ||
+          normalizedCwd.startsWith(resolvedProj + path.sep)
+        ) {
+          collectMcpNamesFromJsonObject(projCfg, names);
+        }
+      }
+    }
+  }
+
+  const settingsFiles = [
+    path.join(claudeConfigDir, 'settings.json'),
+    path.join(claudeConfigDir, 'settings.local.json'),
+    path.join(claudeConfigDir, '.mcp.json'),
+  ];
+  if (normalizedCwd) {
+    settingsFiles.push(
+      path.join(normalizedCwd, '.mcp.json'),
+      path.join(normalizedCwd, '.claude', 'settings.json'),
+      path.join(normalizedCwd, '.claude', 'settings.local.json'),
+    );
+  }
+  for (const filePath of settingsFiles) {
+    collectMcpNamesFromJsonObject(readJsonFileSafe(filePath), names);
+  }
+
+  return names;
 }
 
 export function discoverGlobalCodexMcpNames(codexHome?: string): Set<string> {
