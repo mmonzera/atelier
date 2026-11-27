@@ -531,6 +531,7 @@ export class ProviderAuthManager {
     const { major, standaloneArgs } = await getOpenCodeCliCapabilities(cliPath);
     if (major >= 2) {
       let existingCredId = `cred_atelier_${Date.now().toString(36)}`;
+      let existingLabel = 'OpenCode';
       try {
         const exported = await execCliCapture(cliPath, [...standaloneArgs, 'auth', 'export'], 5000);
         if (exported.exitCode === 0 && exported.stdout.trim()) {
@@ -545,6 +546,9 @@ export class ProviderAuthManager {
             if (match && typeof match.id === 'string' && match.id.trim()) {
               existingCredId = match.id.trim();
             }
+            if (match && typeof match.label === 'string' && match.label.trim()) {
+              existingLabel = match.label.trim();
+            }
           }
         }
       } catch {
@@ -556,6 +560,7 @@ export class ProviderAuthManager {
         {
           id: existingCredId,
           integrationID: 'opencode',
+          label: existingLabel,
           active: true,
           value: { type: 'key', key: cleanKey },
         },

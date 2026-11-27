@@ -788,9 +788,11 @@ describe('OpenCode custom provider discovery and auth parsing', () => {
     });
     const savedPayload = JSON.parse(fs.readFileSync(importedDump, 'utf8')) as Array<{
       integrationID: string;
+      label: string;
       value: { type: string; key: string };
     }>;
     expect(savedPayload[0]?.integrationID).toBe('opencode');
+    expect(savedPayload[0]?.label).toBe('OpenCode');
     expect(savedPayload[0]?.value).toEqual({ type: 'key', key: 'oc-go-secret-key' });
 
     const discovered = await discoverOpenCodeLiveModels(config, store.getSettings());
