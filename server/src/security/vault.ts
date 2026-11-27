@@ -155,6 +155,13 @@ export class LocalVault {
     return this.readRecord()?.enabled === true;
   }
 
+  /** True when app lock is enabled and no active session is currently unlocked. */
+  public isLocked(): boolean {
+    if (!this.isEnabled()) return false;
+    this.sweepExpired();
+    return this.sessions.size === 0;
+  }
+
   public getIdleMinutes(): number {
     return this.readRecord()?.idleMinutes ?? DEFAULT_IDLE_MINUTES;
   }

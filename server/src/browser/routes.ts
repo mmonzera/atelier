@@ -2,6 +2,7 @@ import type { ApiErrorResponse } from '@atelier/contracts';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { CredentialStore } from './credentials.js';
+import type { ChromeExtensionBridge } from './chrome-bridge.js';
 import { resolveAllPresets } from './login.js';
 import type { BrowserManager } from './manager.js';
 
@@ -22,12 +23,43 @@ const selectorsSchema = z
 export function createBrowserRoutes(deps: {
   browserManager: BrowserManager;
   credentials: CredentialStore;
+  chromeBridge?: ChromeExtensionBridge;
 }): Hono {
-  const { browserManager, credentials } = deps;
+  const { browserManager, credentials, chromeBridge } = deps;
   const api = new Hono();
 
   api.get('/browser/status', (c) => {
     return c.json(browserManager.getStatus());
+  });
+
+  api.get('/browser/extension/status', (c) => {
+    if (!chromeBridge) {
+      return c.json(apiError('bridge_unavailable', 'Chrome Extension bridge tidak aktif.'), 404);
+    }
+    return c.json(chromeBridge.getStatus());
+  });
+
+  api.post('/browser/extension/pair/start', (c) => {
+    if (!chromeBridge) {
+      return c.json(apiError('bridge_unavailable', 'Chrome Extension bridge tidak aktif.'), 404);
+    }
+    try {
+      const pairing = chromeBridge.startPairing();
+      return c.json({ ...pairing, status: chromeBridge.getStatus() });
+    } catch (err) {
+      return c.json(
+        apiError('pair_failed', err instanceof Error ? err.message : 'Gagal membuat kode pairing.'),
+        423,
+      );
+    }
+  });
+
+  api.post('/browser/extension/unpair', (c) => {
+    if (!chromeBridge) {
+      return c.json(apiError('bridge_unavailable', 'Chrome Extension bridge tidak aktif.'), 404);
+    }
+    chromeBridge.unpair();
+    return c.json({ ok: true, status: chromeBridge.getStatus() });
   });
 
   api.get('/browser/presets', (c) => {

@@ -14,6 +14,7 @@ import type { AtelierDb } from '../db.js';
 import { detectLocalBrowser } from '../qa/browser-qa.js';
 import type { AtelierStore } from '../store.js';
 import type { CredentialStore } from './credentials.js';
+import type { ChromeExtensionBridge } from './chrome-bridge.js';
 import { detectLoginForm, findPresetForCredential, performSiteLogin } from './login.js';
 import { isHostAllowed, redactSecrets } from './policy.js';
 
@@ -91,6 +92,11 @@ export class BrowserManager {
   private readonly turnTokens = new Map<string, TurnTokenRecord>();
   private readonly idleTimer: NodeJS.Timeout;
   private shuttingDown = false;
+  public chromeBridge?: ChromeExtensionBridge;
+
+  public setChromeBridge(bridge: ChromeExtensionBridge): void {
+    this.chromeBridge = bridge;
+  }
 
   constructor(opts: {
     db: AtelierDb;

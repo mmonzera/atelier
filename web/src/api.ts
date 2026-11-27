@@ -659,8 +659,28 @@ export const api = {
     }),
 };
 
+export interface ChromeExtensionStatusInfo {
+  connected: boolean;
+  paired: boolean;
+  port: number;
+  pairingCode: string | null;
+  pairingExpiresAt: string | null;
+  extensionPath: string | null;
+  connectedAt: string | null;
+}
+
 export const browserApi = {
   status: () => request<BrowserStatusInfo>('/api/browser/status'),
+  extensionStatus: () => request<ChromeExtensionStatusInfo>('/api/browser/extension/status'),
+  extensionStartPairing: () =>
+    request<{ code: string; expiresAt: string; port: number; status: ChromeExtensionStatusInfo }>(
+      '/api/browser/extension/pair/start',
+      { method: 'POST' },
+    ),
+  extensionUnpair: () =>
+    request<{ ok: boolean; status: ChromeExtensionStatusInfo }>('/api/browser/extension/unpair', {
+      method: 'POST',
+    }),
   presets: () => request<{ presets: SitePreset[] }>('/api/browser/presets'),
   detectPreset: (loginUrl: string) =>
     request<{ detected: DetectedSitePreset }>('/api/browser/presets/detect', {

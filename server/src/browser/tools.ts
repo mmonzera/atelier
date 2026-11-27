@@ -2,6 +2,7 @@ import type { BrowserScreenshotSummary } from '@atelier/contracts';
 import type { Locator, Page } from 'playwright-core';
 import { z } from 'zod';
 import type { BrowserManager, BrowserSessionState } from './manager.js';
+import { type RawHtmlInspectPayload, extractCleanedHtmlAndTokens, formatHtmlInspectResult } from './inspect-html.js';
 import { findPresetForCredential, performSiteLogin } from './login.js';
 import { isHostAllowed, isSensitiveAction, wrapUntrustedPageContent } from './policy.js';
 import { capturePageSnapshot } from './snapshot.js';
@@ -62,6 +63,12 @@ const ScreenshotSchema = z.object({
 });
 const TakeoverSchema = z.object({
   reason: z.string().trim().min(1).max(400).describe('Alasan meminta pengguna mengambil alih'),
+});
+const InspectHtmlSchema = z.object({
+  url: z.string().trim().optional().describe('URL http:// atau https:// (opsional: jika kosong, baca tab aktif)'),
+  selector: z.string().trim().max(240).optional().describe('CSS selector spesifik (mis. "main", "form")'),
+  maxHtmlChars: z.number().int().min(2000).max(60_000).optional().describe('Batas karakter HTML bersih (default 20000)'),
+  tabId: z.number().int().positive().optional().describe('ID tab Chrome dari browser_chrome_tabs (opsional)'),
 });
 
 export const BROWSER_TOOL_DEFS: BrowserToolDefinition[] = [
@@ -212,6 +219,27 @@ export const BROWSER_TOOL_DEFS: BrowserToolDefinition[] = [
     description: 'Tutup tab sesi browser saat ini (profil dan cookie tetap tersimpan).',
     schema: EmptySchema,
     jsonSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_chrome_tabs',
+    description: 'Lihat daftar tab HTTP(S) yang sedang terbuka di Chrome pengguna (memerlukan Chrome Extension terhubung).',
+    schema: EmptySchema,
+    jsonSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_inspect_html',
+    description:
+      'Buka URL (opsional) dan baca struktur HTML bersih beserta computed CSS / design tokens (warna, font, radius, elemen kunci). Otomatis memakai Chrome Extension jika terhubung, atau Playwright jika tidak.',
+    schema: InspectHtmlSchema,
+    jsonSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'URL http:// atau https:// (opsional: kosongkan untuk membaca tab aktif)' },
+        selector: { type: 'string', description: 'CSS selector target (opsional, default body)' },
+        maxHtmlChars: { type: 'number', description: 'Maksimal karakter HTML (default 20000)' },
+        tabId: { type: 'number', description: 'ID tab Chrome target dari browser_chrome_tabs (opsional)' },
+      },
+    },
   },
 ];
 
@@ -434,6 +462,91 @@ async function runToolImpl(
     if (!existing) return JSON.stringify({ closed: false, message: 'Tidak ada sesi aktif.' });
     await manager.closeSession(existing.id);
     return JSON.stringify({ closed: true });
+  }
+
+  if (toolName === 'browser_chrome_tabs') {
+    EmptySchema.parse(rawArgs ?? {});
+    if (!manager.chromeBridge?.isConnected()) {
+      throw new Error('Chrome Extension belum terhubung. Hubungkan melalui Settings → Browser & Login terlebih dahulu.');
+    }
+    const res = await manager.chromeBridge.sendCommand<{
+      tabs: Array<{ id: number; title: string; url: string; active: boolean }>;
+    }>('list_tabs', {}, 10_000);
+    const tabs = (res.tabs ?? []).filter((tab) => isHostAllowed(tab.url, allowedHosts));
+    recordSafeActivity(manager, ctx, `📋 Daftar tab Chrome (${tabs.length})`);
+    return wrapUntrustedPageContent('browser_chrome_tabs', JSON.stringify({ tabs }, null, 2));
+  }
+
+  if (toolName === 'browser_inspect_html') {
+    const args = InspectHtmlSchema.parse(rawArgs ?? {});
+    if (args.url && !isHostAllowed(args.url, allowedHosts)) {
+      throw new Error('Situs ini tidak diizinkan untuk agent ini.');
+    }
+
+    if (manager.chromeBridge?.isConnected()) {
+      let targetTabId = args.tabId;
+      if (args.url) {
+        const opened = await manager.chromeBridge.sendCommand<{ tabId: number; url: string; title: string }>(
+          'open_url',
+          { url: args.url },
+          20_000,
+        );
+        if (!isHostAllowed(opened.url, allowedHosts)) {
+          throw new Error('Situs ini tidak diizinkan untuk agent ini (redirect diblokir).');
+        }
+        targetTabId = opened.tabId;
+      }
+
+      const inspected = await manager.chromeBridge.sendCommand<RawHtmlInspectPayload>(
+        'inspect_html',
+        {
+          ...(targetTabId !== undefined ? { tabId: targetTabId } : {}),
+          ...(args.selector ? { selector: args.selector } : {}),
+          ...(args.maxHtmlChars !== undefined ? { maxHtmlChars: args.maxHtmlChars } : {}),
+        },
+        20_000,
+      );
+      if (!isHostAllowed(inspected.url, allowedHosts)) {
+        throw new Error('Tab Chrome yang aktif berada di situs yang tidak diizinkan untuk agent ini.');
+      }
+      const result = formatHtmlInspectResult(inspected);
+      recordSafeActivity(manager, ctx, `🔍 Inspect HTML Chrome: ${inspected.url}`);
+      return wrapUntrustedPageContent('browser_inspect_html', result.formatted);
+    }
+
+    // Fallback to Playwright session
+    const playwrightSession: BrowserSessionState =
+      manager.findAgentSession(ctx.agentId) ?? (await manager.getOrCreateSession(ctx.agentId));
+    return manager.withSessionLock(
+      playwrightSession,
+      async (page) => {
+        if (args.url) {
+          playwrightSession.lastBlockedHost = null;
+          try {
+            await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+            await page.waitForLoadState('networkidle', { timeout: 2500 }).catch(() => undefined);
+          } catch (err) {
+            if (playwrightSession.lastBlockedHost) {
+              throw new Error('Situs ini tidak diizinkan untuk agent ini (redirect diblokir).');
+            }
+            throw err;
+          }
+          if (playwrightSession.lastBlockedHost || !isHostAllowed(page.url(), allowedHosts)) {
+            throw new Error('Situs ini tidak diizinkan untuk agent ini.');
+          }
+        } else if (!isHostAllowed(page.url(), allowedHosts)) {
+          throw new Error('Situs ini tidak diizinkan untuk agent ini.');
+        }
+
+        const result = await extractCleanedHtmlAndTokens(page, {
+          selector: args.selector,
+          maxHtmlChars: args.maxHtmlChars,
+        });
+        recordSafeActivity(manager, ctx, `🔍 Inspect HTML: ${result.url}`);
+        return wrapUntrustedPageContent('browser_inspect_html', result.formatted);
+      },
+      ctx.signal,
+    );
   }
 
   // All remaining tools operate on an active session

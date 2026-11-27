@@ -13,20 +13,23 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Copy,
   Download,
   ExternalLink,
   FolderOpen,
   Globe,
   KeyRound,
+  Link2,
   Plus,
   RefreshCw,
   ShieldAlert,
   Sparkles,
   Trash2,
+  Unlink,
   Upload,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, browserApi } from '../api';
+import { api, browserApi, type ChromeExtensionStatusInfo } from '../api';
 import {
   inputStyle,
   labelStyle,
@@ -100,6 +103,8 @@ function formatRelative(iso?: string | null): string {
 export function BrowserSettingsPanel({ settings }: { settings: Settings }) {
   const t = useT();
   const [status, setStatus] = useState<BrowserStatusInfo | null>(null);
+  const [extStatus, setExtStatus] = useState<ChromeExtensionStatusInfo | null>(null);
+  const [extPairingLoading, setExtPairingLoading] = useState(false);
   const [presets, setPresets] = useState<SitePreset[]>([]);
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
   const [credentials, setCredentials] = useState<SiteCredential[]>([]);
@@ -149,13 +154,15 @@ export function BrowserSettingsPanel({ settings }: { settings: Settings }) {
 
   const loadAll = useCallback(async () => {
     try {
-      const [st, pr, pf, cr] = await Promise.all([
+      const [st, ext, pr, pf, cr] = await Promise.all([
         browserApi.status(),
+        browserApi.extensionStatus().catch(() => null),
         browserApi.presets(),
         browserApi.listProfiles(),
         browserApi.listCredentials(),
       ]);
       setStatus(st);
+      if (ext) setExtStatus(ext);
       setPresets(pr.presets);
       setProfiles(pf.profiles);
       setCredentials(cr.credentials);
@@ -165,6 +172,40 @@ export function BrowserSettingsPanel({ settings }: { settings: Settings }) {
       setLoading(false);
     }
   }, [t]);
+
+  const handleStartExtPairing = async () => {
+    setExtPairingLoading(true);
+    try {
+      const res = await browserApi.extensionStartPairing();
+      setExtStatus(res.status);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to generate pairing code');
+    } finally {
+      setExtPairingLoading(false);
+    }
+  };
+
+  const handleUnpairExt = async () => {
+    setExtPairingLoading(true);
+    try {
+      const res = await browserApi.extensionUnpair();
+      setExtStatus(res.status);
+      toast.success('Chrome Extension disconnected');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to disconnect Chrome Extension');
+    } finally {
+      setExtPairingLoading(false);
+    }
+  };
+
+  const copyText = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success(`${label} copied`);
+    } catch {
+      toast.error('Clipboard copy failed');
+    }
+  };
 
   useEffect(() => {
     void loadAll();
@@ -515,6 +556,163 @@ export function BrowserSettingsPanel({ settings }: { settings: Settings }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Chrome Extension (HTML Inspector) */}
+      {extStatus && (
+        <div style={cardStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Link2
+                size={15}
+                style={{
+                  color: extStatus.connected
+                    ? 'var(--agent-green)'
+                    : extStatus.paired
+                      ? 'var(--agent-amber)'
+                      : 'var(--text-secondary)',
+                }}
+              />
+              <span style={eyebrowStyle}>Chrome Extension (HTML Inspector)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: extStatus.connected
+                    ? 'var(--agent-green)'
+                    : extStatus.paired
+                      ? 'var(--agent-amber)'
+                      : 'var(--text-tertiary)',
+                }}
+              >
+                {extStatus.connected
+                  ? 'Connected'
+                  : extStatus.paired
+                    ? 'Paired (waiting for Chrome)'
+                    : 'Not connected'}
+              </span>
+              <button
+                type="button"
+                onClick={() => void loadAll()}
+                title="Refresh status"
+                style={{ ...secondaryBtnStyle, height: 24, width: 24, padding: 0, justifyContent: 'center' }}
+              >
+                <RefreshCw size={12} />
+              </button>
+            </div>
+          </div>
+
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+            Lets agents open URLs in your Chrome browser and inspect cleaned HTML &amp; computed CSS tokens (read-only).
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '8px 10px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--surface-1)',
+              border: '1px solid var(--border-subtle)',
+            }}
+          >
+            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+              Local Port:{' '}
+              <span className="mono-num" style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+                {extStatus.port}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                type="button"
+                disabled={extPairingLoading}
+                onClick={() => void handleStartExtPairing()}
+                style={{ ...primaryBtnStyle, height: 28, padding: '0 10px', fontSize: 11.5 }}
+              >
+                <KeyRound size={12} /> {extStatus.pairingCode ? 'Regenerate Code' : 'Generate Pairing Code'}
+              </button>
+              {(extStatus.paired || extStatus.connected) && (
+                <button
+                  type="button"
+                  disabled={extPairingLoading}
+                  onClick={() => void handleUnpairExt()}
+                  style={{ ...secondaryBtnStyle, height: 28, padding: '0 10px', fontSize: 11.5 }}
+                >
+                  <Unlink size={12} /> Unpair
+                </button>
+              )}
+            </div>
+          </div>
+
+          {extStatus.pairingCode && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                padding: '8px 10px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'rgba(99, 102, 241, 0.08)',
+                border: '1px solid rgba(99, 102, 241, 0.35)',
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                  Enter Port <strong className="mono-num">{extStatus.port}</strong> and Pairing Code in the Chrome popup:
+                </span>
+                <span className="mono-num" style={{ fontSize: 15, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--text-primary)' }}>
+                  {extStatus.pairingCode}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void copyText(extStatus.pairingCode!, 'Pairing code')}
+                style={{ ...secondaryBtnStyle, height: 28, padding: '0 10px', fontSize: 11.5 }}
+              >
+                <Copy size={12} /> Copy
+              </button>
+            </div>
+          )}
+
+          {extStatus.extensionPath && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+              <div>
+                1. Open <code className="mono-num">chrome://extensions</code> &amp; enable <strong>Developer mode</strong>.<br />
+                2. Click <strong>Load unpacked</strong> and select the extension folder:<br />
+                3. Open the <strong>Atelier Bridge</strong> extension popup, enter Port &amp; Pairing Code, then click <strong>Pair &amp; Connect</strong>.
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <code
+                  className="mono-num"
+                  style={{
+                    flex: 1,
+                    padding: '5px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--surface-1)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-secondary)',
+                    fontSize: 11,
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {extStatus.extensionPath}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => void copyText(extStatus.extensionPath!, 'Extension path')}
+                  style={{ ...secondaryBtnStyle, height: 28, padding: '0 10px', fontSize: 11.5, flexShrink: 0 }}
+                >
+                  <Copy size={12} /> Copy
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Browser executable status */}
       <div style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>

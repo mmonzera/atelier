@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Atelier Browser Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="card">
+      <header class="header">
+        <div class="title-wrap">
+          <span id="dot" class="dot"></span>
+          <h1>Atelier Bridge</h1>
+        </div>
+        <span id="badge" class="badge">Disconnected</span>
+      </header>
+
+      <p class="subtitle">
+        Read-only HTML &amp; computed CSS bridge for your Atelier AI agents.
+      </p>
+
+      <div class="field">
+        <label for="port">Atelier Local Port</label>
+        <input id="port" type="number" min="1" max="65535" placeholder="8787" />
+      </div>
+
+      <div class="field" id="code-wrap">
+        <label for="code">Pairing Code</label>
+        <input id="code" type="text" placeholder="XXXX-XXXX" autocomplete="off" spellcheck="false" />
+      </div>
+
+      <div id="feedback" class="feedback hidden"></div>
+
+      <div class="actions">
+        <button id="pair-btn" class="btn primary" type="button">Pair &amp; Connect</button>
+        <button id="disconnect-btn" class="btn danger hidden" type="button">Disconnect</button>
+      </div>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

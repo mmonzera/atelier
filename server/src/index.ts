@@ -13,6 +13,7 @@ import type { EnqueueTaskFn } from './agents/studio-tools.js';
 import { AppUpdateBridge } from './app-update.js';
 import { EventBus } from './bus.js';
 import { CredentialStore } from './browser/credentials.js';
+import { ChromeExtensionBridge, createChromeExtPublicRouter } from './browser/chrome-bridge.js';
 import { BrowserManager } from './browser/manager.js';
 import { createBrowserMcpRouter } from './browser/mcp-endpoint.js';
 import { createBrowserRoutes } from './browser/routes.js';
@@ -42,6 +43,7 @@ export interface AtelierServerHandle {
   vault: LocalVault;
   backup: BackupService;
   browserManager: BrowserManager;
+  chromeBridge: ChromeExtensionBridge;
   credentials: CredentialStore;
   sttInstaller: SttInstaller;
   sttProvider: LocalWhisperProvider;
@@ -183,7 +185,23 @@ export async function startAtelierServer(opts?: {
     };
   });
 
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const extensionCandidates = [
+    process.env.ATELIER_WEB_DIST
+      ? path.resolve(process.env.ATELIER_WEB_DIST, '..', 'chrome-extension')
+      : null,
+    path.resolve(currentDir, '..', '..', 'extensions', 'chrome'),
+    path.resolve(process.cwd(), 'extensions', 'chrome'),
+  ].filter((p): p is string => Boolean(p));
+  const extensionPath = extensionCandidates.find((p) => fs.existsSync(p)) ?? extensionCandidates[0] ?? null;
+
   const vault = new LocalVault(db);
+  const chromeBridge = new ChromeExtensionBridge({
+    dataDir: config.dataDir,
+    isVaultLocked: () => vault.isLocked(),
+    extensionPath,
+  });
+  browserManager.setChromeBridge(chromeBridge);
   const backup = new BackupService(db, store, config, {
     beforeImport: () => runtime.stopAll(),
   });
@@ -199,6 +217,7 @@ export async function startAtelierServer(opts?: {
   vault.onRevoke((token) => {
     bus.revokeSessions(token);
     void browserManager.stopAllWatches();
+    chromeBridge.onVaultLock();
   });
 
   const app = new Hono();
@@ -215,17 +234,20 @@ export async function startAtelierServer(opts?: {
         vault,
         backup,
         bus,
-        onLock: () => void browserManager.stopAllWatches(),
+        onLock: () => {
+          void browserManager.stopAllWatches();
+          chromeBridge.onVaultLock();
+        },
       }),
-      browserRoutes: createBrowserRoutes({ browserManager, credentials }),
+      browserRoutes: createBrowserRoutes({ browserManager, credentials, chromeBridge }),
       sttRoutes: createSttRoutes({ installer: sttInstaller, provider: sttProvider, store }),
       meetingRoutes: createMeetingRoutes({ meetingService }),
       appUpdate,
     }),
   );
   app.route('/mcp/browser', createBrowserMcpRouter({ browserManager, config }));
+  app.route('/chrome-ext', createChromeExtPublicRouter(chromeBridge, config));
 
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
   // The desktop shell bundles the server into one file, so it passes the web build location explicitly.
   const webDistDir = process.env.ATELIER_WEB_DIST
     ? path.resolve(process.env.ATELIER_WEB_DIST)
@@ -276,8 +298,12 @@ export async function startAtelierServer(opts?: {
   // Sync actual ephemeral port when port 0 is passed in tests
   config.port = actualPort;
   bus.setServerPort(actualPort);
+  chromeBridge.setServerPort(actualPort);
 
   server.on('upgrade', (request, socket, head) => {
+    if (chromeBridge.handleUpgrade(request, socket, head)) {
+      return;
+    }
     bus.handleUpgrade(request, socket, head);
   });
 
@@ -290,6 +316,7 @@ export async function startAtelierServer(opts?: {
     vault,
     backup,
     browserManager,
+    chromeBridge,
     credentials,
     sttInstaller,
     sttProvider,
@@ -302,6 +329,7 @@ export async function startAtelierServer(opts?: {
       await meetingService.shutdown();
       await sttProvider.shutdown();
       await runtime.shutdown();
+      await chromeBridge.close();
       await browserManager.shutdown();
       // "Backup on close": snapshot via VACUUM INTO before the DB handle goes away.
       await backup.runOnClose();

@@ -52,7 +52,7 @@ const EXTERNAL = {
 };
 
 fs.mkdirSync(outDir, { recursive: true });
-for (const entry of ['server.mjs', 'server.mjs.map', 'web']) {
+for (const entry of ['server.mjs', 'server.mjs.map', 'web', 'chrome-extension']) {
   fs.rmSync(path.join(outDir, entry), { recursive: true, force: true });
 }
 
@@ -75,8 +75,12 @@ await esbuild.build({
   logLevel: 'warning',
 });
 
-// 2) Frontend.
+// 2) Frontend & unpacked Chrome extension.
 fs.cpSync(webDist, path.join(outDir, 'web'), { recursive: true });
+const chromeExtDir = path.join(rootDir, 'extensions', 'chrome');
+if (fs.existsSync(chromeExtDir)) {
+  fs.cpSync(chromeExtDir, path.join(outDir, 'chrome-extension'), { recursive: true });
+}
 
 // 3) Runtime node_modules (installed only when the dependency set changed).
 const deps = Object.fromEntries(Object.entries(EXTERNAL).filter(([, v]) => Boolean(v)));
