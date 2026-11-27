@@ -8,7 +8,13 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
 import { type AppConfig, isAllowedHost } from '../config.js';
 
-export type ChromeBridgeAction = 'list_tabs' | 'open_url' | 'inspect_html' | 'snapshot';
+export type ChromeBridgeAction =
+  | 'list_tabs'
+  | 'open_url'
+  | 'inspect_html'
+  | 'snapshot'
+  | 'capture_screenshot'
+  | 'scroll';
 
 export interface ChromeExtensionStatus {
   connected: boolean;

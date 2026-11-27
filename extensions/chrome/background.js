@@ -182,10 +182,60 @@ async function dispatchAction(action, params) {
         throw new Error('Failed to create Chrome tab.');
       }
       const loaded = await waitForTabComplete(tab.id, 15000);
+      await new Promise((r) => setTimeout(r, 600));
       return {
         tabId: loaded.id,
         url: loaded.url || url,
         title: loaded.title || '',
+      };
+    }
+
+    case 'capture_screenshot': {
+      const tab = await resolveTargetTab(params.tabId);
+      if (!tab.id || !tab.url || !isHttpUrl(tab.url)) {
+        throw new Error('Target Chrome tab is not an http(s) page.');
+      }
+      if (typeof params.tabId === 'number' && !tab.active) {
+        await chrome.tabs.update(tab.id, { active: true });
+        await new Promise((r) => setTimeout(r, 120));
+      }
+      let mime = 'image/png';
+      let dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+      if (dataUrl.length > 5_000_000) {
+        mime = 'image/jpeg';
+        dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 85 });
+      }
+      return {
+        dataUrl,
+        mime,
+        url: tab.url,
+        title: tab.title || '',
+      };
+    }
+
+    case 'scroll': {
+      const tab = await resolveTargetTab(params.tabId);
+      if (!tab.id || !tab.url || !isHttpUrl(tab.url)) {
+        throw new Error('Target Chrome tab is not an http(s) page.');
+      }
+      const dir = typeof params.direction === 'string' ? params.direction : 'down';
+      const amt = Math.max(100, Math.min(5000, Number(params.amount) || 600));
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: 'ISOLATED',
+        func: ({ direction, amount }) => {
+          if (direction === 'top') window.scrollTo(0, 0);
+          else if (direction === 'bottom') window.scrollTo(0, document.body.scrollHeight);
+          else if (direction === 'up') window.scrollBy(0, -amount);
+          else window.scrollBy(0, amount);
+          return { scrollY: Math.round(window.scrollY) };
+        },
+        args: [{ direction: dir, amount: amt }],
+      });
+      return {
+        scrolled: dir,
+        url: tab.url,
+        scrollY: results?.[0]?.result?.scrollY ?? 0,
       };
     }
 

@@ -459,17 +459,27 @@ async fn check_update(app: AppHandle, install: bool) {
                         },
                     )
                     .await;
-                if let Err(e) = res {
-                    send_update_status(
-                        &app,
-                        json!({
-                            "state": "error",
-                            "availableVersion": version,
-                            "progressPercent": serde_json::Value::Null,
-                            "error": e.to_string()
-                        }),
-                    );
-                    notify(&app, "Update gagal", "Coba lagi dari aplikasi atau menu tray.", false);
+                match res {
+                    Ok(()) => {
+                        #[cfg(not(windows))]
+                        {
+                            app.state::<Sidecar>().quitting.store(true, Ordering::SeqCst);
+                            tokio_sleep(1).await;
+                            app.restart();
+                        }
+                    }
+                    Err(e) => {
+                        send_update_status(
+                            &app,
+                            json!({
+                                "state": "error",
+                                "availableVersion": version,
+                                "progressPercent": serde_json::Value::Null,
+                                "error": e.to_string()
+                            }),
+                        );
+                        notify(&app, "Update gagal", "Coba lagi dari aplikasi atau menu tray.", false);
+                    }
                 }
             } else {
                 send_update_status(

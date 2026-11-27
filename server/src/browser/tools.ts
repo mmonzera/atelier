@@ -52,6 +52,7 @@ const PressSchema = z.object({
 const ScrollSchema = z.object({
   direction: z.enum(['up', 'down', 'top', 'bottom']).describe('Arah scroll'),
   amount: z.number().int().min(100).max(5000).optional().describe('Jarak scroll dalam piksel'),
+  tabId: z.number().int().positive().optional().describe('ID tab Chrome dari browser_chrome_tabs (opsional)'),
 });
 const WaitSchema = z.object({
   text: z.string().optional().describe('Tunggu hingga teks ini muncul di halaman'),
@@ -60,6 +61,7 @@ const WaitSchema = z.object({
 const ScreenshotSchema = z.object({
   fullPage: z.boolean().optional().describe('Ambil seluruh tinggi halaman'),
   label: z.string().trim().max(120).optional().describe('Label singkat screenshot untuk Library'),
+  tabId: z.number().int().positive().optional().describe('ID tab Chrome dari browser_chrome_tabs (opsional)'),
 });
 const TakeoverSchema = z.object({
   reason: z.string().trim().min(1).max(400).describe('Alasan meminta pengguna mengambil alih'),
@@ -162,13 +164,14 @@ export const BROWSER_TOOL_DEFS: BrowserToolDefinition[] = [
   },
   {
     name: 'browser_scroll',
-    description: 'Scroll halaman ke atas, bawah, paling atas, atau paling bawah.',
+    description: 'Scroll halaman ke atas, bawah, paling atas, atau paling bawah (mendukung Chrome Extension jika terhubung).',
     schema: ScrollSchema,
     jsonSchema: {
       type: 'object',
       properties: {
         direction: { type: 'string', enum: ['up', 'down', 'top', 'bottom'] },
         amount: { type: 'number', description: 'Piksel untuk up/down (default 600)' },
+        tabId: { type: 'number', description: 'ID tab Chrome target dari browser_chrome_tabs (opsional)' },
       },
       required: ['direction'],
     },
@@ -193,13 +196,14 @@ export const BROWSER_TOOL_DEFS: BrowserToolDefinition[] = [
   },
   {
     name: 'browser_screenshot',
-    description: 'Ambil screenshot halaman saat ini dan simpan ke chat & Library (Designs).',
+    description: 'Ambil screenshot halaman saat ini dan simpan ke chat & Library (Designs). Otomatis memakai Chrome Extension jika terhubung.',
     schema: ScreenshotSchema,
     jsonSchema: {
       type: 'object',
       properties: {
-        fullPage: { type: 'boolean', description: 'Tangkap seluruh halaman' },
+        fullPage: { type: 'boolean', description: 'Tangkap seluruh halaman (mode Playwright)' },
         label: { type: 'string', description: 'Label gambar di Library' },
+        tabId: { type: 'number', description: 'ID tab Chrome target dari browser_chrome_tabs (opsional)' },
       },
     },
   },
@@ -475,6 +479,90 @@ async function runToolImpl(
     const tabs = (res.tabs ?? []).filter((tab) => isHostAllowed(tab.url, allowedHosts));
     recordSafeActivity(manager, ctx, `📋 Daftar tab Chrome (${tabs.length})`);
     return wrapUntrustedPageContent('browser_chrome_tabs', JSON.stringify({ tabs }, null, 2));
+  }
+
+  if (toolName === 'browser_screenshot' && manager.chromeBridge?.isConnected()) {
+    const args = ScreenshotSchema.parse(rawArgs ?? {});
+    const cap = await manager.chromeBridge.sendCommand<{
+      dataUrl: string;
+      mime?: string;
+      url: string;
+      title?: string;
+    }>(
+      'capture_screenshot',
+      { ...(args.tabId !== undefined ? { tabId: args.tabId } : {}) },
+      15_000,
+    );
+    if (!isHostAllowed(cap.url, allowedHosts)) {
+      throw new Error('Tab Chrome yang aktif berada di situs yang tidak diizinkan untuk agent ini.');
+    }
+    const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(cap.dataUrl || '');
+    if (!match) {
+      throw new Error('Chrome Extension mengembalikan format screenshot yang tidak valid.');
+    }
+    const mime = cap.mime || match[1] || 'image/png';
+    const bytes = Buffer.from(match[2]!, 'base64');
+    let host = 'web';
+    try {
+      host = new URL(cap.url).hostname || 'web';
+    } catch {
+      // keep default
+    }
+    const cleanLabel = args.label?.trim() || `Screenshot · ${host}`;
+    const artifact = manager.store.createArtifact(
+      {
+        projectId: ctx.projectId,
+        ...(ctx.messageId ? { sourceMessageId: ctx.messageId } : {}),
+        kind: 'image',
+        label: cleanLabel,
+        mime,
+      },
+      bytes,
+    );
+    const scope = encodeURIComponent(ctx.projectId ?? 'direct');
+    const url = `/api/projects/${scope}/library/artifacts/${artifact.id}`;
+    const summary: BrowserScreenshotSummary = {
+      artifactId: artifact.id,
+      label: cleanLabel,
+      url,
+      pageUrl: cap.url,
+      createdAt: artifact.createdAt,
+    };
+    if (ctx.messageId) {
+      manager.store.addMessageBrowserScreenshot(ctx.messageId, summary);
+    }
+    recordSafeActivity(manager, ctx, `📸 Screenshot Chrome: ${cap.url}`);
+    return JSON.stringify(
+      {
+        artifactId: artifact.id,
+        label: cleanLabel,
+        url,
+        pageUrl: cap.url,
+      },
+      null,
+      2,
+    );
+  }
+
+  if (toolName === 'browser_scroll' && manager.chromeBridge?.isConnected()) {
+    const args = ScrollSchema.parse(rawArgs);
+    const res = await manager.chromeBridge.sendCommand<{
+      scrolled: string;
+      url: string;
+      scrollY?: number;
+    }>(
+      'scroll',
+      {
+        direction: args.direction,
+        amount: args.amount ?? 600,
+        ...(args.tabId !== undefined ? { tabId: args.tabId } : {}),
+      },
+      10_000,
+    );
+    if (!isHostAllowed(res.url, allowedHosts)) {
+      throw new Error('Tab Chrome yang aktif berada di situs yang tidak diizinkan untuk agent ini.');
+    }
+    return JSON.stringify(res);
   }
 
   if (toolName === 'browser_inspect_html') {

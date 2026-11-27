@@ -275,6 +275,35 @@ describe('Chrome Extension bridge & HTML inspection', () => {
             },
           }),
         );
+      } else if (req.action === 'capture_screenshot') {
+        const tinyPngBase64 =
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
+        ws.send(
+          JSON.stringify({
+            v: 1,
+            id: req.id,
+            ok: true,
+            result: {
+              dataUrl: `data:image/png;base64,${tinyPngBase64}`,
+              mime: 'image/png',
+              url: 'https://x.com/i/flow/login',
+              title: 'Sign in to X',
+            },
+          }),
+        );
+      } else if (req.action === 'scroll') {
+        ws.send(
+          JSON.stringify({
+            v: 1,
+            id: req.id,
+            ok: true,
+            result: {
+              scrolled: req.params.direction,
+              url: 'https://x.com/i/flow/login',
+              scrollY: 600,
+            },
+          }),
+        );
       }
     });
 
@@ -312,6 +341,29 @@ describe('Chrome Extension bridge & HTML inspection', () => {
     expect(receivedActions.map((a) => a.action)).toEqual(['list_tabs', 'open_url', 'inspect_html']);
     expect(receivedActions[1]?.params).toEqual({ url: 'https://x.com/i/flow/login' });
     expect(receivedActions[2]?.params).toEqual({ tabId: 202, selector: 'main' });
+
+    // 4. browser_screenshot captures via Chrome Extension & creates Library artifact
+    const shotOut = await executeBrowserTool(
+      handle.browserManager,
+      'browser_screenshot',
+      { tabId: 202, label: 'X Login Preview' },
+      ctx,
+    );
+    expect(shotOut.isError).toBe(false);
+    const shotJson = JSON.parse(shotOut.text) as { artifactId: string; label: string; pageUrl: string; url: string };
+    expect(shotJson.label).toBe('X Login Preview');
+    expect(shotJson.pageUrl).toBe('https://x.com/i/flow/login');
+    expect(shotJson.url).toContain(`/library/artifacts/${shotJson.artifactId}`);
+
+    // 5. browser_scroll scrolls via Chrome Extension
+    const scrollOut = await executeBrowserTool(
+      handle.browserManager,
+      'browser_scroll',
+      { direction: 'down', amount: 600, tabId: 202 },
+      ctx,
+    );
+    expect(scrollOut.isError).toBe(false);
+    expect(JSON.parse(scrollOut.text)).toMatchObject({ scrolled: 'down', scrollY: 600 });
   });
 
   it('formats cleaned HTML and computed design tokens consistently', () => {
