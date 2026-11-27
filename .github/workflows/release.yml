@@ -106,6 +106,9 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
+          mkdir -p release-files
+          find release-artifacts -type f -exec mv {} release-files/ \;
+          ls -la release-files
           node -e '
             const fs = require("node:fs");
             const path = require("node:path");
@@ -114,7 +117,7 @@ jobs:
             const ref = process.env.GITHUB_REF_NAME || "";
             const tag = ref.startsWith("v") ? ref : `v${ver}`;
             const repo = process.env.GITHUB_REPOSITORY;
-            const dir = "release-artifacts";
+            const dir = "release-files";
 
             const winExe = `Atelier_${ver}_x64-setup.exe`;
             const winSig = fs.readFileSync(path.join(dir, `${winExe}.sig`), "utf8").trim();
@@ -143,9 +146,9 @@ jobs:
           name: Atelier ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            release-artifacts/Atelier_*_x64-setup.exe
-            release-artifacts/Atelier_*_x64-setup.exe.sig
-            release-artifacts/Atelier_*_aarch64.app.tar.gz
-            release-artifacts/Atelier_*_aarch64.app.tar.gz.sig
-            release-artifacts/Atelier_*_aarch64.dmg
-            release-artifacts/latest.json
+            release-files/Atelier_*_x64-setup.exe
+            release-files/Atelier_*_x64-setup.exe.sig
+            release-files/Atelier_*_aarch64.app.tar.gz
+            release-files/Atelier_*_aarch64.app.tar.gz.sig
+            release-files/Atelier_*_aarch64.dmg
+            release-files/latest.json
