@@ -18,7 +18,24 @@ const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const rootDir = path.resolve(desktopDir, '..');
 const outDir = path.join(desktopDir, 'server-dist');
 const binDir = path.join(desktopDir, 'src-tauri', 'binaries');
-const TRIPLE = 'x86_64-pc-windows-msvc';
+
+function getTargetTriple() {
+  if (process.env.TAURI_ENV_TARGET_TRIPLE) return process.env.TAURI_ENV_TARGET_TRIPLE;
+  const platform = process.platform;
+  const arch = process.arch;
+  if (platform === 'win32') {
+    return arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
+  }
+  if (platform === 'darwin') {
+    return arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
+  }
+  if (platform === 'linux') {
+    return arch === 'arm64' ? 'aarch64-unknown-linux-gnu' : 'x86_64-unknown-linux-gnu';
+  }
+  return 'x86_64-unknown-linux-gnu';
+}
+
+const TRIPLE = getTargetTriple();
 
 const serverPkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'server', 'package.json'), 'utf8'));
 const rootPkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
@@ -77,7 +94,12 @@ if (!fs.existsSync(stamp) || fs.readFileSync(stamp, 'utf8') !== hash) {
     stdio: 'inherit',
     env: { ...process.env, npm_config_workspaces: 'false' },
   });
-  // The Agent SDK ships ripgrep for every OS; keep only Windows x64.
+  // The Agent SDK ships ripgrep for every OS; keep only the current OS.
+  const currentPlatform = process.platform === 'win32'
+    ? 'x64-win32'
+    : (process.platform === 'darwin'
+      ? (process.arch === 'arm64' ? 'arm64-darwin' : 'x64-darwin')
+      : (process.arch === 'arm64' ? 'arm64-linux' : 'x64-linux'));
   const vendor = path.join(outDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'vendor');
   if (fs.existsSync(vendor)) {
     for (const tool of fs.readdirSync(vendor)) {
@@ -85,7 +107,7 @@ if (!fs.existsSync(stamp) || fs.readFileSync(stamp, 'utf8') !== hash) {
       if (!fs.statSync(toolDir).isDirectory()) continue;
       for (const platform of fs.readdirSync(toolDir)) {
         const p = path.join(toolDir, platform);
-        if (fs.statSync(p).isDirectory() && platform !== 'x64-win32') fs.rmSync(p, { recursive: true, force: true });
+        if (fs.statSync(p).isDirectory() && platform !== currentPlatform) fs.rmSync(p, { recursive: true, force: true });
       }
     }
   }
@@ -94,7 +116,8 @@ if (!fs.existsSync(stamp) || fs.readFileSync(stamp, 'utf8') !== hash) {
 
 // 4) Node runtime as the Tauri external binary.
 fs.mkdirSync(binDir, { recursive: true });
-fs.copyFileSync(process.execPath, path.join(binDir, `atelier-node-${TRIPLE}.exe`));
+const ext = process.platform === 'win32' ? '.exe' : '';
+fs.copyFileSync(process.execPath, path.join(binDir, `atelier-node-${TRIPLE}${ext}`));
 
 const size = (p) => {
   let total = 0;

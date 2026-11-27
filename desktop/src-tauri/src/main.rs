@@ -5,6 +5,8 @@
 //! and auto-update. All app logic stays in the TypeScript server and web UI.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+mod macos_audio;
 mod meeting_audio;
 mod meeting_detect;
 
@@ -144,8 +146,18 @@ fn handle_audio(app: &AppHandle, v: serde_json::Value) {
 }
 
 fn data_root() -> PathBuf {
+    #[cfg(windows)]
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir());
+    #[cfg(target_os = "macos")]
+    let base = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join("Library").join("Application Support"))
+        .unwrap_or_else(|| std::env::temp_dir());
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
         .unwrap_or_else(|| std::env::temp_dir());
     base.join("Atelier")
 }
@@ -159,7 +171,12 @@ fn exe_dir() -> PathBuf {
 
 /// Bundled Node runtime next to the app exe; falls back to `node` on PATH for dev runs.
 fn node_path() -> PathBuf {
-    let bundled = exe_dir().join("atelier-node.exe");
+    #[cfg(windows)]
+    let binary_name = "atelier-node.exe";
+    #[cfg(not(windows))]
+    let binary_name = "atelier-node";
+
+    let bundled = exe_dir().join(binary_name);
     if bundled.exists() {
         bundled
     } else {
@@ -168,7 +185,15 @@ fn node_path() -> PathBuf {
 }
 
 fn server_dir() -> PathBuf {
-    exe_dir().join("server")
+    let direct = exe_dir().join("server");
+    if direct.exists() {
+        return direct;
+    }
+    let macos_resources = exe_dir().join("../Resources/server");
+    if macos_resources.exists() {
+        return macos_resources;
+    }
+    direct
 }
 
 fn server_command(extra_arg: Option<&str>) -> Command {
@@ -211,7 +236,15 @@ fn message_box(text: &str) {
         cmd.creation_flags(CREATE_NO_WINDOW);
         let _ = cmd.status();
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display dialog \"{}\" with title \"Atelier\" buttons {{\"OK\"}} default button \"OK\"",
+            text.replace('"', "\\\"")
+        );
+        let _ = Command::new("osascript").args(["-e", &script]).status();
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     eprintln!("{text}");
 }
 

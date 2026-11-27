@@ -20,11 +20,14 @@ const START_POLLS: u32 = 2;
 /// The meeting counts as over once the app released the mic for this long.
 const END_AFTER: Duration = Duration::from_secs(20);
 
-/// Maps a privacy-store key to (app id, display name) for meeting apps; everything else is ignored.
+/// Maps a privacy-store key or process path to (app id, display name) for meeting apps; everything else is ignored.
 pub fn classify(key: &str, own_exe: Option<&str>) -> Option<(&'static str, &'static str)> {
-    let lower = key.to_lowercase();
-    // Non-packaged apps are stored as their path with '#' for '\'.
-    let exe = lower.rsplit('#').next().unwrap_or(&lower);
+    let lower = key.trim().to_lowercase();
+    // Non-packaged Windows apps use '#' for '\'; macOS `ps` paths use '/'.
+    let exe = lower
+        .rsplit(['#', '/', '\\'])
+        .next()
+        .unwrap_or(&lower);
     if own_exe.is_some_and(|own| exe == own) {
         return None;
     }
@@ -32,18 +35,23 @@ pub fn classify(key: &str, own_exe: Option<&str>) -> Option<(&'static str, &'sta
         return Some(("teams", "Microsoft Teams"));
     }
     Some(match exe {
-        "zoom.exe" | "cpthost.exe" | "zoomwebviewhost.exe" => ("zoom", "Zoom"),
-        "ms-teams.exe" | "teams.exe" | "msteams.exe" => ("teams", "Microsoft Teams"),
-        "chrome.exe" => ("browser", "Google Chrome"),
-        "msedge.exe" => ("browser", "Microsoft Edge"),
-        "brave.exe" => ("browser", "Brave"),
-        "firefox.exe" => ("browser", "Firefox"),
-        "opera.exe" => ("browser", "Opera"),
-        "vivaldi.exe" => ("browser", "Vivaldi"),
-        "arc.exe" => ("browser", "Arc"),
-        "ciscocollabhost.exe" | "webexmta.exe" | "webex.exe" | "atmgr.exe" => ("webex", "Webex"),
-        "slack.exe" => ("slack", "Slack"),
-        "skype.exe" => ("skype", "Skype"),
+        "zoom.exe" | "cpthost.exe" | "zoomwebviewhost.exe" | "zoom.us" | "cpthost" => ("zoom", "Zoom"),
+        "ms-teams.exe" | "teams.exe" | "msteams.exe" | "microsoft teams" | "msteams" | "teams" => {
+            ("teams", "Microsoft Teams")
+        }
+        "chrome.exe" | "google chrome" => ("browser", "Google Chrome"),
+        "msedge.exe" | "microsoft edge" => ("browser", "Microsoft Edge"),
+        "brave.exe" | "brave browser" => ("browser", "Brave"),
+        "firefox.exe" | "firefox" => ("browser", "Firefox"),
+        "opera.exe" | "opera" => ("browser", "Opera"),
+        "vivaldi.exe" | "vivaldi" => ("browser", "Vivaldi"),
+        "arc.exe" | "arc" => ("browser", "Arc"),
+        "safari" => ("browser", "Safari"),
+        "ciscocollabhost.exe" | "webexmta.exe" | "webex.exe" | "atmgr.exe" | "webex" | "cisco webex meetings" => {
+            ("webex", "Webex")
+        }
+        "slack.exe" | "slack" => ("slack", "Slack"),
+        "skype.exe" | "skype" => ("skype", "Skype"),
         _ => return None,
     })
 }
@@ -83,7 +91,26 @@ fn active_apps(own_exe: Option<&str>) -> HashMap<&'static str, &'static str> {
     found
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn active_apps(own_exe: Option<&str>) -> HashMap<&'static str, &'static str> {
+    let mut found = HashMap::new();
+    // Only inspect running meeting apps while the macOS default microphone is actively in use.
+    if !crate::macos_audio::is_default_mic_running() {
+        return found;
+    }
+    let Ok(output) = std::process::Command::new("ps").args(["-axo", "comm="]).output() else {
+        return found;
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if let Some((id, label)) = classify(line, own_exe) {
+            found.entry(id).or_insert(label);
+        }
+    }
+    found
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn active_apps(_own_exe: Option<&str>) -> HashMap<&'static str, &'static str> {
     HashMap::new()
 }
@@ -150,6 +177,18 @@ mod tests {
         assert_eq!(
             classify(r"C:#Program Files#Google#Chrome#Application#chrome.exe", None).unwrap(),
             ("browser", "Google Chrome")
+        );
+        assert_eq!(
+            classify("/Applications/zoom.us.app/Contents/MacOS/zoom.us", None).unwrap(),
+            ("zoom", "Zoom")
+        );
+        assert_eq!(
+            classify("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", None).unwrap(),
+            ("browser", "Google Chrome")
+        );
+        assert_eq!(
+            classify("/Applications/Safari.app/Contents/MacOS/Safari", None).unwrap(),
+            ("browser", "Safari")
         );
     }
 

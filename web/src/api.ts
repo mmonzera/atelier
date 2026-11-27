@@ -760,10 +760,10 @@ export const permissionsApi = {
 
 export const sttApi = {
   status: () => request<{ status: SttLocalStatus }>('/api/stt/local/status'),
-  installEngine: (id = 'cpu-x64') =>
+  installEngine: (id?: string) =>
     request<{ status: SttLocalStatus }>('/api/stt/local/install-engine', {
       method: 'POST',
-      body: JSON.stringify({ id }),
+      body: JSON.stringify(id ? { id } : {}),
     }),
   downloadModel: (id: string) =>
     request<{ status: SttLocalStatus }>(`/api/stt/local/models/${encodeURIComponent(id)}/download`, {

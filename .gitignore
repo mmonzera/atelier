@@ -9,5 +9,5 @@ workspaces/
 *.log
 desktop/server-dist/
 desktop/src-tauri/target/
-desktop/src-tauri/binaries/*.exe
+desktop/src-tauri/binaries/
 desktop/src-tauri/gen/

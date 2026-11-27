@@ -36,13 +36,13 @@ const MAX_BACKLOG: usize = RATE_USIZE;
 
 /// Sends one line to the server's stdin.
 pub type Out = Arc<dyn Fn(String) + Send + Sync>;
-type Buffer = Arc<Mutex<Vec<f32>>>;
+pub(crate) type Buffer = Arc<Mutex<Vec<f32>>>;
 
 // ------------------------------------------------------------------------------- resampling
 
 /// Converts any input rate to 16 kHz by averaging the input samples that fall into each output
 /// sample (a box filter, enough anti-aliasing for speech). Also upsamples low-rate headsets.
-struct Resampler {
+pub(crate) struct Resampler {
     ratio: f64,
     phase: f64,
     sum: f32,
@@ -50,11 +50,11 @@ struct Resampler {
 }
 
 impl Resampler {
-    fn new(in_rate: u32) -> Self {
+    pub(crate) fn new(in_rate: u32) -> Self {
         Self { ratio: f64::from(in_rate.max(1)) / f64::from(RATE), phase: 0.0, sum: 0.0, n: 0 }
     }
 
-    fn push(&mut self, x: f32, out: &mut Vec<f32>) {
+    pub(crate) fn push(&mut self, x: f32, out: &mut Vec<f32>) {
         self.sum += x;
         self.n += 1;
         self.phase += 1.0;
@@ -273,10 +273,18 @@ fn pick_device(host: &cpal::Host, loopback: bool, wanted: Option<&str>) -> (Opti
     (default(), Some(format!("Perangkat \"{name}\" tidak ditemukan; memakai default Windows.")))
 }
 
+pub enum AudioStream {
+    #[allow(dead_code)]
+    Cpal(cpal::Stream),
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
+    MacTap(crate::macos_audio::SystemAudioTap),
+}
+
 pub struct OpenedSource {
     /// Owned only to keep the device open: audio stops when the stream is dropped.
     #[allow(dead_code)]
-    pub stream: cpal::Stream,
+    pub stream: AudioStream,
     pub name: String,
     pub warning: Option<String>,
 }
@@ -289,6 +297,21 @@ fn open_source(
     buf: Buffer,
     on_error: Arc<dyn Fn(String) + Send + Sync>,
 ) -> Result<OpenedSource, String> {
+    #[cfg(target_os = "macos")]
+    if loopback {
+        let tap = crate::macos_audio::open_system_audio(buf)?;
+        let label = host
+            .default_output_device()
+            .map(|d| dev_name(&d))
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "System Audio (macOS)".to_string());
+        return Ok(OpenedSource {
+            stream: AudioStream::MacTap(tap),
+            name: label,
+            warning: None,
+        });
+    }
+
     let (device, warning) = pick_device(host, loopback, wanted);
     let device =
         device.ok_or_else(|| if loopback { "tidak ada perangkat suara" } else { "tidak ada mikrofon" }.to_string())?;
@@ -303,7 +326,7 @@ fn open_source(
         other => Err(format!("format audio {other} tidak didukung")),
     }?;
     stream.play().map_err(|e| e.to_string())?;
-    Ok(OpenedSource { stream, name: dev_name(&device), warning })
+    Ok(OpenedSource { stream: AudioStream::Cpal(stream), name: dev_name(&device), warning })
 }
 
 /// Input and output devices, for the pickers in Settings.
@@ -634,8 +657,12 @@ fn run(
     let mut warnings = Vec::new();
     match (&mic, &sys) {
         (Err(m), Err(s)) => {
+            #[cfg(target_os = "macos")]
+            let hint = "Periksa System Settings → Privacy & Security → Microphone & System Audio Recording.";
+            #[cfg(not(target_os = "macos"))]
+            let hint = "Periksa Settings Windows → Privacy → Microphone.";
             let _ = ready.send(Err(format!(
-                "Tidak bisa merekam. Mikrofon: {m}. Suara laptop: {s}. Periksa Settings Windows → Privacy → Microphone."
+                "Tidak bisa merekam. Mikrofon: {m}. Suara laptop: {s}. {hint}"
             )));
             return;
         }

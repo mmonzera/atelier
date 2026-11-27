@@ -16,9 +16,11 @@ import {
   type SttCatalog,
   type WhisperEngineCatalogEntry,
   type WhisperModelCatalogEntry,
+  getDefaultEngineId,
   getEngineById,
   getModelById,
   getPlatformKey,
+  getSpeakerCatalogForPlatform,
 } from './catalog.js';
 
 const execFileAsync = promisify(execFile);
@@ -94,6 +96,27 @@ function dirSizeBytes(dirPath: string): number {
     }
   }
   return total;
+}
+
+function findSystemBinary(name: string): string | null {
+  const candidates: string[] = [];
+  if (process.platform === 'darwin') {
+    candidates.push(`/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`);
+  }
+  const envPath = process.env.PATH ?? '';
+  for (const dir of envPath.split(path.delimiter)) {
+    if (dir) candidates.push(path.join(dir, name));
+  }
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      // ignore inaccessible path
+    }
+  }
+  return null;
 }
 
 function findFileRecursive(rootDir: string, filename: string): string | null {
@@ -202,15 +225,29 @@ export class SttInstaller {
     fs.renameSync(tmpPath, this.manifestPath);
   }
 
+  public getDefaultEngineId(): string | null {
+    return getDefaultEngineId(this.catalog);
+  }
+
+  private detectSystemHomebrewEngine(): { entry: WhisperEngineCatalogEntry; exePath: string } | null {
+    const platform = getPlatformKey();
+    const entry = this.catalog.engines.find(
+      (e) => (e.platform === platform || e.platform === 'any') && e.installMethod === 'homebrew',
+    );
+    if (!entry) return null;
+    const exePath = findSystemBinary(path.basename(entry.exe));
+    return exePath ? { entry, exePath } : null;
+  }
+
   public getExePath(): string | null {
     const manifest = this.readManifest();
-    if (!manifest.engine) return null;
-    const candidate = path.join(
-      this.enginesDir,
-      manifest.engine.version,
-      manifest.engine.exeRelPath,
-    );
-    return fs.existsSync(candidate) ? candidate : null;
+    if (manifest.engine) {
+      const candidate = path.isAbsolute(manifest.engine.exeRelPath)
+        ? manifest.engine.exeRelPath
+        : path.join(this.enginesDir, manifest.engine.version, manifest.engine.exeRelPath);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return this.detectSystemHomebrewEngine()?.exePath ?? null;
   }
 
   public getModelPath(modelId: string): string | null {
@@ -233,6 +270,7 @@ export class SttInstaller {
     const defaultThreads = Math.min(4, Math.max(1, Math.floor(cpuCores / 2)));
 
     const exePath = this.getExePath();
+    const detectedHomebrew = !manifest.engine ? this.detectSystemHomebrewEngine() : null;
     const installedEngine =
       manifest.engine && exePath
         ? {
@@ -241,7 +279,14 @@ export class SttInstaller {
             installedAt: manifest.engine.installedAt,
             exePath,
           }
-        : null;
+        : detectedHomebrew
+          ? {
+              id: detectedHomebrew.entry.id,
+              version: detectedHomebrew.entry.version,
+              installedAt: new Date(0).toISOString(),
+              exePath: detectedHomebrew.exePath,
+            }
+          : null;
 
     const engines = this.catalog.engines
       .filter((e) => e.platform === platform || e.platform === 'any')
@@ -304,7 +349,7 @@ export class SttInstaller {
   }
 
   private getSpeakerEngineStatus(installedBytes: number): SpeakerEngineStatus {
-    const entry = this.catalog.speakers;
+    const entry = getSpeakerCatalogForPlatform(this.catalog);
     const manifest = this.readManifest();
     const installed = this.getSpeakerPaths() !== null;
     return {
@@ -319,7 +364,7 @@ export class SttInstaller {
 
   /** Whether this catalog/platform can install the speaker engine at all. */
   public speakerEngineSupported(): boolean {
-    const entry = this.catalog.speakers;
+    const entry = getSpeakerCatalogForPlatform(this.catalog);
     return Boolean(entry && (entry.platform === getPlatformKey() || entry.platform === 'any'));
   }
 
@@ -568,6 +613,18 @@ export class SttInstaller {
     if (!entry) {
       throw new SttInstallerError('unknown_engine', `Unknown Whisper engine: ${engineId}`, 404);
     }
+    const platform = getPlatformKey();
+    if (entry.platform !== platform && entry.platform !== 'any') {
+      throw new SttInstallerError(
+        'unsupported_platform',
+        `Whisper engine ${engineId} is for ${entry.platform}, not ${platform}.`,
+        400,
+      );
+    }
+
+    if (entry.installMethod === 'homebrew') {
+      return this.installHomebrewEngine(entry);
+    }
 
     const archivePath = path.join(this.enginesDir, `${entry.id}-${entry.version}.zip`);
     const targetDir = path.join(this.enginesDir, entry.version);
@@ -609,6 +666,13 @@ export class SttInstaller {
       }
 
       const exeRelPath = path.relative(stagingDir, resolvedExe);
+      if (process.platform !== 'win32') {
+        try {
+          fs.chmodSync(resolvedExe, 0o755);
+        } catch {
+          // ignore chmod failures on filesystems that do not support POSIX bits
+        }
+      }
       fs.rmSync(targetDir, { recursive: true, force: true });
       fs.renameSync(stagingDir, targetDir);
       fs.rmSync(archivePath, { force: true });
@@ -647,6 +711,98 @@ export class SttInstaller {
     }
   }
 
+  private async installHomebrewEngine(entry: WhisperEngineCatalogEntry): Promise<InstalledEngineManifest> {
+    if (this.activeDownload) {
+      throw new SttInstallerError(
+        'download_in_progress',
+        'Another speech-to-text download is already in progress.',
+        409,
+      );
+    }
+    const exeName = path.basename(entry.exe);
+    const formula = entry.formula ?? 'whisper-cpp';
+    let resolvedExe = findSystemBinary(exeName);
+
+    if (!resolvedExe) {
+      const brewBin = findSystemBinary('brew');
+      if (!brewBin) {
+        throw new SttInstallerError(
+          'brew_missing',
+          `Homebrew is required to install ${formula} on macOS. Install Homebrew from https://brew.sh, then run "brew install ${formula}".`,
+          400,
+        );
+      }
+      const controller = new AbortController();
+      const initialEvent: SttDownloadProgressEvent = {
+        kind: 'engine',
+        id: entry.id,
+        status: 'downloading',
+        downloadedBytes: 0,
+        totalBytes: entry.sizeBytes,
+        percent: 10,
+      };
+      const run = (async () => {
+        try {
+          this.emitProgress(initialEvent);
+          await execFileAsync(brewBin, ['install', formula], {
+            signal: controller.signal,
+            maxBuffer: 10 * 1024 * 1024,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : `brew install ${formula} failed.`;
+          this.emitProgress({
+            kind: 'engine',
+            id: entry.id,
+            status: controller.signal.aborted ? 'cancelled' : 'error',
+            downloadedBytes: 0,
+            totalBytes: entry.sizeBytes,
+            percent: 0,
+            error: message,
+          });
+          throw new SttInstallerError('install_failed', message, 500);
+        }
+      })();
+      this.activeDownload = { event: initialEvent, controller, promise: run };
+      try {
+        await run;
+      } finally {
+        if (this.activeDownload?.controller === controller) {
+          this.activeDownload = null;
+        }
+      }
+      resolvedExe = findSystemBinary(exeName);
+    }
+
+    if (!resolvedExe) {
+      throw new SttInstallerError(
+        'install_failed',
+        `${exeName} was not found after installing ${formula}.`,
+        500,
+      );
+    }
+
+    const installed: InstalledEngineManifest = {
+      id: entry.id,
+      version: entry.version,
+      sha256: '',
+      sizeBytes: entry.sizeBytes,
+      exeRelPath: resolvedExe,
+      installedAt: new Date().toISOString(),
+    };
+    const manifest = this.readManifest();
+    manifest.engine = installed;
+    this.writeManifest(manifest);
+    this.emitProgress({
+      kind: 'engine',
+      id: entry.id,
+      status: 'done',
+      downloadedBytes: entry.sizeBytes,
+      totalBytes: entry.sizeBytes,
+      percent: 100,
+    });
+    return installed;
+  }
+
   /** Unpacks a .zip / .tar.bz2 with the system's tar. */
   private async extractArchive(archivePath: string, intoDir: string): Promise<void> {
     // Use Windows' bsdtar explicitly: a GNU tar earlier in PATH (e.g. Git) treats "C:" as a remote host.
@@ -662,7 +818,7 @@ export class SttInstaller {
    * model, each downloaded from its catalog URL and checked against its SHA-256.
    */
   public async installSpeakerEngine(): Promise<InstalledSpeakerEngineManifest> {
-    const entry = this.catalog.speakers;
+    const entry = getSpeakerCatalogForPlatform(this.catalog);
     if (!entry || !this.speakerEngineSupported()) {
       throw new SttInstallerError(
         'speakers_unsupported',
@@ -708,6 +864,13 @@ export class SttInstaller {
       const exe = findFileRecursive(path.join(staging, 'engine'), entry.engine.exe);
       if (!exe) {
         throw new SttInstallerError('extract_failed', `Archive did not contain ${entry.engine.exe}.`, 500);
+      }
+      if (process.platform !== 'win32') {
+        try {
+          fs.chmodSync(exe, 0o755);
+        } catch {
+          // ignore
+        }
       }
       // The program needs onnxruntime.dll beside it; some packages only ship it in lib/.
       const exeDir = path.dirname(exe);

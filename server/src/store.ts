@@ -553,6 +553,7 @@ export class AtelierStore {
     const base: MeetingSettings = {
       ...DEFAULT_MEETING_SETTINGS,
       threads: defaultThreads,
+      useGpu: process.platform === 'darwin' ? true : DEFAULT_MEETING_SETTINGS.useGpu,
     };
     if (!raw || typeof raw !== 'object') return base;
     const rawThreads = Number(raw.threads ?? base.threads);

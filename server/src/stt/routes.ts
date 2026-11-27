@@ -31,7 +31,7 @@ export function createSttRoutes(deps: {
     if (!parsed.success) {
       return c.json(apiError('invalid_engine_id', 'Invalid engine id.'), 400);
     }
-    const engineId = parsed.data.id ?? 'cpu-x64';
+    const engineId = parsed.data.id ?? installer.getDefaultEngineId() ?? 'cpu-x64';
     try {
       await provider.shutdown();
       const installed = await installer.installEngine(engineId);
