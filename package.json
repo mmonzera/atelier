@@ -1,6 +1,6 @@
 {
   "name": "atelier-monorepo",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "type": "module",
   "description": "Atelier: Design-to-Ship Studio",
