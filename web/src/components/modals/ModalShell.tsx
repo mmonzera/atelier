@@ -7,6 +7,7 @@ interface ModalShellProps {
   subtitle?: string;
   width?: number;
   onClose: () => void;
+  footer?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -15,6 +16,7 @@ export function ModalShell({
   subtitle,
   width = 480,
   onClose,
+  footer,
   children,
 }: ModalShellProps) {
   const t = useT();
@@ -93,7 +95,23 @@ export function ModalShell({
           </button>
         </div>
 
-        <div style={{ padding: 18, overflowY: 'auto' }}>{children}</div>
+        <div style={{ padding: 18, overflowY: 'auto', flex: 1, minHeight: 0 }}>{children}</div>
+        {footer && (
+          <div
+            style={{
+              padding: '12px 18px',
+              borderTop: '1px solid var(--border-subtle)',
+              background: 'var(--surface-1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              flexShrink: 0,
+            }}
+          >
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );

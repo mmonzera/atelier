@@ -16,17 +16,19 @@ import {
 import {
   ArrowDown,
   ArrowUp,
-  CheckCircle2,
   Brain,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   CircleAlert,
   Minimize2,
   RefreshCw,
   ShieldAlert,
+  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { shownModels } from '../state/models';
 import { api, permissionsApi } from '../api';
 import {
   ModalShell,
@@ -38,11 +40,156 @@ import {
 import { ModelsProvidersPanel } from '../components/modals/ModelsModal';
 import { Select } from '../components/Select';
 import { toast } from '../components/Toast';
+import { shownModels } from '../state/models';
 import { BrowserSettingsPanel } from './BrowserSettingsPanel';
 import { MeetingSettingsPanel } from './MeetingSettingsPanel';
 import { SecurityBackupPanel } from './SecurityBackupPanel';
 
 export type SettingsTab = 'general' | 'providers' | 'meeting' | 'browser' | 'security';
+
+const sectionCardStyle: React.CSSProperties = {
+  borderRadius: 'var(--radius-md)',
+  background: 'var(--surface-2)',
+  border: '1px solid var(--border-subtle)',
+  overflow: 'hidden',
+};
+
+const sectionHeaderStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 500,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--text-muted)',
+};
+
+function formatCompactCount(raw: string, fallback: number): string {
+  const n = Number(raw);
+  const val = Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
+  if (val >= 1_000_000) return `${(val / 1_000_000).toFixed(val % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (val >= 1_000) return `${Math.round(val / 1000)}K`;
+  return String(val);
+}
+
+function ToggleSwitch({
+  checked,
+  onChange,
+  ariaLabel,
+  accent = 'green',
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  ariaLabel: string;
+  accent?: 'green' | 'red';
+}) {
+  const activeBg = accent === 'red' ? 'var(--agent-red)' : 'var(--agent-green)';
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      onClick={() => onChange(!checked)}
+      className="transition-atelier"
+      style={{
+        width: 36,
+        height: 20,
+        borderRadius: 999,
+        padding: 2,
+        background: checked ? activeBg : 'var(--surface-3)',
+        border: `1px solid ${checked ? 'transparent' : 'var(--border-default)'}`,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: checked ? 'flex-end' : 'flex-start',
+        flexShrink: 0,
+        cursor: 'pointer',
+      }}
+    >
+      <span
+        style={{
+          width: 14,
+          height: 14,
+          borderRadius: 999,
+          background: '#fff',
+          boxShadow: '0 1px 2px rgba(0, 0, 0, 0.35)',
+        }}
+      />
+    </button>
+  );
+}
+
+function NumericUnitField({
+  id,
+  label,
+  value,
+  onChange,
+  unit,
+  hint,
+  min,
+  max,
+}: {
+  id?: string;
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  unit?: string;
+  hint?: string;
+  min: number;
+  max: number;
+}) {
+  const num = Number(value);
+  const outOfRange = value.trim() !== '' && (!Number.isFinite(num) || num < min || num > max);
+
+  return (
+    <div style={{ minWidth: 0 }}>
+      <label htmlFor={id} style={{ ...labelStyle, marginBottom: 5 }}>
+        {label}
+      </label>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <input
+          id={id}
+          type="text"
+          inputMode="numeric"
+          value={value}
+          onChange={(e) => {
+            const digits = e.target.value.replace(/[^\d]/g, '');
+            onChange(digits);
+          }}
+          className="mono-num"
+          style={{
+            ...inputStyle,
+            height: 34,
+            padding: unit ? '0 48px 0 10px' : '0 10px',
+            background: 'var(--surface-1)',
+            borderColor: outOfRange ? 'var(--agent-red)' : 'var(--border-default)',
+          }}
+        />
+        {unit && (
+          <span
+            style={{
+              position: 'absolute',
+              right: 9,
+              fontSize: 11,
+              color: 'var(--text-muted)',
+              pointerEvents: 'none',
+              userSelect: 'none',
+            }}
+          >
+            {unit}
+          </span>
+        )}
+      </div>
+      {outOfRange ? (
+        <div style={{ fontSize: 11, color: 'var(--agent-red)', marginTop: 4 }}>
+          {min.toLocaleString()} – {max.toLocaleString()}
+        </div>
+      ) : hint ? (
+        <div style={{ fontSize: 11, lineHeight: '15px', color: 'var(--text-tertiary)', marginTop: 4 }}>
+          {hint}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export function SettingsView({
   settings,
@@ -69,12 +216,15 @@ export function SettingsView({
   const lang = useLang();
   const initialCompact = settings.autoCompact ?? DEFAULT_AUTO_COMPACT_SETTINGS;
   const initialMemory = { ...DEFAULT_MEMORY_SETTINGS, ...(settings.memory ?? {}) };
+
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
   const [model, setModel] = useState(settings.model);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(settings.reasoningEffort);
   const [autoCompactEnabled, setAutoCompactEnabled] = useState(initialCompact.enabled);
+  const [compactAdvancedOpen, setCompactAdvancedOpen] = useState(false);
   const [selectiveMemory, setSelectiveMemory] = useState(initialMemory.mode === 'selective');
+  const [memoryAdvancedOpen, setMemoryAdvancedOpen] = useState(false);
   const [memPush, setMemPush] = useState(String(initialMemory.pushBudgetTokens));
   const [memPinned, setMemPinned] = useState(String(initialMemory.pinnedBudgetTokens));
   const [memCatalog, setMemCatalog] = useState(String(initialMemory.catalogBudgetTokens));
@@ -89,7 +239,11 @@ export function SettingsView({
     String(initialCompact.minCompactMessages ?? DEFAULT_AUTO_COMPACT_SETTINGS.minCompactMessages ?? 10),
   );
   const [providerContextLimit, setProviderContextLimit] = useState(
-    String(initialCompact.providerContextLimit ?? DEFAULT_AUTO_COMPACT_SETTINGS.providerContextLimit ?? 100000),
+    String(
+      initialCompact.providerContextLimit ??
+        DEFAULT_AUTO_COMPACT_SETTINGS.providerContextLimit ??
+        100000,
+    ),
   );
   const [tailTokens, setTailTokens] = useState(String(initialCompact.tailTokens ?? 6000));
   const [summarizerModel, setSummarizerModel] = useState(initialCompact.summarizerModel ?? '');
@@ -141,7 +295,9 @@ export function SettingsView({
         parsedMaxMsgs - 1,
         Math.max(
           1,
-          Math.round(Number(keepRecentMessages) || DEFAULT_AUTO_COMPACT_SETTINGS.keepRecentMessages),
+          Math.round(
+            Number(keepRecentMessages) || DEFAULT_AUTO_COMPACT_SETTINGS.keepRecentMessages,
+          ),
         ),
       );
       const parsedTokens = Math.min(
@@ -176,7 +332,7 @@ export function SettingsView({
       );
 
       await api.updateSettings({
-        model: model.trim(),
+        model: model.trim() || settings.model,
         reasoningEffort,
         autoCompact: {
           enabled: autoCompactEnabled,
@@ -190,10 +346,16 @@ export function SettingsView({
         },
         memory: {
           mode: selectiveMemory ? 'selective' : 'full',
-          pushBudgetTokens: Math.min(8000, Math.max(200, Math.round(Number(memPush) || DEFAULT_MEMORY_SETTINGS.pushBudgetTokens))),
+          pushBudgetTokens: Math.min(
+            8000,
+            Math.max(200, Math.round(Number(memPush) || DEFAULT_MEMORY_SETTINGS.pushBudgetTokens)),
+          ),
           pinnedBudgetTokens: Math.min(4000, Math.max(0, Math.round(Number(memPinned) || 0))),
           catalogBudgetTokens: Math.min(2000, Math.max(0, Math.round(Number(memCatalog) || 0))),
-          topK: Math.min(30, Math.max(1, Math.round(Number(memTopK) || DEFAULT_MEMORY_SETTINGS.topK))),
+          topK: Math.min(
+            30,
+            Math.max(1, Math.round(Number(memTopK) || DEFAULT_MEMORY_SETTINGS.topK)),
+          ),
         },
         fallbackMode,
         fallbackChain,
@@ -226,21 +388,47 @@ export function SettingsView({
     },
   ];
 
+  const generalFooter =
+    activeTab === 'general' ? (
+      <>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {error && (
+            <div style={{ fontSize: 12, color: 'var(--agent-red)', lineHeight: 1.4 }}>{error}</div>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <button type="button" onClick={onClose} style={secondaryBtnStyle}>
+            {t('Cancel')}
+          </button>
+          <button
+            type="submit"
+            form="harness-general-form"
+            disabled={saving}
+            style={primaryBtnStyle}
+          >
+            {saving ? t('Saving…') : t('Save settings')}
+          </button>
+        </div>
+      </>
+    ) : undefined;
+
   return (
     <ModalShell
       title={t('Harness settings')}
       subtitle={t('Configure AI providers, models, reasoning effort, context compaction, and permissions.')}
-      width={640}
+      width={680}
       onClose={onClose}
+      footer={generalFooter}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* Top segmented tabs inside Harness Settings */}
+        {/* Top segmented tabs */}
         <div
           style={{
-            display: 'inline-flex',
-            alignSelf: 'flex-start',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
             padding: 3,
-            borderRadius: 'var(--radius-full)',
+            borderRadius: 'var(--radius-md)',
             background: 'var(--surface-2)',
             border: '1px solid var(--border-subtle)',
             gap: 2,
@@ -263,13 +451,15 @@ export function SettingsView({
                 onClick={() => setActiveTab(item.id)}
                 className="transition-atelier"
                 style={{
-                  height: 28,
-                  padding: '0 12px',
-                  borderRadius: 'var(--radius-full)',
-                  fontSize: 12.5,
+                  flex: '1 1 auto',
+                  height: 30,
+                  padding: '0 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 12,
                   fontWeight: on ? 500 : 400,
                   color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
                   background: on ? 'var(--surface-3)' : 'transparent',
+                  whiteSpace: 'nowrap',
                 }}
               >
                 {item.label}
@@ -291,683 +481,867 @@ export function SettingsView({
             onDiscoveredModelsChange={onDiscoveredModelsChange}
           />
         ) : (
-          <>
-            {appUpdate && (
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--surface-2)',
-                  border:
-                    appUpdate.state === 'available' || appUpdate.state === 'downloading'
-                      ? '1px solid var(--agent-green)'
-                      : '1px solid var(--border-subtle)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                }}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)' }}>
-                    Atelier Desktop <span className="mono-num">v{appUpdate.currentVersion}</span>
-                  </div>
-                  <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                    {!appUpdate.supported
-                      ? t('Desktop auto-updater is active in the installed Windows app.')
-                      : appUpdate.state === 'available'
-                        ? t('Update v{version} ready to install.', { version: appUpdate.availableVersion ?? '' })
-                        : appUpdate.state === 'downloading'
-                          ? t('Downloading update… {pct}%', { pct: appUpdate.progressPercent ?? 0 })
-                          : appUpdate.state === 'checking'
-                            ? t('Checking for updates…')
-                            : appUpdate.state === 'up_to_date'
-                              ? t('You are on the latest version.')
-                              : appUpdate.state === 'error'
-                                ? appUpdate.error || t('Update check failed.')
-                                : t('Automatic updates via GitHub Releases.')}
-                  </div>
-                </div>
-                {appUpdate.supported && (
-                  <button
-                    type="button"
-                    disabled={appUpdate.state === 'checking' || appUpdate.state === 'downloading'}
-                    onClick={() => {
-                      if (appUpdate.state === 'available') {
-                        void api.installAppUpdate();
-                      } else {
-                        void api.checkAppUpdate();
-                      }
-                    }}
-                    style={{
-                      ...(appUpdate.state === 'available' ? primaryBtnStyle : secondaryBtnStyle),
-                      height: 30,
-                      padding: '0 12px',
-                      fontSize: 12,
-                      flexShrink: 0,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                    }}
-                  >
-                    <RefreshCw size={13} strokeWidth={1.5} />
-                    {appUpdate.state === 'available'
-                      ? t('Update to v{version}', { version: appUpdate.availableVersion ?? '' })
-                      : appUpdate.state === 'downloading'
-                        ? `${appUpdate.progressPercent ?? 0}%`
-                        : t('Check for updates')}
-                  </button>
-                )}
-              </div>
-            )}
-
-            <div
-              style={{
-                padding: 12,
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--surface-2)',
-                border: '1px solid var(--border-subtle)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                }}
-              >
+          <form
+            id="harness-general-form"
+            noValidate
+            onSubmit={submit}
+            style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+          >
+            {/* 1. System & Environment (unified compact card) */}
+            <div style={sectionCardStyle}>
+              {appUpdate && (
                 <div
                   style={{
-                    fontSize: 11,
-                    fontWeight: 500,
-                    letterSpacing: '0.06em',
-                    textTransform: 'uppercase',
-                    color: 'var(--text-muted)',
+                    padding: '11px 14px',
+                    borderBottom: '1px solid var(--border-subtle)',
+                    background:
+                      appUpdate.state === 'available' || appUpdate.state === 'downloading'
+                        ? 'rgba(34, 197, 94, 0.06)'
+                        : 'transparent',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
                   }}
-                >{t('Environment Readiness')}
-                </div>
-                <button
-                  type="button"
-                  onClick={onOpenMcp}
-                  style={{
-                    fontSize: 11.5,
-                    fontWeight: 500,
-                    color: 'var(--text-primary)',
-                    padding: '3px 9px',
-                    borderRadius: 'var(--radius-full)',
-                    background: 'var(--surface-3)',
-                    border: '1px solid var(--border-default)',
-                  }}
-                >{t('MCP connections (')}{settings.mcpServers.length})…
-                </button>
-              </div>
-          {checks.map((c) => (
-            <div
-              key={c.label}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10,
-                fontSize: 12.5,
-              }}
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: 'var(--text-primary)' }}>
-                {c.ok ? (
-                  <CheckCircle2 size={14} strokeWidth={1.5} style={{ color: 'var(--agent-green)' }} />
-                ) : (
-                  <CircleAlert size={14} strokeWidth={1.5} style={{ color: 'var(--agent-amber)' }} />
-                )}
-                {c.label}
-              </span>
-              <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{c.detail}</span>
-            </div>
-          ))}
-        </div>
-
-        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div>
-            <label style={labelStyle}>{t('Interface language')}</label>
-            <Select
-              ariaLabel={t('Interface language')}
-              value={lang}
-              onChange={(v) => {
-                setLang(v as Lang);
-                void api.updateSettings({ language: v as Lang }).catch(() => undefined);
-              }}
-              options={LANGUAGES}
-            />
-            <div style={{ fontSize: 11.5, lineHeight: '16px', color: 'var(--text-tertiary)', marginTop: 6 }}>
-              {t('Choose the language used for menus, buttons and messages. Agent replies follow the language you write in.')}
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
-            <div>
-              <label style={labelStyle}>{t('Default model')}</label>
-              <input
-                type="text"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="mono-num"
-                style={inputStyle}
-              />
-            </div>
-            <div>
-              <label style={labelStyle}>{t('Effort')}</label>
-              <Select
-                ariaLabel={t('Effort')}
-                value={reasoningEffort}
-                onChange={(v) => setReasoningEffort(v as ReasoningEffort)}
-                options={[
-                  { value: 'Low', label: t('Low') },
-                  { value: 'Medium', label: t('Medium') },
-                  { value: 'High', label: t('High') },
-                ]}
-              />
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: 12,
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--surface-2)',
-              border: '1px solid var(--border-subtle)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 10,
-            }}
-          >
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                fontSize: 12.5,
-                fontWeight: 500,
-                color: 'var(--text-primary)',
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={autoCompactEnabled}
-                onChange={(e) => setAutoCompactEnabled(e.target.checked)}
-              />
-              <Minimize2 size={14} strokeWidth={1.5} style={{ color: 'var(--agent-amber)' }} />{t('Auto-compact long conversations')}
-            </label>
-            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>{t('Summarizes older turns and keeps native sessions while they fit the context budget. The full conversation stays searchable.')}
-            </div>
-
-            {autoCompactEnabled && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingLeft: 22 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                  <div>
-                    <label style={labelStyle}>{t('Trigger msgs')}</label>
-                    <input
-                      type="number"
-                      min={4}
-                      max={200}
-                      value={maxMessages}
-                      onChange={(e) => setMaxMessages(e.target.value)}
-                      className="mono-num"
-                      style={inputStyle}
-                    />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>{t('Keep recent')}</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={199}
-                      value={keepRecentMessages}
-                      onChange={(e) => setKeepRecentMessages(e.target.value)}
-                      className="mono-num"
-                      style={inputStyle}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="min-compact-messages" style={labelStyle}>{t('Min. messages per compaction')}</label>
-                    <input
-                      id="min-compact-messages"
-                      type="number"
-                      min={2}
-                      max={50}
-                      value={minCompactMessages}
-                      onChange={(e) => setMinCompactMessages(e.target.value)}
-                      className="mono-num"
-                      style={inputStyle}
-                    />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <div>
-                    <label style={labelStyle}>{t('Conversation limit')}</label>
-                    <input
-                      type="number"
-                      min={4000}
-                      max={500000}
-                      step={1000}
-                      value={maxContextTokens}
-                      onChange={(e) => setMaxContextTokens(e.target.value)}
-                      className="mono-num"
-                      style={inputStyle}
-                    />
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
-                      {t('Estimated chat content tokens (excluding system prompt & tools)')}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)' }}>
+                      Atelier Desktop <span className="mono-num">v{appUpdate.currentVersion}</span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                      {!appUpdate.supported
+                        ? t('Desktop auto-updater is active in the installed Windows app.')
+                        : appUpdate.state === 'available'
+                          ? t('Update v{version} ready to install.', {
+                              version: appUpdate.availableVersion ?? '',
+                            })
+                          : appUpdate.state === 'downloading'
+                            ? t('Downloading update… {pct}%', {
+                                pct: appUpdate.progressPercent ?? 0,
+                              })
+                            : appUpdate.state === 'checking'
+                              ? t('Checking for updates…')
+                              : appUpdate.state === 'up_to_date'
+                                ? t('You are on the latest version.')
+                                : appUpdate.state === 'error'
+                                  ? appUpdate.error || t('Update check failed.')
+                                  : t('Automatic updates via GitHub Releases.')}
                     </div>
                   </div>
-                  <div>
-                    <label htmlFor="provider-context-limit" style={labelStyle}>{t('Provider context limit')}</label>
-                    <input
-                      id="provider-context-limit"
-                      type="number"
-                      min={8000}
-                      max={2000000}
-                      step={5000}
-                      value={providerContextLimit}
-                      onChange={(e) => setProviderContextLimit(e.target.value)}
-                      className="mono-num"
-                      style={inputStyle}
-                    />
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
-                      {t('Safeguard. Compacts & resets session if provider prompt exceeds this')}
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 8 }}>
-                  <div>
-                    <label htmlFor="memory-tail-tokens" style={labelStyle}>{t('History tail tokens')}</label>
-                    <input
-                      id="memory-tail-tokens"
-                      type="number"
-                      min={1000}
-                      max={6000}
-                      step={500}
-                      value={tailTokens}
-                      onChange={(e) => setTailTokens(e.target.value)}
-                      style={inputStyle}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="memory-model" style={labelStyle}>{t('Summarizer model')}</label>
-                    <input
-                      id="memory-model"
-                      value={summarizerModel}
-                      placeholder={t('Automatic for provider')}
-                      maxLength={120}
-                      onChange={(e) => setSummarizerModel(e.target.value)}
-                      style={inputStyle}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div
-            style={{
-              padding: 12,
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--surface-2)',
-              border: '1px solid var(--border-subtle)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 10,
-            }}
-          >
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                fontSize: 12.5,
-                fontWeight: 500,
-                color: 'var(--text-primary)',
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={selectiveMemory}
-                onChange={(e) => setSelectiveMemory(e.target.checked)}
-              />
-              <Brain size={14} strokeWidth={1.5} style={{ color: 'var(--agent-blue)' }} />{t('Selective memory (beta)')}
-            </label>
-            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>
-              {t('Send only the memory relevant to each request (pinned entries, matches and a title index) instead of all Canon and summaries. Agents fetch the rest with search_memory.')}
-            </div>
-            {selectiveMemory && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingLeft: 22 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
-                  <div>
-                    <label htmlFor="mem-push" style={labelStyle}>{t('Push budget')}</label>
-                    <input id="mem-push" type="number" min={200} max={8000} step={100} value={memPush}
-                      onChange={(e) => setMemPush(e.target.value)} className="mono-num" style={inputStyle} />
-                  </div>
-                  <div>
-                    <label htmlFor="mem-pinned" style={labelStyle}>{t('Pinned budget')}</label>
-                    <input id="mem-pinned" type="number" min={0} max={4000} step={50} value={memPinned}
-                      onChange={(e) => setMemPinned(e.target.value)} className="mono-num" style={inputStyle} />
-                  </div>
-                  <div>
-                    <label htmlFor="mem-catalog" style={labelStyle}>{t('Index budget')}</label>
-                    <input id="mem-catalog" type="number" min={0} max={2000} step={50} value={memCatalog}
-                      onChange={(e) => setMemCatalog(e.target.value)} className="mono-num" style={inputStyle} />
-                  </div>
-                  <div>
-                    <label htmlFor="mem-topk" style={labelStyle}>{t('Top matches')}</label>
-                    <input id="mem-topk" type="number" min={1} max={30} value={memTopK}
-                      onChange={(e) => setMemTopK(e.target.value)} className="mono-num" style={inputStyle} />
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <button
-                    type="button"
-                    disabled={rebuildingMemory}
-                    style={secondaryBtnStyle}
-                    onClick={async () => {
-                      setRebuildingMemory(true);
-                      try {
-                        await api.rebuildMemoryIndex();
-                        toast.success(t('Memory index will be rebuilt on the next turn'));
-                      } catch (err) {
-                        toast.error(err instanceof Error ? err.message : t('Could not rebuild the memory index.'));
-                      } finally {
-                        setRebuildingMemory(false);
-                      }
-                    }}
-                  >
-                    {t('Rebuild memory index')}
-                  </button>
-                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                    {t('Tokens are estimated. Pin Canon entries in the Canon panel to always send them.')}
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div
-            style={{
-              padding: 12,
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--surface-2)',
-              border: '1px solid var(--border-subtle)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 10,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 12.5,
-                  fontWeight: 500,
-                  color: 'var(--text-primary)',
-                }}
-              >
-                <RefreshCw size={14} strokeWidth={1.5} style={{ color: 'var(--agent-blue)' }} />{t('Model fallback chain (when limit hits)')}
-              </span>
-              <div
-                style={{
-                  display: 'inline-flex',
-                  padding: 2,
-                  borderRadius: 'var(--radius-full)',
-                  background: 'var(--surface-1)',
-                  border: '1px solid var(--border-subtle)',
-                  gap: 2,
-                }}
-              >
-                {(
-                  [
-                    { id: 'ask' as FallbackMode, label: t('Ask me first') },
-                    { id: 'auto' as FallbackMode, label: t('Auto-switch') },
-                  ]
-                ).map((m) => {
-                  const active = fallbackMode === m.id;
-                  return (
+                  {appUpdate.supported && (
                     <button
-                      key={m.id}
                       type="button"
-                      onClick={() => setFallbackMode(m.id)}
-                      className="transition-atelier"
+                      disabled={appUpdate.state === 'checking' || appUpdate.state === 'downloading'}
+                      onClick={() => {
+                        if (appUpdate.state === 'available') {
+                          void api.installAppUpdate();
+                        } else {
+                          void api.checkAppUpdate();
+                        }
+                      }}
                       style={{
-                        padding: '3px 10px',
-                        borderRadius: 'var(--radius-full)',
-                        fontSize: 11.5,
-                        fontWeight: active ? 500 : 400,
-                        color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                        background: active ? 'var(--surface-3)' : 'transparent',
+                        ...(appUpdate.state === 'available' ? primaryBtnStyle : secondaryBtnStyle),
+                        height: 30,
+                        padding: '0 12px',
+                        fontSize: 12,
                       }}
                     >
-                      {m.label}
+                      <RefreshCw size={13} strokeWidth={1.5} />
+                      {appUpdate.state === 'available'
+                        ? t('Update to v{version}', { version: appUpdate.availableVersion ?? '' })
+                        : appUpdate.state === 'downloading'
+                          ? `${appUpdate.progressPercent ?? 0}%`
+                          : t('Check for updates')}
                     </button>
-                  );
-                })}
+                  )}
+                </div>
+              )}
+
+              <div style={{ padding: '11px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                  }}
+                >
+                  <span style={sectionHeaderStyle}>{t('Environment Readiness')}</span>
+                  <button
+                    type="button"
+                    onClick={onOpenMcp}
+                    style={{
+                      fontSize: 11.5,
+                      fontWeight: 500,
+                      color: 'var(--text-primary)',
+                      padding: '3px 10px',
+                      borderRadius: 'var(--radius-full)',
+                      background: 'var(--surface-3)',
+                      border: '1px solid var(--border-default)',
+                    }}
+                  >
+                    {t('MCP connections (')}
+                    {settings.mcpServers.length})…
+                  </button>
+                </div>
+                {checks.map((c) => (
+                  <div
+                    key={c.label}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      fontSize: 12.5,
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 7,
+                        color: 'var(--text-primary)',
+                      }}
+                    >
+                      {c.ok ? (
+                        <CheckCircle2
+                          size={14}
+                          strokeWidth={1.5}
+                          style={{ color: 'var(--agent-green)' }}
+                        />
+                      ) : (
+                        <CircleAlert
+                          size={14}
+                          strokeWidth={1.5}
+                          style={{ color: 'var(--agent-amber)' }}
+                        />
+                      )}
+                      {c.label}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                      {c.detail}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
 
-            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
-              {fallbackMode === 'ask' ? t('When a provider hits rate limit or quota, pause and show a recovery card so you choose which backup model continues.') : t('Automatically hand off to the next healthy backup model below when rate limit, quota, or outage errors occur.')}
+            {/* 2. Defaults: Language, Model, Effort */}
+            <div style={sectionCardStyle}>
+              <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <span style={sectionHeaderStyle}>{t('General')}</span>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <div>
+                    <label style={labelStyle}>{t('Interface language')}</label>
+                    <Select
+                      ariaLabel={t('Interface language')}
+                      value={lang}
+                      onChange={(v) => {
+                        setLang(v as Lang);
+                        void api.updateSettings({ language: v as Lang }).catch(() => undefined);
+                      }}
+                      options={LANGUAGES}
+                    />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>{t('Effort')}</label>
+                    <Select
+                      ariaLabel={t('Effort')}
+                      value={reasoningEffort}
+                      onChange={(v) => setReasoningEffort(v as ReasoningEffort)}
+                      options={[
+                        { value: 'Low', label: t('Low') },
+                        { value: 'Medium', label: t('Medium') },
+                        { value: 'High', label: t('High') },
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={labelStyle}>{t('Default model')}</label>
+                  <input
+                    type="text"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    className="mono-num"
+                    style={{ ...inputStyle, height: 34, background: 'var(--surface-1)' }}
+                  />
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      lineHeight: '16px',
+                      color: 'var(--text-tertiary)',
+                      marginTop: 5,
+                    }}
+                  >
+                    {t(
+                      'Choose the language used for menus, buttons and messages. Agent replies follow the language you write in.',
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
 
-            {fallbackChain.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {fallbackChain.map((item, idx) => {
-                  const label =
-                    allModels.find((m) => m.provider === item.provider && m.id === item.model)
-                      ?.label ?? item.model;
-                  return (
+            {/* 3. Context & Memory (progressive disclosure) */}
+            <div style={sectionCardStyle}>
+              {/* Auto-compact row */}
+              <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
                     <div
-                      key={`${item.provider}:${item.model}`}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 7,
+                        fontSize: 13,
+                        fontWeight: 500,
+                        color: 'var(--text-primary)',
+                      }}
+                    >
+                      <Minimize2
+                        size={14}
+                        strokeWidth={1.5}
+                        style={{ color: 'var(--agent-amber)' }}
+                      />
+                      {t('Auto-compact long conversations')}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11.5,
+                        lineHeight: '16px',
+                        color: 'var(--text-tertiary)',
+                        marginTop: 3,
+                      }}
+                    >
+                      {t(
+                        'Summarizes older turns and keeps native sessions while they fit the context budget. The full conversation stays searchable.',
+                      )}
+                    </div>
+                  </div>
+                  <ToggleSwitch
+                    checked={autoCompactEnabled}
+                    onChange={setAutoCompactEnabled}
+                    ariaLabel={t('Auto-compact long conversations')}
+                  />
+                </div>
+
+                {autoCompactEnabled && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => setCompactAdvancedOpen((v) => !v)}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: 8,
-                        padding: '6px 10px',
+                        width: '100%',
+                        padding: '7px 10px',
                         borderRadius: 'var(--radius-sm)',
                         background: 'var(--surface-1)',
                         border: '1px solid var(--border-subtle)',
                         fontSize: 12,
+                        color: 'var(--text-secondary)',
                       }}
                     >
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                        <span className="mono-num" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                          #{idx + 1}
-                        </span>
-                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{label}</span>
-                        <span className="mono-num" style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                          {item.provider}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <SlidersHorizontal size={12} strokeWidth={1.5} />
+                        <span className="mono-num">
+                          {maxMessages || '80'} msgs · {formatCompactCount(maxContextTokens, 48000)}{' '}
+                          chat · {formatCompactCount(providerContextLimit, 100000)} provider
                         </span>
                       </span>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        <button
-                          type="button"
-                          disabled={idx === 0}
-                          onClick={() => {
-                            if (idx === 0) return;
-                            setFallbackChain((prev) => {
-                              const next = [...prev];
-                              [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-                              return next;
-                            });
-                          }}
-                          title={t('Move up')}
-                          style={{ color: idx === 0 ? 'var(--text-muted)' : 'var(--text-secondary)', padding: 3 }}
-                        >
-                          <ArrowUp size={12} strokeWidth={1.5} />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={idx === fallbackChain.length - 1}
-                          onClick={() => {
-                            if (idx === fallbackChain.length - 1) return;
-                            setFallbackChain((prev) => {
-                              const next = [...prev];
-                              [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
-                              return next;
-                            });
-                          }}
-                          title={t('Move down')}
-                          style={{
-                            color:
-                              idx === fallbackChain.length - 1
-                                ? 'var(--text-muted)'
-                                : 'var(--text-secondary)',
-                            padding: 3,
-                          }}
-                        >
-                          <ArrowDown size={12} strokeWidth={1.5} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setFallbackChain((prev) => prev.filter((_, i) => i !== idx))
-                          }
-                          title={t('Remove backup')}
-                          style={{ color: 'var(--text-muted)', padding: 3 }}
-                        >
-                          <Trash2 size={12} strokeWidth={1.5} />
-                        </button>
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          fontSize: 11.5,
+                          color: 'var(--text-tertiary)',
+                        }}
+                      >
+                        {compactAdvancedOpen ? (
+                          <ChevronDown size={14} />
+                        ) : (
+                          <ChevronRight size={14} />
+                        )}
                       </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    </button>
 
-            {fallbackChain.length < 5 && (
-              <Select
-                ariaLabel={t('Add backup model')}
-                value=""
-                placeholder={t('Add backup model…')}
-                onChange={(val) => {
-                  const [prov, ...rest] = val.split(':');
-                  const modId = rest.join(':');
-                  if (!prov || !modId) return;
-                  const key = `${prov}:${modId}`;
-                  if (fallbackChain.some((c) => `${c.provider}:${c.model}` === key)) return;
-                  setFallbackChain((prev) => [
-                    ...prev,
-                    { provider: prov as ModelRef['provider'], model: modId },
-                  ]);
-                }}
-                options={shownModels(allModels, settings)
-                  .filter(
-                    (m) => !fallbackChain.some((c) => c.provider === m.provider && c.model === m.id),
-                  )
-                  .map((m) => ({
-                    value: `${m.provider}:${m.id}`,
-                    label: m.label,
-                    hint: m.provider,
-                  }))}
-              />
-            )}
-          </div>
+                    {compactAdvancedOpen && (
+                      <div
+                        style={{
+                          padding: 12,
+                          borderRadius: 'var(--radius-sm)',
+                          background: 'var(--surface-1)',
+                          border: '1px solid var(--border-subtle)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 12,
+                        }}
+                      >
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                          <NumericUnitField
+                            label={t('Trigger msgs')}
+                            value={maxMessages}
+                            onChange={setMaxMessages}
+                            unit="msgs"
+                            min={4}
+                            max={200}
+                          />
+                          <NumericUnitField
+                            label={t('Keep recent')}
+                            value={keepRecentMessages}
+                            onChange={setKeepRecentMessages}
+                            unit="msgs"
+                            min={1}
+                            max={199}
+                          />
+                          <NumericUnitField
+                            id="min-compact-messages"
+                            label={t('Min. messages per compaction')}
+                            value={minCompactMessages}
+                            onChange={setMinCompactMessages}
+                            unit="msgs"
+                            min={2}
+                            max={50}
+                          />
+                        </div>
 
-          {activeProject && (
-            <div
-              style={{
-                padding: 10,
-                borderRadius: 'var(--radius-sm)',
-                background: 'rgba(248, 113, 113, 0.06)',
-                border: '1px solid rgba(248, 113, 113, 0.2)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-              }}
-            >
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 12.5,
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={allowFullPermissions}
-                  onChange={(e) => setAllowFullPermissions(e.target.checked)}
-                />
-                <ShieldAlert size={14} strokeWidth={1.5} style={{ color: 'var(--agent-red)' }} />{t('Allow shell-enabled agents full permissions (`bypassPermissions`) in')} {activeProject.name}
-              </label>
-              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', paddingLeft: 22 }}>{t('Per-project toggle: agents with shell execution enabled can run commands in the linked repo folder using your local user privileges.')}
-              </div>
-            </div>
-          )}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                          <NumericUnitField
+                            label={t('Conversation limit')}
+                            value={maxContextTokens}
+                            onChange={setMaxContextTokens}
+                            unit="tok"
+                            min={4000}
+                            max={500000}
+                            hint={t(
+                              'Estimated chat content tokens (excluding system prompt & tools)',
+                            )}
+                          />
+                          <NumericUnitField
+                            id="provider-context-limit"
+                            label={t('Provider context limit')}
+                            value={providerContextLimit}
+                            onChange={setProviderContextLimit}
+                            unit="tok"
+                            min={8000}
+                            max={2000000}
+                            hint={t(
+                              'Safeguard. Compacts & resets session if provider prompt exceeds this',
+                            )}
+                          />
+                        </div>
 
-          {(settings.approvedPermissions?.length ?? 0) > 0 && (
-            <div
-              style={{
-                padding: '10px 12px',
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--surface-2)',
-                border: '1px solid var(--border-subtle)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)' }}>
-                {t('Saved CLI & MCP permissions')}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: 10 }}>
+                          <NumericUnitField
+                            id="memory-tail-tokens"
+                            label={t('History tail tokens')}
+                            value={tailTokens}
+                            onChange={setTailTokens}
+                            unit="tok"
+                            min={1000}
+                            max={6000}
+                          />
+                          <div>
+                            <label htmlFor="memory-model" style={{ ...labelStyle, marginBottom: 5 }}>
+                              {t('Summarizer model')}
+                            </label>
+                            <input
+                              id="memory-model"
+                              value={summarizerModel}
+                              placeholder={t('Automatic for provider')}
+                              maxLength={120}
+                              onChange={(e) => setSummarizerModel(e.target.value)}
+                              style={{ ...inputStyle, height: 34, background: 'var(--surface-2)' }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {(settings.approvedPermissions ?? []).map((grant) => (
-                  <span
-                    key={grant.key}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '3px 8px 3px 10px',
-                      borderRadius: 'var(--radius-full)',
-                      background: 'var(--surface-1)',
-                      border: '1px solid var(--border-default)',
-                      fontSize: 11.5,
-                      color: 'var(--text-primary)',
-                    }}
-                  >
-                    <span>{grant.label}</span>
-                    <button
-                      type="button"
-                      title={t('Revoke permission')}
-                      onClick={() => void permissionsApi.revokeGrant(grant.key)}
+
+              {/* Divider */}
+              <div style={{ height: 1, background: 'var(--border-subtle)' }} />
+
+              {/* Selective memory row */}
+              <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div
                       style={{
                         display: 'inline-flex',
                         alignItems: 'center',
-                        color: 'var(--text-tertiary)',
+                        gap: 7,
+                        fontSize: 13,
+                        fontWeight: 500,
+                        color: 'var(--text-primary)',
                       }}
                     >
-                      <X size={12} />
-                    </button>
-                  </span>
-                ))}
+                      <Brain size={14} strokeWidth={1.5} style={{ color: 'var(--agent-blue)' }} />
+                      {t('Selective memory (beta)')}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11.5,
+                        lineHeight: '16px',
+                        color: 'var(--text-tertiary)',
+                        marginTop: 3,
+                      }}
+                    >
+                      {t(
+                        'Send only the memory relevant to each request (pinned entries, matches and a title index) instead of all Canon and summaries. Agents fetch the rest with search_memory.',
+                      )}
+                    </div>
+                  </div>
+                  <ToggleSwitch
+                    checked={selectiveMemory}
+                    onChange={setSelectiveMemory}
+                    ariaLabel={t('Selective memory (beta)')}
+                  />
+                </div>
+
+                {selectiveMemory && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => setMemoryAdvancedOpen((v) => !v)}
+                        style={{
+                          ...secondaryBtnStyle,
+                          height: 30,
+                          padding: '0 10px',
+                          fontSize: 11.5,
+                          background: 'var(--surface-1)',
+                        }}
+                      >
+                        <SlidersHorizontal size={12} />
+                        <span className="mono-num">
+                          {memPush} / {memPinned} / {memCatalog} tok · top {memTopK}
+                        </span>
+                        {memoryAdvancedOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={rebuildingMemory}
+                        style={{
+                          ...secondaryBtnStyle,
+                          height: 30,
+                          padding: '0 10px',
+                          fontSize: 11.5,
+                          background: 'var(--surface-1)',
+                        }}
+                        onClick={async () => {
+                          setRebuildingMemory(true);
+                          try {
+                            await api.rebuildMemoryIndex();
+                            toast.success(t('Memory index will be rebuilt on the next turn'));
+                          } catch (err) {
+                            toast.error(
+                              err instanceof Error
+                                ? err.message
+                                : t('Could not rebuild the memory index.'),
+                            );
+                          } finally {
+                            setRebuildingMemory(false);
+                          }
+                        }}
+                      >
+                        {t('Rebuild memory index')}
+                      </button>
+                    </div>
+
+                    {memoryAdvancedOpen && (
+                      <div
+                        style={{
+                          padding: 12,
+                          borderRadius: 'var(--radius-sm)',
+                          background: 'var(--surface-1)',
+                          border: '1px solid var(--border-subtle)',
+                          display: 'grid',
+                          gridTemplateColumns: '1fr 1fr 1fr 1fr',
+                          gap: 8,
+                        }}
+                      >
+                        <NumericUnitField
+                          id="mem-push"
+                          label={t('Push budget')}
+                          value={memPush}
+                          onChange={setMemPush}
+                          unit="tok"
+                          min={200}
+                          max={8000}
+                        />
+                        <NumericUnitField
+                          id="mem-pinned"
+                          label={t('Pinned budget')}
+                          value={memPinned}
+                          onChange={setMemPinned}
+                          unit="tok"
+                          min={0}
+                          max={4000}
+                        />
+                        <NumericUnitField
+                          id="mem-catalog"
+                          label={t('Index budget')}
+                          value={memCatalog}
+                          onChange={setMemCatalog}
+                          unit="tok"
+                          min={0}
+                          max={2000}
+                        />
+                        <NumericUnitField
+                          id="mem-topk"
+                          label={t('Top matches')}
+                          value={memTopK}
+                          onChange={setMemTopK}
+                          min={1}
+                          max={30}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
-          )}
 
-          {error && <div style={{ fontSize: 12, color: 'var(--agent-red)' }}>{error}</div>}
+            {/* 4. Model Fallback Chain */}
+            <div style={sectionCardStyle}>
+              <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 7,
+                      fontSize: 13,
+                      fontWeight: 500,
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    <RefreshCw size={14} strokeWidth={1.5} style={{ color: 'var(--agent-blue)' }} />
+                    {t('Model fallback chain (when limit hits)')}
+                  </span>
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      padding: 2,
+                      borderRadius: 'var(--radius-full)',
+                      background: 'var(--surface-1)',
+                      border: '1px solid var(--border-subtle)',
+                      gap: 2,
+                    }}
+                  >
+                    {(
+                      [
+                        { id: 'ask' as FallbackMode, label: t('Ask me first') },
+                        { id: 'auto' as FallbackMode, label: t('Auto-switch') },
+                      ]
+                    ).map((m) => {
+                      const active = fallbackMode === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setFallbackMode(m.id)}
+                          className="transition-atelier"
+                          style={{
+                            padding: '3px 10px',
+                            borderRadius: 'var(--radius-full)',
+                            fontSize: 11.5,
+                            fontWeight: active ? 500 : 400,
+                            color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                            background: active ? 'var(--surface-3)' : 'transparent',
+                          }}
+                        >
+                          {m.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-            <button type="button" onClick={onClose} style={secondaryBtnStyle}>{t('Cancel')}
-            </button>
-            <button type="submit" disabled={saving} style={primaryBtnStyle}>
-              {saving ? t('Saving…') : t('Save settings')}
-            </button>
-          </div>
-        </form>
-          </>
+                <div style={{ fontSize: 11.5, lineHeight: '16px', color: 'var(--text-tertiary)' }}>
+                  {fallbackMode === 'ask'
+                    ? t(
+                        'When a provider hits rate limit or quota, pause and show a recovery card so you choose which backup model continues.',
+                      )
+                    : t(
+                        'Automatically hand off to the next healthy backup model below when rate limit, quota, or outage errors occur.',
+                      )}
+                </div>
+
+                {fallbackChain.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {fallbackChain.map((item, idx) => {
+                      const label =
+                        allModels.find(
+                          (m) => m.provider === item.provider && m.id === item.model,
+                        )?.label ?? item.model;
+                      return (
+                        <div
+                          key={`${item.provider}:${item.model}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 8,
+                            padding: '6px 10px',
+                            borderRadius: 'var(--radius-sm)',
+                            background: 'var(--surface-1)',
+                            border: '1px solid var(--border-subtle)',
+                            fontSize: 12,
+                          }}
+                        >
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              minWidth: 0,
+                            }}
+                          >
+                            <span
+                              className="mono-num"
+                              style={{ fontSize: 11, color: 'var(--text-muted)' }}
+                            >
+                              #{idx + 1}
+                            </span>
+                            <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                              {label}
+                            </span>
+                            <span
+                              className="mono-num"
+                              style={{ fontSize: 11, color: 'var(--text-tertiary)' }}
+                            >
+                              {item.provider}
+                            </span>
+                          </span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => {
+                                if (idx === 0) return;
+                                setFallbackChain((prev) => {
+                                  const next = [...prev];
+                                  [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                                  return next;
+                                });
+                              }}
+                              title={t('Move up')}
+                              style={{
+                                color: idx === 0 ? 'var(--text-muted)' : 'var(--text-secondary)',
+                                padding: 3,
+                              }}
+                            >
+                              <ArrowUp size={12} strokeWidth={1.5} />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === fallbackChain.length - 1}
+                              onClick={() => {
+                                if (idx === fallbackChain.length - 1) return;
+                                setFallbackChain((prev) => {
+                                  const next = [...prev];
+                                  [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+                                  return next;
+                                });
+                              }}
+                              title={t('Move down')}
+                              style={{
+                                color:
+                                  idx === fallbackChain.length - 1
+                                    ? 'var(--text-muted)'
+                                    : 'var(--text-secondary)',
+                                padding: 3,
+                              }}
+                            >
+                              <ArrowDown size={12} strokeWidth={1.5} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setFallbackChain((prev) => prev.filter((_, i) => i !== idx))
+                              }
+                              title={t('Remove backup')}
+                              style={{ color: 'var(--text-muted)', padding: 3 }}
+                            >
+                              <Trash2 size={12} strokeWidth={1.5} />
+                            </button>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {fallbackChain.length < 5 && (
+                  <Select
+                    ariaLabel={t('Add backup model')}
+                    value=""
+                    placeholder={t('Add backup model…')}
+                    onChange={(val) => {
+                      const [prov, ...rest] = val.split(':');
+                      const modId = rest.join(':');
+                      if (!prov || !modId) return;
+                      const key = `${prov}:${modId}`;
+                      if (fallbackChain.some((c) => `${c.provider}:${c.model}` === key)) return;
+                      setFallbackChain((prev) => [
+                        ...prev,
+                        { provider: prov as ModelRef['provider'], model: modId },
+                      ]);
+                    }}
+                    options={shownModels(allModels, settings)
+                      .filter(
+                        (m) =>
+                          !fallbackChain.some((c) => c.provider === m.provider && c.model === m.id),
+                      )
+                      .map((m) => ({
+                        value: `${m.provider}:${m.id}`,
+                        label: m.label,
+                        hint: m.provider,
+                      }))}
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* 5. Permissions */}
+            {(activeProject || (settings.approvedPermissions?.length ?? 0) > 0) && (
+              <div style={sectionCardStyle}>
+                {activeProject && (
+                  <div
+                    style={{
+                      padding: '12px 14px',
+                      background: allowFullPermissions ? 'rgba(248, 113, 113, 0.06)' : 'transparent',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 7,
+                          fontSize: 13,
+                          fontWeight: 500,
+                          color: 'var(--text-primary)',
+                        }}
+                      >
+                        <ShieldAlert
+                          size={14}
+                          strokeWidth={1.5}
+                          style={{ color: 'var(--agent-red)' }}
+                        />
+                        {t('Allow shell-enabled agents full permissions (`bypassPermissions`) in')}{' '}
+                        {activeProject.name}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 11.5,
+                          lineHeight: '16px',
+                          color: 'var(--text-tertiary)',
+                          marginTop: 3,
+                        }}
+                      >
+                        {t(
+                          'Per-project toggle: agents with shell execution enabled can run commands in the linked repo folder using your local user privileges.',
+                        )}
+                      </div>
+                    </div>
+                    <ToggleSwitch
+                      checked={allowFullPermissions}
+                      onChange={setAllowFullPermissions}
+                      ariaLabel={t('Allow shell-enabled agents full permissions')}
+                      accent="red"
+                    />
+                  </div>
+                )}
+
+                {activeProject && (settings.approvedPermissions?.length ?? 0) > 0 && (
+                  <div style={{ height: 1, background: 'var(--border-subtle)' }} />
+                )}
+
+                {(settings.approvedPermissions?.length ?? 0) > 0 && (
+                  <div
+                    style={{
+                      padding: '12px 14px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)' }}>
+                      {t('Saved CLI & MCP permissions')}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {(settings.approvedPermissions ?? []).map((grant) => (
+                        <span
+                          key={grant.key}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            padding: '3px 8px 3px 10px',
+                            borderRadius: 'var(--radius-full)',
+                            background: 'var(--surface-1)',
+                            border: '1px solid var(--border-default)',
+                            fontSize: 11.5,
+                            color: 'var(--text-primary)',
+                          }}
+                        >
+                          <span>{grant.label}</span>
+                          <button
+                            type="button"
+                            title={t('Revoke permission')}
+                            onClick={() => void permissionsApi.revokeGrant(grant.key)}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              color: 'var(--text-tertiary)',
+                            }}
+                          >
+                            <X size={12} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </form>
         )}
       </div>
     </ModalShell>
