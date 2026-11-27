@@ -36,28 +36,106 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm --workspace @atelier/desktop run build:release -- --bundles nsis
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            desktop/src-tauri/target/release/bundle/nsis/Atelier_*_x64-setup.exe
+            desktop/src-tauri/target/release/bundle/nsis/Atelier_*_x64-setup.exe.sig
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build packages & web UI
+        run: npm run build
+
+      - name: Build & sign Tauri macOS app + DMG
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm --workspace @atelier/desktop run build:release
 
-      - name: Generate latest.json updater manifest
-        shell: pwsh
+      - name: Rename macOS updater archive with version & arch
         run: |
-          $conf = Get-Content -Raw desktop/src-tauri/tauri.conf.json | ConvertFrom-Json
-          $ver = $conf.version
-          $tag = if ($env:GITHUB_REF_NAME -match '^v') { $env:GITHUB_REF_NAME } else { "v$ver" }
-          $nsisDir = "desktop/src-tauri/target/release/bundle/nsis"
-          $exeName = "Atelier_${ver}_x64-setup.exe"
-          $sig = (Get-Content -Raw "$nsisDir/$exeName.sig").Trim()
-          $url = "https://github.com/${{ github.repository }}/releases/download/$tag/$exeName"
-          $manifest = @{
-            version = $ver
-            notes = "Atelier $tag"
-            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-            platforms = @{
-              "windows-x86_64" = @{ signature = $sig; url = $url }
-              "windows-x86_64-nsis" = @{ signature = $sig; url = $url }
-            }
-          }
-          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 "$nsisDir/latest.json"
+          VER=$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")
+          MAC_DIR="desktop/src-tauri/target/release/bundle/macos"
+          mv "$MAC_DIR/Atelier.app.tar.gz" "$MAC_DIR/Atelier_${VER}_aarch64.app.tar.gz"
+          mv "$MAC_DIR/Atelier.app.tar.gz.sig" "$MAC_DIR/Atelier_${VER}_aarch64.app.tar.gz.sig"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: |
+            desktop/src-tauri/target/release/bundle/macos/Atelier_*_aarch64.app.tar.gz
+            desktop/src-tauri/target/release/bundle/macos/Atelier_*_aarch64.app.tar.gz.sig
+            desktop/src-tauri/target/release/bundle/dmg/Atelier_*_aarch64.dmg
+
+  publish:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate combined latest.json updater manifest
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const conf = JSON.parse(fs.readFileSync("desktop/src-tauri/tauri.conf.json", "utf8"));
+            const ver = conf.version;
+            const ref = process.env.GITHUB_REF_NAME || "";
+            const tag = ref.startsWith("v") ? ref : `v${ver}`;
+            const repo = process.env.GITHUB_REPOSITORY;
+            const dir = "release-artifacts";
+
+            const winExe = `Atelier_${ver}_x64-setup.exe`;
+            const winSig = fs.readFileSync(path.join(dir, `${winExe}.sig`), "utf8").trim();
+            const winUrl = `https://github.com/${repo}/releases/download/${tag}/${winExe}`;
+
+            const macTar = `Atelier_${ver}_aarch64.app.tar.gz`;
+            const macSig = fs.readFileSync(path.join(dir, `${macTar}.sig`), "utf8").trim();
+            const macUrl = `https://github.com/${repo}/releases/download/${tag}/${macTar}`;
+
+            const manifest = {
+              version: ver,
+              notes: `Atelier ${tag}`,
+              pub_date: new Date().toISOString(),
+              platforms: {
+                "windows-x86_64": { signature: winSig, url: winUrl },
+                "windows-x86_64-nsis": { signature: winSig, url: winUrl },
+                "darwin-aarch64": { signature: macSig, url: macUrl },
+              },
+            };
+            fs.writeFileSync(path.join(dir, "latest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
+          '
 
       - name: Upload GitHub Release assets
         uses: softprops/action-gh-release@v2
@@ -65,6 +143,9 @@ jobs:
           name: Atelier ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            desktop/src-tauri/target/release/bundle/nsis/Atelier_*_x64-setup.exe
-            desktop/src-tauri/target/release/bundle/nsis/Atelier_*_x64-setup.exe.sig
-            desktop/src-tauri/target/release/bundle/nsis/latest.json
+            release-artifacts/Atelier_*_x64-setup.exe
+            release-artifacts/Atelier_*_x64-setup.exe.sig
+            release-artifacts/Atelier_*_aarch64.app.tar.gz
+            release-artifacts/Atelier_*_aarch64.app.tar.gz.sig
+            release-artifacts/Atelier_*_aarch64.dmg
+            release-artifacts/latest.json
