@@ -74,7 +74,9 @@ export function resolveMaxToolCallsPerTurn(
   if (Number.isInteger(override) && override > 0) return override;
   if (turn.memoryOnly) return 1;
   if (turn.turnPurpose === 'dispatch') return 6;
-  if (!turn.agent.allowShell) return 10;
+  const hasExternalTools =
+    (turn.agent.mcpServerIds?.length ?? 0) > 0 || Boolean(turn.agent.browser?.enabled);
+  if (!turn.agent.allowShell && !hasExternalTools) return 10;
   if (EXPLORATION_PROMPT_RE.test(turn.prompt) && !IMPLEMENTATION_PROMPT_RE.test(turn.prompt)) {
     return 12;
   }

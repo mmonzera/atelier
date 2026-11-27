@@ -170,8 +170,8 @@ export function createHttpRouter(deps: {
 
   const skillSchema = z.object({
     id: z.string().trim().min(1),
-    name: z.string().trim().min(1).max(80),
-    description: z.string().max(240).default(''),
+    name: z.string().trim().min(1).max(160),
+    description: z.string().max(2000).default(''),
     content: z.string(),
     sourcePath: z.string().nullable().optional(),
     enabled: z.boolean().default(true),
@@ -347,7 +347,10 @@ export function createHttpRouter(deps: {
     const body = await c.req.json().catch(() => null);
     const parsed = agentInputSchema.partial().safeParse(body);
     if (!parsed.success) {
-      return c.json(apiError('invalid_agent_update', 'Invalid agent update payload.'), 400);
+      const issue = parsed.error.issues[0];
+      const field = issue && issue.path.length > 0 ? issue.path.join('.') : null;
+      const detail = issue ? `${field ? `${field}: ` : ''}${issue.message}` : 'Invalid agent update payload.';
+      return c.json(apiError('invalid_agent_update', `Invalid agent update payload (${detail}).`), 400);
     }
 
     const agent = store.updateAgentConfig(id, parsed.data);

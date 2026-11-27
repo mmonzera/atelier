@@ -218,6 +218,12 @@ describe('Harness speed & token-economy optimizations', () => {
     ).toBe(10);
     expect(
       resolveMaxToolCallsPerTurn({
+        agent: { ...agent, allowShell: false, mcpServerIds: ['figelo'] } as Agent,
+        prompt: 'Tolong relayout modal settings di Figma',
+      }),
+    ).toBe(28);
+    expect(
+      resolveMaxToolCallsPerTurn({
         agent: logoAgent,
         prompt: 'Route request',
         turnPurpose: 'dispatch',
