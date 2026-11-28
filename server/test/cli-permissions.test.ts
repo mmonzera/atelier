@@ -203,6 +203,38 @@ describe('Unified CLI permission helpers', () => {
     expect(claudeDiscovered.has('cwd-mcp')).toBe(true);
     expect(claudeDiscovered.has('unrelated-mcp')).toBe(false);
 
+    // On Windows, ~/.claude.json project keys often use forward slashes and different drive/path casing
+    const winProjRoot = path.join(tmpClaudeHome, 'WinCaseProj');
+    const winProjSub = path.join(winProjRoot, 'Sub');
+    fs.mkdirSync(winProjSub, { recursive: true });
+    const winCaseKey =
+      process.platform === 'win32'
+        ? winProjRoot
+            .replace(/\\/g, '/')
+            .replace(/[A-Za-z]/g, (ch) => (ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase()))
+        : winProjRoot;
+    fs.writeFileSync(
+      path.join(tmpClaudeHome, '.claude.json'),
+      JSON.stringify({
+        projects: {
+          [winCaseKey]: {
+            mcpServers: { 'win-case-mcp': { url: 'http://127.0.0.1:4100' } },
+          },
+          [tmpOtherProject]: {
+            mcpServers: { 'unrelated-mcp': { url: 'http://127.0.0.1:5000' } },
+          },
+        },
+      }),
+      'utf8',
+    );
+    const winCaseDiscovered = discoverGlobalClaudeMcpNames({
+      homeDir: tmpClaudeHome,
+      claudeConfigDir: path.join(tmpClaudeHome, '.claude'),
+      cwd: winProjSub,
+    });
+    expect(winCaseDiscovered.has('win-case-mcp')).toBe(true);
+    expect(winCaseDiscovered.has('unrelated-mcp')).toBe(false);
+
     // buildCodexMcpArgs always sets default_tools_approval_mode="approve" for attached servers
     const attachedCodexArgs = buildCodexMcpArgs([
       {

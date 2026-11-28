@@ -223,6 +223,11 @@ function readJsonFileSafe(filePath: string): unknown {
   }
 }
 
+function normalizePathForCompare(p: string): string {
+  const resolved = path.resolve(p);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 export function discoverGlobalClaudeMcpNames(opts?: {
   homeDir?: string;
   claudeConfigDir?: string;
@@ -238,6 +243,7 @@ export function discoverGlobalClaudeMcpNames(opts?: {
   ]);
 
   const normalizedCwd = opts?.cwd ? path.resolve(opts.cwd) : null;
+  const compareCwd = normalizedCwd ? normalizePathForCompare(normalizedCwd) : null;
   for (const claudeJsonPath of claudeJsonCandidates) {
     const parsed = readJsonFileSafe(claudeJsonPath);
     if (!parsed || typeof parsed !== 'object') continue;
@@ -245,15 +251,13 @@ export function discoverGlobalClaudeMcpNames(opts?: {
     const projects = (parsed as Record<string, unknown>).projects;
     if (projects && typeof projects === 'object' && !Array.isArray(projects)) {
       for (const [projPath, projCfg] of Object.entries(projects as Record<string, unknown>)) {
-        if (!normalizedCwd) {
+        if (!compareCwd) {
           collectMcpNamesFromJsonObject(projCfg, names);
           continue;
         }
-        const resolvedProj = path.resolve(projPath);
-        if (
-          normalizedCwd === resolvedProj ||
-          normalizedCwd.startsWith(resolvedProj + path.sep)
-        ) {
+        const resolvedProj = normalizePathForCompare(projPath);
+        const projPrefix = resolvedProj.endsWith(path.sep) ? resolvedProj : resolvedProj + path.sep;
+        if (compareCwd === resolvedProj || compareCwd.startsWith(projPrefix)) {
           collectMcpNamesFromJsonObject(projCfg, names);
         }
       }
