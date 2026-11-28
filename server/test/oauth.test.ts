@@ -1,6 +1,12 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import type { McpServerConfig } from '@atelier/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { openExternalBrowserUrl } from '../src/http.js';
+import { startAtelierServer, type AtelierServerHandle } from '../src/index.js';
 import {
   OAuthClientRequiredError,
   completeMcpOAuth,
@@ -267,5 +273,67 @@ describe('MCP OAuth login', () => {
     await startMcpOAuth(store, server, REDIRECT);
     expect(requested.some((u) => u.startsWith('http://evil.example'))).toBe(false);
     expect(requested).toContain('https://mcp.example.com/.well-known/oauth-protected-resource/mcp');
+  });
+
+  it('validates external browser URLs and returns openedExternally on /oauth/start when openInBrowser is true', async () => {
+    vi.useRealTimers();
+    installProvider();
+
+    expect(openExternalBrowserUrl('https://connect.composio.dev/auth')).toBe(true);
+    expect(openExternalBrowserUrl('http://127.0.0.1:4317/callback')).toBe(true);
+    expect(openExternalBrowserUrl('javascript:alert(1)')).toBe(false);
+    expect(openExternalBrowserUrl('file:///etc/passwd')).toBe(false);
+    expect(openExternalBrowserUrl('not a url')).toBe(false);
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-oauth-http-'));
+    let handle: AtelierServerHandle | null = null;
+    try {
+      handle = await startAtelierServer({
+        configOverrides: {
+          port: 0,
+          dataDir: path.join(dir, 'data'),
+          workspacesDir: path.join(dir, 'ws'),
+          dbPath: path.join(dir, 'atelier.db'),
+        },
+      });
+      const srv = handle.store.addMcpServer({
+        name: 'example',
+        transport: 'http',
+        url: MCP,
+        enabled: true,
+        auth: 'oauth',
+      });
+      const payload = JSON.stringify({ openInBrowser: true });
+      const res = await new Promise<{ status: number; body: { authUrl: string; openedExternally: boolean } }>(
+        (resolve, reject) => {
+          const req = http.request(
+            `http://127.0.0.1:${handle!.port}/api/mcp/servers/${srv.id}/oauth/start`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(payload),
+              },
+            },
+            (r) => {
+              let raw = '';
+              r.on('data', (chunk) => (raw += chunk));
+              r.on('end', () => {
+                resolve({ status: r.statusCode ?? 0, body: JSON.parse(raw) });
+              });
+            },
+          );
+          req.on('error', reject);
+          req.write(payload);
+          req.end();
+        },
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.authUrl).toContain(`${AS}/authorize`);
+      expect(res.body.openedExternally).toBe(true);
+    } finally {
+      await handle?.close().catch(() => undefined);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

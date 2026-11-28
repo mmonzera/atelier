@@ -48,6 +48,44 @@ function apiError(code: string, message: string): ApiErrorResponse {
   return { error: { code, message } };
 }
 
+export function openExternalBrowserUrl(rawUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return false;
+  }
+  if (process.env.VITEST) {
+    return true;
+  }
+  try {
+    const target = parsed.toString();
+    if (process.platform === 'win32') {
+      execFile(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'Start-Process -FilePath $env:ATELIER_OPEN_URL',
+        ],
+        { env: { ...process.env, ATELIER_OPEN_URL: target }, windowsHide: true },
+        () => {},
+      );
+    } else if (process.platform === 'darwin') {
+      execFile('open', [target], () => {});
+    } else {
+      execFile('xdg-open', [target], () => {});
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseSkillMarkdown(raw: string, fallbackName: string): {
   name: string;
   description: string;
@@ -1384,17 +1422,28 @@ export function createHttpRouter(deps: {
       return c.json(apiError('mcp_not_found', `MCP server ${id} not found.`), 404);
     }
     const creds = z
-      .object({ clientId: z.string().trim().max(200).optional(), clientSecret: z.string().max(500).optional() })
+      .object({
+        clientId: z.string().trim().max(200).optional(),
+        clientSecret: z.string().max(500).optional(),
+        openInBrowser: z.boolean().optional(),
+      })
       .safeParse(await c.req.json().catch(() => ({})));
     try {
       const redirectUri = `http://127.0.0.1:${config.port}/api/mcp/oauth/callback`;
+      const bodyData = creds.success ? creds.data : undefined;
       const authUrl = await startMcpOAuth(
         store,
         server,
         redirectUri,
-        creds.success ? creds.data : undefined,
+        bodyData?.clientId || bodyData?.clientSecret
+          ? { clientId: bodyData.clientId, clientSecret: bodyData.clientSecret }
+          : undefined,
       );
-      return c.json({ authUrl });
+      const shouldOpenExternally =
+        bodyData?.openInBrowser === true ||
+        (Boolean(process.env.ATELIER_EMBEDDED) && bodyData?.openInBrowser !== false);
+      const openedExternally = shouldOpenExternally ? openExternalBrowserUrl(authUrl) : false;
+      return c.json({ authUrl, openedExternally });
     } catch (err) {
       const code = err instanceof OAuthClientRequiredError ? 'oauth_client_required' : 'oauth_start_failed';
       return c.json(

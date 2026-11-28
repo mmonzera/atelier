@@ -606,10 +606,13 @@ export const api = {
       '/api/mcp/oauth-status',
     ),
 
-  startMcpOAuth: (id: string, creds?: { clientId: string; clientSecret?: string }) =>
-    request<{ authUrl: string }>(`/api/mcp/servers/${id}/oauth/start`, {
+  startMcpOAuth: (
+    id: string,
+    opts?: { clientId?: string; clientSecret?: string; openInBrowser?: boolean },
+  ) =>
+    request<{ authUrl: string; openedExternally?: boolean }>(`/api/mcp/servers/${id}/oauth/start`, {
       method: 'POST',
-      body: JSON.stringify(creds ?? {}),
+      body: JSON.stringify(opts ?? {}),
     }),
 
   disconnectMcpOAuth: (id: string) =>

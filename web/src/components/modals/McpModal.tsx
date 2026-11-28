@@ -146,14 +146,16 @@ export function McpModal({
   const [oauthClientId, setOauthClientId] = useState('');
   const [oauthClientSecret, setOauthClientSecret] = useState('');
   const popupRef = useRef<Window | null>(null);
+  const connectStartedAtRef = useRef<number>(0);
 
   const refreshOauth = useCallback(async () => {
     try {
       const res = await api.getMcpOAuthStatus();
       setOauthStatus(res.status);
       setRedirectUri(res.redirectUri);
+      return res.status;
     } catch {
-      // status is best-effort
+      return null;
     }
   }, []);
 
@@ -174,28 +176,57 @@ export function McpModal({
     return () => window.removeEventListener('message', onMessage);
   }, [refreshOauth]);
 
-  // while a login window is open: watch for completion or the window being closed
+  // while a login window (or system browser tab) is open: watch for completion, close, or timeout
   useEffect(() => {
     if (!connectingId) return;
+    const activeId = connectingId;
     const timer = window.setInterval(() => {
-      void refreshOauth();
-      if (popupRef.current?.closed) setConnectingId(null);
+      void refreshOauth().then((nextStatus) => {
+        if (nextStatus?.[activeId]?.connected) {
+          popupRef.current = null;
+          setConnectingId(null);
+          setError(null);
+          toast.success(t('Logged in. Connection is ready.'));
+          if (addOnly) onClose();
+        }
+      });
+      if (popupRef.current?.closed) {
+        popupRef.current = null;
+        setConnectingId(null);
+      } else if (
+        !popupRef.current &&
+        connectStartedAtRef.current > 0 &&
+        Date.now() - connectStartedAtRef.current > 3 * 60_000
+      ) {
+        setConnectingId(null);
+      }
     }, 1500);
     return () => window.clearInterval(timer);
-  }, [connectingId, refreshOauth]);
+  }, [connectingId, refreshOauth, addOnly, onClose]);
 
   const connect = async (id: string, creds?: { clientId: string; clientSecret?: string }) => {
     setError(null);
     setConnectingId(id);
-    // open synchronously (inside the click) so popup blockers allow it, then point it at the login page
+    connectStartedAtRef.current = Date.now();
+    // open synchronously (inside the click) so popup blockers allow it; in desktop webviews w is null so fall back to system browser
     const w = window.open('', 'atelier-mcp-oauth', 'width=520,height=720');
     popupRef.current = w;
     try {
-      const { authUrl } = await api.startMcpOAuth(id, creds);
+      const { authUrl, openedExternally } = await api.startMcpOAuth(id, {
+        ...(creds ?? {}),
+        openInBrowser: !w,
+      });
+      if (openedExternally) {
+        w?.close();
+        popupRef.current = null;
+        toast.info(t('Login opened in your browser. Complete sign-in there and return to Atelier.'));
+        return;
+      }
       if (!w) throw new Error(t('The login window was blocked. Allow popups for this page and try again.'));
       w.location.href = authUrl;
     } catch (err) {
       w?.close();
+      popupRef.current = null;
       setConnectingId(null);
       setError(err instanceof Error ? err.message : t('Could not start login'));
     }
