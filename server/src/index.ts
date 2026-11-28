@@ -17,6 +17,7 @@ import { ChromeExtensionBridge, createChromeExtPublicRouter } from './browser/ch
 import { BrowserManager } from './browser/manager.js';
 import { createBrowserMcpRouter } from './browser/mcp-endpoint.js';
 import { createBrowserRoutes } from './browser/routes.js';
+import { OfficeManager, createOfficeMcpRouter } from './office/mcp-endpoint.js';
 import { type AppConfig, loadConfig } from './config.js';
 import { GroupChatMigrationError } from './channels/migration.js';
 import { AtelierDb } from './db.js';
@@ -43,6 +44,7 @@ export interface AtelierServerHandle {
   vault: LocalVault;
   backup: BackupService;
   browserManager: BrowserManager;
+  officeManager: OfficeManager;
   chromeBridge: ChromeExtensionBridge;
   credentials: CredentialStore;
   sttInstaller: SttInstaller;
@@ -99,6 +101,7 @@ export async function startAtelierServer(opts?: {
 
   const credentials = new CredentialStore(db, config.dataDir);
   const browserManager = new BrowserManager({ db, store, bus, config, credentials });
+  const officeManager = new OfficeManager({ store, config });
 
   const runtime = new AgentRuntime(
     store,
@@ -106,6 +109,8 @@ export async function startAtelierServer(opts?: {
     opts?.customRunner,
     opts?.customRunnerFactory,
     browserManager,
+    undefined,
+    officeManager,
   );
   const authManager = new ProviderAuthManager();
   const cliInstaller = new CliInstaller({
@@ -246,6 +251,7 @@ export async function startAtelierServer(opts?: {
     }),
   );
   app.route('/mcp/browser', createBrowserMcpRouter({ browserManager, config }));
+  app.route('/mcp/office', createOfficeMcpRouter({ officeManager, config }));
   app.route('/chrome-ext', createChromeExtPublicRouter(chromeBridge, config));
 
   // The desktop shell bundles the server into one file, so it passes the web build location explicitly.
@@ -316,6 +322,7 @@ export async function startAtelierServer(opts?: {
     vault,
     backup,
     browserManager,
+    officeManager,
     chromeBridge,
     credentials,
     sttInstaller,

@@ -290,7 +290,7 @@ export const MCP_PRESETS: McpPreset[] = [
   {
     id: 'composio',
     name: 'composio',
-    description: 'One login for 1,500+ apps: Gmail, Slack, GitHub, Notion, HubSpot and more.',
+    description: 'One login for Microsoft 365 (Outlook, Teams, OneDrive, Excel), Google Workspace (Gmail, Drive, Docs, Sheets, Calendar), Slack, Notion & 1,500+ apps.',
     transport: 'http',
     url: 'https://connect.composio.dev/mcp',
     auth: 'oauth',
@@ -780,6 +780,10 @@ export interface AgentBrowserAccess {
   defaultProfileId?: string | null;
 }
 
+export interface AgentOfficeAccess {
+  enabled: boolean;
+}
+
 export type BrowserSessionStatus =
   | 'idle'
   | 'working'
@@ -932,6 +936,7 @@ export interface Agent {
   mcpServerIds: string[];
   allowShell: boolean;
   browser?: AgentBrowserAccess;
+  office?: AgentOfficeAccess;
   providerOverride: ModelProvider | null;
   modelOverride: string | null;
   fallbackChain?: ModelRef[];
@@ -1702,6 +1707,7 @@ export interface CreateAgentInput {
   mcpServerIds?: string[];
   allowShell?: boolean;
   browser?: AgentBrowserAccess;
+  office?: AgentOfficeAccess;
   providerOverride?: ModelProvider | null;
   modelOverride?: string | null;
   fallbackChain?: ModelRef[];
@@ -1717,6 +1723,7 @@ export interface UpdateAgentInput {
   mcpServerIds?: string[];
   allowShell?: boolean;
   browser?: AgentBrowserAccess;
+  office?: AgentOfficeAccess;
   providerOverride?: ModelProvider | null;
   modelOverride?: string | null;
   fallbackChain?: ModelRef[];
@@ -1948,7 +1955,7 @@ export const ATTACHMENT_LIMITS = {
 export const ATTACHMENT_ONLY_TEXT = 'Please look at the attached file(s).';
 
 /** An image or document saved in a project: a chat upload, a design/generated artifact, or a workspace deliverable. */
-export type PreviewFileKind = 'markdown' | 'image' | 'svg' | 'pdf' | 'word' | 'excel' | 'text' | 'file';
+export type PreviewFileKind = 'markdown' | 'image' | 'svg' | 'pdf' | 'word' | 'excel' | 'powerpoint' | 'text' | 'file';
 
 export interface WordPreviewRun {
   text: string;
@@ -1974,6 +1981,14 @@ export interface ExcelPreviewSheet {
   totalCols: number;
 }
 
+export interface PptxPreviewSlide {
+  slideNumber: number;
+  title: string;
+  bullets: string[];
+  tables?: string[][][];
+  notes?: string;
+}
+
 export interface FilePreviewData {
   name: string;
   /** Full absolute path on this computer. */
@@ -1994,6 +2009,9 @@ export interface FilePreviewData {
   };
   excel?: {
     sheets: ExcelPreviewSheet[];
+  };
+  powerpoint?: {
+    slides: PptxPreviewSlide[];
   };
 }
 

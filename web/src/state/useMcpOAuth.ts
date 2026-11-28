@@ -1,4 +1,4 @@
-import type { McpOAuthStatus } from '@atelier/contracts';
+import type { McpOAuthStatus, McpPreset, McpServerConfig } from '@atelier/contracts';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { toast } from '../components/Toast';
@@ -63,6 +63,47 @@ export function useMcpOAuth() {
     }
   }, []);
 
+  const addAndConnect = useCallback(
+    async (
+      preset: McpPreset,
+      onCreated?: (server: McpServerConfig) => Promise<void> | void,
+    ): Promise<McpServerConfig | null> => {
+      setError(null);
+      setConnectingId(preset.id);
+      // Open popup synchronously on click before creating the server + starting OAuth
+      const w = window.open('', 'atelier-mcp-oauth', 'width=520,height=720');
+      popupRef.current = w;
+      try {
+        const { server } = await api.createMcpServer({
+          name: preset.name,
+          transport: preset.transport,
+          url: preset.url,
+          enabled: true,
+          presetId: preset.id,
+          description: preset.description,
+          auth: preset.auth,
+          oauthScope: preset.oauthScope,
+        });
+        setConnectingId(server.id);
+        await onCreated?.(server);
+        const { authUrl } = await api.startMcpOAuth(server.id);
+        if (!w) {
+          throw new Error(t('The login window was blocked. Allow popups for this page and try again.'));
+        }
+        w.location.href = authUrl;
+        return server;
+      } catch (err) {
+        w?.close();
+        setConnectingId(null);
+        const message = err instanceof Error ? err.message : t('Could not start login');
+        setError(message);
+        toast.error(message);
+        return null;
+      }
+    },
+    [],
+  );
+
   const disconnect = useCallback(
     async (id: string) => {
       try {
@@ -76,5 +117,5 @@ export function useMcpOAuth() {
     [refresh],
   );
 
-  return { status, connectingId, error, connect, disconnect, refresh };
+  return { status, connectingId, error, connect, addAndConnect, disconnect, refresh };
 }

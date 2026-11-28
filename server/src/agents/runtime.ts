@@ -22,6 +22,7 @@ import {
 } from '@atelier/contracts';
 import { AttachmentStore } from '../attachments.js';
 import type { BrowserManager } from '../browser/manager.js';
+import type { OfficeManager } from '../office/mcp-endpoint.js';
 import { RoomContextBuilder } from '../channels/context.js';
 import { LoopGuard } from '../channels/loop-guard.js';
 import { routeRoomMessage } from '../channels/router.js';
@@ -82,6 +83,7 @@ export class AgentRuntime {
   private readonly runner: AgentRunner;
   private readonly attachmentStore: AttachmentStore;
   private readonly browserManager?: BrowserManager;
+  private readonly officeManager?: OfficeManager;
 
   constructor(
     private readonly store: AtelierStore,
@@ -90,8 +92,10 @@ export class AgentRuntime {
     customRunnerFactory?: (deps: { store: AtelierStore; enqueue: EnqueueTaskFn }) => AgentRunner,
     browserManager?: BrowserManager,
     schedulerOpts?: { idleTimeoutMin?: number; maxTurnMin?: number; sweepIntervalMs?: number },
+    officeManager?: OfficeManager,
   ) {
     this.browserManager = browserManager;
+    this.officeManager = officeManager;
     this.attachmentStore = new AttachmentStore(config.dataDir);
     this.loopGuard = new LoopGuard(store.sqlite);
     const roomCfg = store.getSettings().room;
@@ -107,7 +111,7 @@ export class AgentRuntime {
     this.runner =
       customRunner ??
       customRunnerFactory?.({ store, enqueue: this.enqueue.bind(this) }) ??
-      new CliAgentRunner(store, config, getEnqueue, browserManager);
+      new CliAgentRunner(store, config, getEnqueue, browserManager, officeManager);
   }
 
   private handleLeaseTimeout(lease: RoomLease, reason: 'idle_timeout' | 'hard_timeout'): void {

@@ -24,6 +24,7 @@ import {
   type AgentAvatarShape,
   type AgentBrowserAccess,
   type AgentColor,
+  type AgentOfficeAccess,
   type AutoCompactSettings,
   type BrowserScreenshotSummary,
   type CreateAgentInput,
@@ -263,6 +264,16 @@ export class AtelierStore {
                 typeof (raw.browser as AgentBrowserAccess).defaultProfileId === 'string'
                   ? (raw.browser as AgentBrowserAccess).defaultProfileId
                   : null,
+            },
+          }
+        : {}),
+      ...(raw.office && typeof raw.office === 'object'
+        ? {
+            office: {
+              enabled:
+                typeof (raw.office as AgentOfficeAccess).enabled === 'boolean'
+                  ? (raw.office as AgentOfficeAccess).enabled
+                  : true,
             },
           }
         : {}),
@@ -1056,6 +1067,7 @@ export class AtelierStore {
       mcpServerIds: input.mcpServerIds ?? [],
       allowShell: input.allowShell ?? true,
       ...(input.browser ? { browser: input.browser } : {}),
+      ...(input.office ? { office: input.office } : {}),
       providerOverride: input.providerOverride ?? null,
       modelOverride: input.modelOverride ?? null,
       fallbackChain: input.fallbackChain ?? [],
@@ -1369,6 +1381,11 @@ export class AtelierStore {
           ? { browser: patch.browser }
           : existing.browser !== undefined
             ? { browser: existing.browser }
+            : {}),
+        ...(patch.office !== undefined
+          ? { office: patch.office }
+          : existing.office !== undefined
+            ? { office: existing.office }
             : {}),
         providerOverride:
           patch.providerOverride !== undefined ? patch.providerOverride : existing.providerOverride,

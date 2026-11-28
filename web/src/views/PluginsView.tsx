@@ -8,8 +8,10 @@ import {
 import {
   ArrowLeft,
   ArrowRight,
+  Blocks,
   Check,
   ChevronDown,
+  FileSpreadsheet,
   FlaskConical,
   Link2,
   MoreHorizontal,
@@ -281,6 +283,37 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
     () => new Set(settings.mcpServers.map((s) => s.presetId).filter(Boolean)),
     [settings.mcpServers],
   );
+  const composioPreset = useMemo(() => MCP_PRESETS.find((p) => p.id === 'composio') ?? null, []);
+  const composioServer = useMemo(
+    () =>
+      settings.mcpServers.find(
+        (s) => s.presetId === 'composio' || s.name.toLowerCase() === 'composio',
+      ) ?? null,
+    [settings.mcpServers],
+  );
+  const composioConnected = Boolean(composioServer && oauth.status[composioServer.id]?.connected);
+
+  const handleConnectAllCloud = () => {
+    if (composioServer) {
+      void oauth.connect(composioServer.id);
+      return;
+    }
+    if (!composioPreset) return;
+    void oauth.addAndConnect(composioPreset, async (server) => {
+      try {
+        const state = await api.getState();
+        await Promise.all(
+          state.agents.map((agt) => {
+            const current = agt.mcpServerIds ?? [];
+            if (current.includes(server.id)) return Promise.resolve();
+            return api.updateAgent(agt.id, { mcpServerIds: [...current, server.id] });
+          }),
+        );
+      } catch {
+        // best-effort auto-attach to existing agents
+      }
+    });
+  };
 
   const visibleMine = showAllMine || needle ? mine : mine.slice(0, PREVIEW_COUNT);
   const visibleDirectory = showAllDirectory || needle ? directory : directory.slice(0, 8);
@@ -678,6 +711,139 @@ export function PluginsView({ settings, onBack }: { settings: Settings; onBack: 
             )}
           </div>
         </div>
+
+        {/* Built-in & All-in-One Workspace */}
+        <section style={{ marginBottom: 30 }}>
+          <SectionHeader title={t('Built-in & All-in-One Workspace')} />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              gap: 12,
+            }}
+          >
+            <div
+              style={{
+                padding: '14px 16px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--surface-1)',
+                border: '1px solid var(--border-subtle)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+              }}
+            >
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 9,
+                  background: 'rgba(56, 201, 118, 0.14)',
+                  color: 'var(--agent-green)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <FileSpreadsheet size={18} strokeWidth={1.6} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>
+                  {t('Local Office')}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  {t('Word (.docx), Excel (.xlsx), PowerPoint (.pptx), PDF')}
+                </div>
+              </div>
+              <span
+                style={{
+                  ...pillBase,
+                  background: 'rgba(56, 201, 118, 0.14)',
+                  color: 'var(--agent-green)',
+                  fontWeight: 500,
+                }}
+              >
+                {t('Built-in · Active')}
+              </span>
+            </div>
+
+            <div
+              style={{
+                padding: '14px 16px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--surface-1)',
+                border: '1px solid var(--border-subtle)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+              }}
+            >
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 9,
+                  background: 'rgba(251, 113, 133, 0.14)',
+                  color: '#fb7185',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <Blocks size={18} strokeWidth={1.6} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>
+                  {t('All Cloud Apps')}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  {t('Microsoft 365, Google Workspace & Slack (Composio)')}
+                </div>
+              </div>
+              {composioConnected ? (
+                <span
+                  style={{
+                    ...pillBase,
+                    background: 'rgba(56, 201, 118, 0.14)',
+                    color: 'var(--agent-green)',
+                    fontWeight: 500,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  <Check size={12} strokeWidth={2} />
+                  {t('Connected')}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={
+                    oauth.connectingId === 'composio' ||
+                    (composioServer ? oauth.connectingId === composioServer.id : false)
+                  }
+                  onClick={handleConnectAllCloud}
+                  style={{
+                    ...ghostBtn,
+                    background: 'var(--action-primary)',
+                    borderColor: 'transparent',
+                    color: 'var(--action-primary-fg)',
+                    fontWeight: 500,
+                  }}
+                >
+                  {oauth.connectingId === 'composio' ||
+                  (composioServer && oauth.connectingId === composioServer.id)
+                    ? t('Waiting…')
+                    : composioServer
+                      ? t('Reconnect')
+                      : t('Connect all cloud apps')}
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
 
         {/* Your plugins */}
         <section style={{ marginBottom: 38 }}>

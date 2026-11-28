@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { BrowserManager } from '../browser/manager.js';
+import type { OfficeManager } from '../office/mcp-endpoint.js';
 import type { AppConfig } from '../config.js';
 import {
   getAgentWorkspacePath,
@@ -42,6 +43,7 @@ export class ClaudeAgentRunner implements AgentRunner {
     private readonly config: AppConfig,
     private readonly getEnqueue: () => EnqueueTaskFn,
     private readonly browserManager?: BrowserManager,
+    private readonly officeManager?: OfficeManager,
   ) {}
 
   async run(turn: Turn, cb: TurnCallbacks): Promise<{ finalText: string }> {
@@ -162,6 +164,7 @@ export class ClaudeAgentRunner implements AgentRunner {
       channelId: turn.channelId,
       rootMessageId: turn.rootMessageId,
     });
+    const officeEnabled = !turn.memoryOnly && (turn.agent.office?.enabled ?? true) && Boolean(this.officeManager);
     const atelierMcp = await createAtelierSdkMcpServer(
       tools,
       !turn.memoryOnly && turn.agent.browser?.enabled && this.browserManager
@@ -172,6 +175,18 @@ export class ClaudeAgentRunner implements AgentRunner {
               projectId: turn.project?.id ?? null,
               messageId: turn.replyMessageId ?? null,
               signal: turn.signal,
+            },
+          }
+        : undefined,
+      officeEnabled
+        ? {
+            store: this.store,
+            config: this.config,
+            ctx: {
+              agentId: turn.agent.id,
+              projectId: turn.project?.id ?? null,
+              cwd,
+              allowShell: turn.agent.allowShell,
             },
           }
         : undefined,

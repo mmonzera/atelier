@@ -34,13 +34,14 @@ interface PreviewViewProps {
 }
 
 type PreviewMode = 'live-url' | 'files';
-type FileCategoryFilter = 'all' | 'markdown' | 'word' | 'excel' | 'pdf' | 'image';
+type FileCategoryFilter = 'all' | 'markdown' | 'word' | 'excel' | 'powerpoint' | 'pdf' | 'image';
 
 const FILE_CATEGORIES: Array<{ id: FileCategoryFilter; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'markdown', label: 'Markdown' },
   { id: 'word', label: 'Word' },
   { id: 'excel', label: 'Excel' },
+  { id: 'powerpoint', label: 'PowerPoint' },
   { id: 'pdf', label: 'PDF' },
   { id: 'image', label: 'Images' },
 ];
@@ -284,7 +285,7 @@ export function PreviewView({
               type="text"
               value={customPathInput}
               onChange={(e) => setCustomPathInput(e.target.value)}
-              placeholder={t('Enter file path to preview (.md, .pdf, .docx, .xlsx, .csv, .png, .svg)…')}
+              placeholder={t('Enter file path to preview (.md, .pdf, .docx, .xlsx, .pptx, .csv, .png, .svg)…')}
               className="mono-num"
               style={{
                 flex: 1,

@@ -16,6 +16,11 @@ import {
   executeBrowserTool,
 } from '../browser/tools.js';
 import type { BrowserManager } from '../browser/manager.js';
+import {
+  OFFICE_TOOL_DEFS,
+  type OfficeToolContext,
+  executeOfficeTool,
+} from '../office/tools.js';
 import type { AppConfig } from '../config.js';
 import { runBrowserQa } from '../qa/browser-qa.js';
 import { type AtelierStore, newId } from '../store.js';
@@ -800,6 +805,7 @@ export function createStudioTools(deps: {
 export async function createAtelierSdkMcpServer(
   tools: StudioTools,
   extraBrowser?: { browserManager: BrowserManager; ctx: BrowserToolContext },
+  extraOffice?: { store: AtelierStore; config: AppConfig; ctx: OfficeToolContext },
 ): Promise<unknown | null> {
   try {
     const modName = '@anthropic-ai/claude-agent-sdk';
@@ -898,6 +904,22 @@ export async function createAtelierSdkMcpServer(
                   def.name,
                   args,
                   extraBrowser.ctx,
+                );
+                return {
+                  content: [{ type: 'text', text: res.text }],
+                  ...(res.isError ? { isError: true } : {}),
+                };
+              }),
+            )
+          : []),
+        ...(extraOffice
+          ? OFFICE_TOOL_DEFS.map((def) =>
+              sdk.tool!(def.name, def.description, def.schema.shape, async (args) => {
+                const res = await executeOfficeTool(
+                  { store: extraOffice.store, config: extraOffice.config },
+                  def.name,
+                  args,
+                  extraOffice.ctx,
                 );
                 return {
                   content: [{ type: 'text', text: res.text }],

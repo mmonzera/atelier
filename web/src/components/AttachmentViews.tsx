@@ -23,6 +23,7 @@ function guessAttachmentPreviewKind(a: MessageAttachment): PreviewFileKind {
   if (ext === 'pdf' || a.mime === 'application/pdf') return 'pdf';
   if (ext === 'docx') return 'word';
   if (ext === 'xlsx' || ext === 'csv' || ext === 'tsv') return 'excel';
+  if (ext === 'pptx') return 'powerpoint';
   if (a.kind === 'text') return 'text';
   return 'file';
 }

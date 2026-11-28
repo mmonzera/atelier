@@ -13,6 +13,7 @@ import {
 import { AttachmentStore, INLINE_IMAGE_MIMES, isAttachmentId, sanitizeFileName, sniffImage } from './attachments.js';
 import type { AppConfig } from './config.js';
 import { getAgentWorkspacePath, getDirectAgentWorkspacePath, getProjectRepoPath } from './github.js';
+import { parsePptxPreview } from './office/documents.js';
 import type { AtelierStore } from './store.js';
 
 const MAX_PREVIEW_FILE_BYTES = 25 * 1024 * 1024;
@@ -24,6 +25,7 @@ const MARKDOWN_EXT = new Set(['md', 'markdown', 'mdx']);
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 const WORD_EXT = new Set(['docx']);
 const EXCEL_EXT = new Set(['xlsx', 'csv', 'tsv']);
+const PPT_EXT = new Set(['pptx']);
 const TEXT_EXT = new Set([
   'txt', 'json', 'yml', 'yaml', 'toml', 'ini', 'xml', 'html', 'htm', 'css', 'scss',
   'js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift',
@@ -60,6 +62,7 @@ export function detectPreviewFileKind(fileName: string, bytes?: Buffer): Preview
   }
   if (WORD_EXT.has(ext)) return 'word';
   if (EXCEL_EXT.has(ext)) return 'excel';
+  if (PPT_EXT.has(ext)) return 'powerpoint';
   if (TEXT_EXT.has(ext)) return 'text';
   return 'file';
 }
@@ -82,6 +85,9 @@ export function mimeForKindAndExt(fileName: string, kind: PreviewFileKind, bytes
     if (ext === 'csv') return 'text/csv; charset=utf-8';
     if (ext === 'tsv') return 'text/tab-separated-values; charset=utf-8';
     return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  }
+  if (kind === 'powerpoint') {
+    return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   }
   if (kind === 'text') return ext === 'json' ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8';
   return 'application/octet-stream';
@@ -347,6 +353,12 @@ export function buildFilePreviewData(target: ResolvedPreviewTarget): FilePreview
     const bytes = fs.readFileSync(target.filePath);
     const ext = path.extname(target.name).replace(/^\./, '').toLowerCase();
     base.excel = parseExcelPreview(bytes, ext);
+    return base;
+  }
+
+  if (target.kind === 'powerpoint') {
+    const bytes = fs.readFileSync(target.filePath);
+    base.powerpoint = parsePptxPreview(bytes);
     return base;
   }
 
@@ -848,6 +860,7 @@ const PREVIEWABLE_SCAN_KINDS = new Set<PreviewFileKind>([
   'pdf',
   'word',
   'excel',
+  'powerpoint',
   'image',
   'svg',
 ]);
@@ -937,10 +950,11 @@ export function listWorkspacePreviewFiles(
     pdf: 1,
     word: 2,
     excel: 3,
-    image: 4,
-    svg: 5,
-    text: 6,
-    file: 7,
+    powerpoint: 4,
+    image: 5,
+    svg: 6,
+    text: 7,
+    file: 8,
   };
 
   results.sort((a, b) => {

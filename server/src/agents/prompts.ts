@@ -282,6 +282,16 @@ export function buildAgentSystemPrompt(
       ]
     : [];
 
+  const officeGuide =
+    (agent.office?.enabled ?? true)
+      ? [
+          '',
+          'Local Office Tools (enabled):',
+          '- Use Atelier’s built-in `office_*` tools (`office_list_files`, `office_read`, `office_write_word`, `office_write_excel`, `office_write_powerpoint`, `office_write_pdf`, `office_edit`) directly to read, create, or edit `.docx`, `.xlsx`/`.csv`, `.pptx`, and `.pdf` files instead of writing Python/LibreOffice scripts.',
+          '- If native MCP/function tools are not exposed in your CLI runtime (e.g. Antigravity CLI), call office tools via `<atelier-action>{"tool":"office_read","path":"report.docx"}</atelier-action>` and wait for the result.',
+        ]
+      : [];
+
   const headerLines = project
     ? [
         `You are "${agent.name}" (${agent.role}) in project "${project.name}".`,
@@ -327,6 +337,7 @@ export function buildAgentSystemPrompt(
     mcpSection,
     ...(mcpBridgeGuide ? ['', mcpBridgeGuide] : []),
     ...browserGuide,
+    ...officeGuide,
     // Dynamic
     '',
     project ? 'Team Roster:' : 'All Available Teammate Agents (can message_agent directly):',

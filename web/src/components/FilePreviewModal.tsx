@@ -1,6 +1,7 @@
 import type {
   ExcelPreviewSheet,
   FilePreviewData,
+  PptxPreviewSlide,
   PreviewFileKind,
   WordPreviewBlock,
   WordPreviewRun,
@@ -18,6 +19,7 @@ import {
   FileText,
   FolderOpen,
   Loader2,
+  Presentation,
   Search,
   X,
   ZoomIn,
@@ -95,6 +97,8 @@ export function kindBadgeMeta(kind: PreviewFileKind): { label: string; color: st
       return { label: 'Word', color: '#60a5fa', bg: 'rgba(96, 165, 250, 0.15)' };
     case 'excel':
       return { label: 'Excel', color: 'var(--agent-green)', bg: 'rgba(56, 201, 118, 0.14)' };
+    case 'powerpoint':
+      return { label: 'PowerPoint', color: '#fb923c', bg: 'rgba(251, 146, 60, 0.15)' };
     case 'svg':
       return { label: 'SVG', color: 'var(--agent-amber)', bg: 'rgba(245, 158, 11, 0.14)' };
     case 'image':
@@ -115,6 +119,8 @@ export function FileKindIcon({ kind, size = 15 }: { kind: PreviewFileKind; size?
       return <FileImage size={size} strokeWidth={1.6} style={style} />;
     case 'excel':
       return <FileSpreadsheet size={size} strokeWidth={1.6} style={style} />;
+    case 'powerpoint':
+      return <Presentation size={size} strokeWidth={1.6} style={style} />;
     case 'text':
     case 'markdown':
       return <FileCode size={size} strokeWidth={1.6} style={style} />;
@@ -525,6 +531,149 @@ function ExcelWorkbookViewer({ sheets }: { sheets: ExcelPreviewSheet[] }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function PowerPointDeckViewer({ slides }: { slides: PptxPreviewSlide[] }) {
+  const t = useT();
+  if (slides.length === 0) {
+    return (
+      <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
+        {t('No slides found in this PowerPoint presentation.')}
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{
+        maxWidth: 860,
+        width: '100%',
+        margin: '0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 18,
+      }}
+    >
+      {slides.map((slide) => (
+        <div
+          key={slide.slideNumber}
+          style={{
+            background: 'var(--surface-1)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-lg)',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <div
+            style={{
+              height: 4,
+              background: 'linear-gradient(90deg, #fb923c, #f59e0b)',
+            }}
+          />
+          <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div style={{ fontSize: 17, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.3 }}>
+                {slide.title}
+              </div>
+              <span
+                className="mono-num"
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-full)',
+                  background: 'rgba(251, 146, 60, 0.14)',
+                  color: '#fb923c',
+                  flexShrink: 0,
+                }}
+              >
+                {t('Slide {n}', { n: slide.slideNumber })}
+              </span>
+            </div>
+
+            {slide.bullets.length > 0 && (
+              <ul
+                style={{
+                  margin: 0,
+                  paddingLeft: 18,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  fontSize: 13.5,
+                  lineHeight: 1.55,
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {slide.bullets.map((b, idx) => (
+                  <li key={idx}>{b}</li>
+                ))}
+              </ul>
+            )}
+
+            {slide.tables?.map((tbl, tIdx) => (
+              <div
+                key={tIdx}
+                style={{
+                  overflowX: 'auto',
+                  borderRadius: 8,
+                  border: '1px solid var(--border-subtle)',
+                }}
+              >
+                <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+                  <tbody>
+                    {tbl.map((row, rIdx) => (
+                      <tr
+                        key={rIdx}
+                        style={{
+                          background: rIdx === 0 ? 'var(--surface-2)' : undefined,
+                        }}
+                      >
+                        {row.map((cell, cIdx) => (
+                          <td
+                            key={cIdx}
+                            style={{
+                              padding: '7px 11px',
+                              borderBottom: rIdx === tbl.length - 1 ? 'none' : '1px solid var(--border-subtle)',
+                              borderRight: cIdx === row.length - 1 ? 'none' : '1px solid var(--border-subtle)',
+                              fontWeight: rIdx === 0 ? 600 : 400,
+                              color: rIdx === 0 ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            }}
+                          >
+                            {cell}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+
+            {slide.notes && (
+              <div
+                style={{
+                  marginTop: 4,
+                  padding: '9px 12px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--surface-2)',
+                  borderLeft: '3px solid rgba(251, 146, 60, 0.6)',
+                  fontSize: 12,
+                  color: 'var(--text-tertiary)',
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                <strong style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  {t('Notes')}:{' '}
+                </strong>
+                {slide.notes}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -991,6 +1140,8 @@ export function FilePreviewSurface({
           <WordDocumentViewer blocks={preview.word.blocks} />
         ) : preview.kind === 'excel' && preview.excel ? (
           <ExcelWorkbookViewer sheets={preview.excel.sheets} />
+        ) : preview.kind === 'powerpoint' && preview.powerpoint ? (
+          <PowerPointDeckViewer slides={preview.powerpoint.slides} />
         ) : preview.kind === 'text' ? (
           <pre
             style={{

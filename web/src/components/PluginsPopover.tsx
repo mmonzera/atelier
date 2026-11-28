@@ -1,5 +1,5 @@
-import type { Agent, McpServerConfig, Settings } from '@atelier/contracts';
-import { ArrowUpRight, Globe, Plug, Search } from 'lucide-react';
+import { MCP_PRESETS, type Agent, type McpServerConfig, type Settings } from '@atelier/contracts';
+import { ArrowUpRight, Blocks, FileSpreadsheet, Globe, Plug, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { api } from '../api';
 import { useMcpOAuth } from '../state/useMcpOAuth';
@@ -49,9 +49,34 @@ export function PluginsPopover({
   const [query, setQuery] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [browserBusy, setBrowserBusy] = useState(false);
+  const [officeBusy, setOfficeBusy] = useState(false);
 
   const showBuiltInBrowser = !query.trim() || 'browser remote web'.includes(query.trim().toLowerCase());
   const browserEnabled = Boolean(agent?.browser?.enabled);
+  const showBuiltInOffice =
+    !query.trim() || 'office word excel powerpoint pdf docx xlsx pptx'.includes(query.trim().toLowerCase());
+  const officeEnabled = agent?.office?.enabled ?? true;
+  const composioPreset = useMemo(() => MCP_PRESETS.find((p) => p.id === 'composio') ?? null, []);
+  const hasComposio = useMemo(
+    () => settings.mcpServers.some((s) => s.presetId === 'composio' || s.name.toLowerCase() === 'composio'),
+    [settings.mcpServers],
+  );
+  const showQuickCloud =
+    !hasComposio &&
+    Boolean(composioPreset) &&
+    (!query.trim() || 'composio cloud office m365 microsoft 365 google workspace slack'.includes(query.trim().toLowerCase()));
+
+  const toggleOffice = async (next: boolean) => {
+    if (!agent) return;
+    setOfficeBusy(true);
+    try {
+      await api.updateAgent(agent.id, { office: { enabled: next } });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('Failed to update Local Office access'));
+    } finally {
+      setOfficeBusy(false);
+    }
+  };
 
   const toggleBrowser = async (next: boolean) => {
     if (!agent) return;
@@ -183,7 +208,99 @@ export function PluginsPopover({
             />
           </div>
         )}
-        {list.length === 0 && !showBuiltInBrowser ? (
+        {showBuiltInOffice && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '7px 10px',
+              borderRadius: 'var(--radius-sm)',
+            }}
+          >
+            <div
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                background: 'rgba(56, 201, 118, 0.14)',
+                color: 'var(--agent-green)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <FileSpreadsheet size={13} strokeWidth={1.75} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{t('Local Office')}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                {t('Word, Excel, PowerPoint, PDF')}
+              </div>
+            </div>
+            <Switch
+              checked={officeEnabled}
+              disabled={!agent || officeBusy}
+              label={t('Toggle Local Office')}
+              onChange={(next) => void toggleOffice(next)}
+            />
+          </div>
+        )}
+        {showQuickCloud && composioPreset && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '7px 10px',
+              borderRadius: 'var(--radius-sm)',
+            }}
+          >
+            <div
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                background: 'rgba(251, 113, 133, 0.14)',
+                color: '#fb7185',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <Blocks size={13} strokeWidth={1.75} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>{t('Cloud Apps')}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                {t('M365, Google, Slack')}
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={oauth.connectingId === composioPreset.id}
+              onClick={() =>
+                void oauth.addAndConnect(composioPreset, async (server) => {
+                  if (agent) await setPluginAttached(agent, server, true);
+                })
+              }
+              style={{
+                height: 22,
+                padding: '0 9px',
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--surface-3)',
+                fontSize: 11,
+                color: 'var(--text-primary)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {oauth.connectingId === composioPreset.id ? t('Waiting…') : t('Connect')}
+            </button>
+          </div>
+        )}
+        {list.length === 0 && !showBuiltInBrowser && !showBuiltInOffice && !showQuickCloud ? (
           <div style={{ padding: '14px 10px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>
             {settings.mcpServers.length === 0 ? t('No plugins yet.') : t('No matching plugin.')}
           </div>

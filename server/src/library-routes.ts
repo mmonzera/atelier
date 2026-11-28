@@ -13,7 +13,7 @@ function apiError(code: string, message: string): ApiErrorResponse {
 }
 
 const IMAGE_ARTIFACT_KINDS = new Set(['svg', 'image']);
-const DOC_PREVIEW_KINDS = new Set(['markdown', 'pdf', 'word', 'excel', 'text']);
+const DOC_PREVIEW_KINDS = new Set(['markdown', 'pdf', 'word', 'excel', 'powerpoint', 'text']);
 
 /**
  * Per-project media & document library: images and documents the user uploaded to chat, image / SVG

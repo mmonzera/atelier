@@ -185,6 +185,10 @@ export function createHttpRouter(deps: {
     defaultProfileId: z.string().trim().max(80).nullable().optional(),
   });
 
+  const officeAccessSchema = z.object({
+    enabled: z.boolean().default(true),
+  });
+
   const agentInputSchema = z.object({
     projectId: z.string().trim().min(1).nullable().optional(),
     name: z.string().trim().min(1).max(60),
@@ -196,6 +200,7 @@ export function createHttpRouter(deps: {
     mcpServerIds: z.array(z.string()).optional().default([]),
     allowShell: z.boolean().optional().default(true),
     browser: browserAccessSchema.optional(),
+    office: officeAccessSchema.optional(),
     providerOverride: providerSchema.nullable().optional(),
     modelOverride: z
       .string()
